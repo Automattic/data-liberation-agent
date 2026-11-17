@@ -1,10 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
-import { chromium } from 'playwright';
+import { describe, expect, vi } from 'vitest';
+import { it } from '../../../test/browser.js';
+
 import * as cheerio from 'cheerio';
 import postcss from 'postcss';
 import { assembleResponsiveCapture } from '../responsive-assembly.js';
 import { scopeCss } from '../replicate/css-scope.js';
-import { RootClassEvidence, projectRootClassContracts, rootClassContracts, sampleRootClasses } from './root-class-contracts.js';
+import { RootClassEvidence, projectRootClassContracts, rootClassContracts, sampleRootClassLadder, sampleRootClasses } from './root-class-contracts.js';
 
 describe( 'root class width contracts', () => {
 	const runtime = '<script src="/runtime.js"></script><script>window.run = 1</script>';
@@ -120,11 +121,29 @@ describe( 'root class width contracts', () => {
 		expect( assembled.html ).not.toContain( '.unrelated' );
 	} );
 
+	// One local browser pass: about five seconds, with only CDP latency simulated.
+	it( 'leaves a slow-resize ladder unproven only after restoring the viewport', async ({ newPage }) => {
+		const original = { width: 1440, height: 900 };
+		const page = await newPage( { viewport: original } );
+		await page.setContent( '<main>Slow resize fixture</main>' );
+		const setViewportSize = page.setViewportSize.bind( page );
+		const resize = vi.spyOn( page, 'setViewportSize' ).mockImplementation( async size => {
+			await new Promise( resolve => setTimeout( resolve, 1700 ) );
+			await setViewportSize( size );
+		} );
+		const unproven: string[] = [];
+		await expect( sampleRootClassLadder( page, [ 768 ], reason => unproven.push( reason ) ) ).resolves.toBeUndefined();
+		expect( unproven ).toEqual( expect.arrayContaining( [ expect.stringContaining( 'root class source probe unproven' ) ] ) );
+		expect( resize.mock.calls ).toEqual( [ [ { ...original, width: 768 } ], [ original ] ] );
+		expect( page.viewportSize() ).toEqual( original );
+		expect( await page.evaluate( () => innerWidth ) ).toBe( original.width );
+	}, 15_000 );
+
 	// Local browser fixture: about five seconds, no network or platform knowledge.
-	it( 'proves width contracts through recurring main-thread long tasks', async () => {
-		const browser = await chromium.launch();
-		try {
-			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'proves width contracts through recurring main-thread long tasks', async ({ newPage }) => {
+
+		{
+			const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 			await page.setContent( `<div>Local width contract fixture</div><script>
 				function measure(){document.body.classList.toggle('measured-wrap',innerWidth<1280)}
 				addEventListener('resize',measure);measure();
@@ -143,14 +162,14 @@ describe( 'root class width contracts', () => {
 			expect( unproven ).toEqual( [] );
 			expect( page.viewportSize() ).toEqual( { width: 1440, height: 900 } );
 			expect( await page.locator( 'body' ).getAttribute( 'class' ) ).toBe( '' );
-		} finally { await browser.close(); }
+		}
 	}, 15_000 );
 
 	// One browser pass: about ten seconds including unstable-width coverage.
-	it( 'exports measurement-gated author CSS that survives responsive document scoping', async () => {
-		const browser = await chromium.launch();
-		try {
-			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'exports measurement-gated author CSS that survives responsive document scoping', async ({ newPage }) => {
+
+		{
+			const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 			await page.setContent( `<style>
 				.layout{display:flex;flex-direction:row}
 				@supports(display:flex){body.measured-wrap .layout{flex-direction:column}}
@@ -206,6 +225,6 @@ describe( 'root class width contracts', () => {
 			expect( await sampleRootClasses( page, undefined, reason => unproven.push( reason ) ) ).toEqual( [] );
 			expect( unproven ).toEqual( [ expect.stringContaining( 'unproven at 1024px' ) ] );
 			expect( page.viewportSize() ).toEqual( { width: 1440, height: 900 } );
-		} finally { await browser.close(); }
+		}
 	}, 20_000 );
 } );

@@ -1,12 +1,10 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { chromium, type Browser } from 'playwright';
+import { describe, expect } from 'vitest';
+import { it } from '../../../test/browser.js';
+
 import { captureSelectableSetStates } from './selectable-set-capture.js';
 import { captureTypedSearchStates } from './typed-search-capture.js';
 import { wireCapturedDialogs } from '../static-dialogs.js';
 
-let browser: Browser;
-beforeAll( async () => { browser = await chromium.launch({ headless: true }); } );
-afterAll( async () => { await browser?.close(); } );
 const fixture = `<!doctype html><html><head><style>[hidden]{display:none}.active{color:red}</style></head><body>
 <main><input type="search" placeholder="Find entries"><div id="categories"><button class="active">Everything</button><button>First</button><button>Second</button></div><div id="items"></div></main>
 <script>const entries=[['Same heading','Evidence for apples',1],['Same heading','Evidence for oranges',2],['Other heading','Fresh berries',2]];let category=0;
@@ -14,10 +12,10 @@ function render(){const query=document.querySelector('input').value.toLowerCase(
 document.querySelector('input').addEventListener('input',render);document.querySelectorAll('#categories button').forEach((b,i)=>b.onclick=()=>{category=i;render()});render();</script></body></html>`;
 
 describe( 'source-backed typed collection filtering', () => {
-	it( 'admits a neutral text field from observed filtering and captures content outside a labeled tablist', async () => {
+	it( 'admits a neutral text field from observed filtering and captures content outside a labeled tablist', async ({ newPage }) => {
 		const source = `<!doctype html><body><main><form><input type="text" name="name" aria-label="Your name"><input type="text" name="email" aria-label="Email address"><input type="text" name="phone" aria-label="Phone number"></form><input type="text" aria-label="Browse entries"><div role="tablist" aria-label="Topics"><button role="tab" aria-selected="true">All</button><button role="tab" aria-selected="false">One</button><button role="tab" aria-selected="false">Two</button></div><section id="results"></section></main><script>
 		const rows=[['Question alpha','A detailed answer about apricot fruit',1],['Question beta','A detailed answer about blueberry fruit',2],['Question gamma','A detailed answer about citrus fruit',2]];let selected=0;function render(){document.querySelectorAll('[role=tab]').forEach((tab,i)=>tab.setAttribute('aria-selected',String(i===selected)));const q=document.querySelector('[aria-label="Browse entries"]').value.toLowerCase();document.querySelector('#results').innerHTML=rows.filter(row=>(!selected||row[2]===selected)&&row.join(' ').toLowerCase().includes(q)).map(row=>'<article><h2>'+row[0]+'</h2><p>'+row[1]+'</p></article>').join('')||'<p>No results found.</p>';}document.querySelector('[aria-label="Browse entries"]').addEventListener('input',render);document.querySelectorAll('[role=tab]').forEach((tab,i)=>tab.onclick=()=>{selected=i;render()});render();</script></body>`;
-		const page = await browser.newPage(); await page.setContent(source);
+		const page = await newPage(); await page.setContent(source);
 		const categories = await captureSelectableSetStates(page, { settleMs: 10 });
 		expect(categories.some(state => state.kind === 'selectable-set' && state.dialog?.selector === '#results')).toBe(true);
 		const states = await captureTypedSearchStates(page, categories, { settleMs: 10 });
@@ -26,8 +24,8 @@ describe( 'source-backed typed collection filtering', () => {
 		expect(await page.locator('#results article').count()).toBe(3);
 		await page.close();
 	}, 30_000 );
-	it( 'confirms answer-only text, case and category composition, restores source, and replays one editable tree offline', async () => {
-		const page = await browser.newPage(); await page.setContent( fixture );
+	it( 'confirms answer-only text, case and category composition, restores source, and replays one editable tree offline', async ({ newPage }) => {
+		const page = await newPage(); await page.setContent( fixture );
 		const baseline = await page.locator('main').innerText();
 		const categories = await captureSelectableSetStates( page, { settleMs: 10 } );
 		const states = await captureTypedSearchStates( page, categories, { settleMs: 10 } );
@@ -51,16 +49,16 @@ describe( 'source-backed typed collection filtering', () => {
 		expect( await page.locator('article:visible').count() ).toBe(3);
 		await page.close();
 	}, 30_000 );
-	it( 'does not replay a source predicate that only matches headings', async () => {
-		const page = await browser.newPage();await page.setContent(fixture.replace("(e[0]+' '+e[1]).toLowerCase()", "e[0].toLowerCase()"));
+	it( 'does not replay a source predicate that only matches headings', async ({ newPage }) => {
+		const page = await newPage();await page.setContent(fixture.replace("(e[0]+' '+e[1]).toLowerCase()", "e[0].toLowerCase()"));
 		const categories=await captureSelectableSetStates(page,{settleMs:10});
 		const states=await captureTypedSearchStates(page,categories,{settleMs:10});
 		expect(states[0]?.collectionFilter?.replay).toBe('unsupported');
 		expect(states[0]?.collectionFilter?.restoration).toBe('verified');
 		await page.close();
 	},30_000);
-	it( 'captures an empty-state mounted outside the collection without inventing copy', async () => {
-		const page=await browser.newPage();
+	it( 'captures an empty-state mounted outside the collection without inventing copy', async ({ newPage }) => {
+		const page=await newPage();
 		await page.setContent(fixture.replace("||'<p>No entries match.</p>';", ";document.querySelector('#empty')?.remove();if(!document.querySelector('#items').children.length)document.querySelector('#items').insertAdjacentHTML('afterend','<aside id=\"empty\">No entries match.</aside>');"));
 		const categories=await captureSelectableSetStates(page,{settleMs:10});
 		const states=await captureTypedSearchStates(page,categories,{settleMs:10});
@@ -70,13 +68,13 @@ describe( 'source-backed typed collection filtering', () => {
 		expect(await page.getByText('No entries match.',{exact:true}).isVisible()).toBe(true);
 		await page.close();
 	},30_000);
-	it( 'keeps an empty collection explicitly unsupported', async () => {
-		const page=await browser.newPage();await page.setContent('<input type="search"><section>No entries yet.</section>');
+	it( 'keeps an empty collection explicitly unsupported', async ({ newPage }) => {
+		const page=await newPage();await page.setContent('<input type="search"><section>No entries yet.</section>');
 		expect(await captureTypedSearchStates(page,[],{settleMs:10})).toMatchObject([{kind:'typed-search',status:'no-dialog',error:expect.stringContaining('No complete')}]);
 		await page.close();
 	});
-	it( 'binds captured membership by complete item identity when baseline order changes', async () => {
-		const page=await browser.newPage();await page.setContent(fixture);
+	it( 'binds captured membership by complete item identity when baseline order changes', async ({ newPage }) => {
+		const page=await newPage();await page.setContent(fixture);
 		const categories=await captureSelectableSetStates(page,{settleMs:10});const states=await captureTypedSearchStates(page,categories,{settleMs:10});
 		await page.locator('#items').evaluate(element=>element.append(element.firstElementChild!));
 		const html=wireCapturedDialogs((await page.content()).replace(/<script>[\s\S]*?<\/script>/g,''),states);
@@ -84,16 +82,16 @@ describe( 'source-backed typed collection filtering', () => {
 		expect(await page.locator('article:visible').innerText()).toContain('Evidence for apples');
 		await page.close();
 	},30_000);
-	it( 'rejects results that depend on fetching source data', async () => {
-		const page=await browser.newPage();await page.route('https://fixture.invalid/**',route=>route.fulfill({body:'{}',contentType:'application/json'}));
+	it( 'rejects results that depend on fetching source data', async ({ newPage }) => {
+		const page=await newPage();await page.route('https://fixture.invalid/**',route=>route.fulfill({body:'{}',contentType:'application/json'}));
 		await page.setContent(fixture.replace("document.querySelector('input').addEventListener('input',render)","document.querySelector('input').addEventListener('input',()=>{fetch('https://fixture.invalid/data').then(render).catch(()=>{})})"));
 		const categories=await captureSelectableSetStates(page,{settleMs:10});
 		const states=await captureTypedSearchStates(page,categories,{settleMs:20});
 		expect(states[0]).toMatchObject({status:'no-dialog',collectionFilter:{replay:'unsupported',restoration:'verified',network:{dataRequests:'blocked',blockedRequests:expect.any(Number)}}});
 		await page.close();
 	},30_000);
-	it( 'captures a finite query-independent bootstrap as an alternate category or global-search mode', async () => {
-		const page = await browser.newPage();
+	it( 'captures a finite query-independent bootstrap as an alternate category or global-search mode', async ({ newPage }) => {
+		const page = await newPage();
 		await installFinite( page, 'finite' );
 		const categories = await captureSelectableSetStates( page, { settleMs: 150 } );
 		expect( categories.some( state => state.kind === 'selectable-set' && state.dialog?.selector === '#results' ) ).toBe( true );
@@ -141,8 +139,8 @@ describe( 'source-backed typed collection filtering', () => {
 		expect( await page.locator( 'article:visible' ).count() ).toBe( 1 );
 		await page.close();
 	}, 60_000 );
-	it( 'exports an observed status template and keeps the raw query case', async () => {
-		const page = await browser.newPage();
+	it( 'exports an observed status template and keeps the raw query case', async ({ newPage }) => {
+		const page = await newPage();
 		await installFinite( page, 'status' );
 		const states = await captureTypedSearchStates( page, await captureSelectableSetStates( page, { settleMs: 150 } ), { settleMs: 80 } );
 		const status = states[ 0 ]?.collectionFilter?.finiteBootstrap?.status;
@@ -168,8 +166,8 @@ describe( 'source-backed typed collection filtering', () => {
 		expect( await page.locator( '[data-blocks-engine-capture-collection-status]:visible' ).count() ).toBe( 0 );
 		await page.close();
 	}, 60_000 );
-	it( 'keeps a reversed category order on the same nodes and rejects resource-bearing items', async () => {
-		const reversed = await browser.newPage();
+	it( 'keeps a reversed category order on the same nodes and rejects resource-bearing items', async ({ newPage }) => {
+		const reversed = await newPage();
 		await installFinite( reversed, 'category-order' );
 		const reversedStates = await captureTypedSearchStates( reversed, await captureSelectableSetStates( reversed, { settleMs: 150 } ), { settleMs: 80 } );
 		expect( reversedStates[ 0 ]?.collectionFilter?.finiteBootstrap?.order.categoriesAgree ).toBe( false );
@@ -180,7 +178,7 @@ describe( 'source-backed typed collection filtering', () => {
 		await reversed.locator( 'input[aria-label="Browse entries"]' ).fill( reversedStates[ 0 ]!.collectionFilter!.finiteBootstrap!.order.query );
 		expect( await reversed.locator( 'article:visible h2' ).allInnerTexts() ).toEqual( [ 'Question alpha', 'Question beta', 'Question delta', 'Question gamma' ] );
 		await reversed.close();
-		const resource = await browser.newPage();
+		const resource = await newPage();
 		await installFinite( resource, 'resource' );
 		const resourceStates = await captureTypedSearchStates( resource, await captureSelectableSetStates( resource, { settleMs: 150 } ), { settleMs: 80 } );
 		expect( resourceStates[ 0 ]?.collectionFilter?.replay ).toBe( 'unsupported' );
@@ -188,7 +186,7 @@ describe( 'source-backed typed collection filtering', () => {
 		expect( resourceStates[ 0 ]?.collectionFilter?.finiteBootstrap ).toBeUndefined();
 		await resource.close();
 	}, 60_000 );
-	it( 'keeps category snapshots when a duplicated id would click a hidden copy and preserves an open answer', async () => {
+	it( 'keeps category snapshots when a duplicated id would click a hidden copy and preserves an open answer', async ({ newPage }) => {
 		const source = `<!doctype html><body>
 			<div hidden><div role="tablist"><button role="tab" id="cat-one" aria-selected="true">One</button><button role="tab" id="cat-two">Two</button></div><section>Resources question that must not replace the visible category. Extra stale answer text.</section></div>
 			<main><input type="search" placeholder="Find entries"><div role="tablist"><button role="tab" id="cat-one" aria-selected="true">One</button><button role="tab" id="cat-two">Two</button></div><div id="items"></div></main>
@@ -200,7 +198,7 @@ describe( 'source-backed typed collection filtering', () => {
 			document.querySelectorAll('main [role=tab]').forEach((tab,i)=>tab.onclick=()=>{category=i;render();});
 			render();
 			</script></body>`;
-		const page = await browser.newPage();
+		const page = await newPage();
 		await page.setContent( source );
 		const categories = await captureSelectableSetStates( page, { settleMs: 20 } );
 		const one = categories.find( state => state.kind === 'selectable-set' && state.trigger.label === 'One' && state.dialog?.html );
@@ -211,7 +209,7 @@ describe( 'source-backed typed collection filtering', () => {
 		expect( await page.locator( '#items button[aria-expanded="true"]' ).innerText() ).toContain( 'Alpha question about apricot' );
 		await page.close();
 	}, 30_000 );
-	it( 'rejects query-dependent, paginated, undeclared, incomplete, and unrestored collection drives', async () => {
+	it( 'rejects query-dependent, paginated, undeclared, incomplete, and unrestored collection drives', async ({ newPage }) => {
 		const expected = {
 			'query-dependent': /Query-dependent/,
 			paginated: /Paginated/,
@@ -220,7 +218,7 @@ describe( 'source-backed typed collection filtering', () => {
 			restoration: /Unverified restoration/,
 		} as const;
 		for ( const variant of [ 'query-dependent', 'paginated', 'undeclared', 'coverage', 'restoration' ] as const ) {
-			const page = await browser.newPage();
+			const page = await newPage();
 			await installFinite( page, variant );
 			const categories = await captureSelectableSetStates( page, { settleMs: 150 } );
 			const states = await captureTypedSearchStates( page, categories, { settleMs: 80 } );

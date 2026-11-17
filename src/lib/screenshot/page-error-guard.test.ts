@@ -34,7 +34,6 @@ it( 'contains a page-error storm without discarding baseline artifacts (#1022)',
 		expect( entry.profiles.desktop.diagnostics ).toContainEqual( { code: 'page_error_storm', reason: expect.stringContaining( 'more than 5 in one second' ) } );
 		expect( stripNodeIds( readFileSync( join( outputDir, entry.html ), 'utf8' ) ) ).toContain( '<h1>Baseline</h1>' );
 		expect( entry.profiles.desktop.phases.map( ( row: { phase: string } ) => row.phase ) ).not.toContain( 'selectable' );
-		expect( entry.profiles.desktop.phases.map( ( row: { phase: string } ) => row.phase ) ).not.toContain( 'scroll-states' );
 		expect( stormPage?.isClosed() ).toBe( true );
 		expect( result.browserRestarts ).toBe( 0 );
 	} finally {

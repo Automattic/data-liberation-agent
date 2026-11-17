@@ -1,10 +1,10 @@
 import { stripNodeIds } from './test-helpers/strip-node-ids.js';
 import { resolveInteractionComponents, type ComponentPage } from './captured-interactions.js';
-import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { chromium } from 'playwright';
-import { expect, it } from 'vitest';
+
+import { expect } from 'vitest';
+import { it } from '../../test/browser.js';
 import { captureWebsite } from '../index.js';
 import { readResolvedPage } from './site-includes.js';
 import type { InteractionStatesReport } from './screenshot/interaction-capture.js';
@@ -19,20 +19,20 @@ let slide=0;for(const button of document.querySelectorAll('#carousel button'))bu
 </script></body></html>`;
 
 // One public pipeline pass, shared by all assertions (~15 seconds).
-it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('captures the initial route before exploring lazy tabs, an open disclosure and a carousel', async () => {
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('captures the initial route before exploring lazy tabs, an open disclosure and a carousel', async ({ serve, newPage }) => {
 	const parent = join(process.cwd(), '.tmp-test'); mkdirSync(parent, { recursive: true });
 	const root = mkdtempSync(join(parent, 'component-states-'));
 	let copy: string | undefined;
-	const server = createServer((request, response) => {
+	const { server } = await serve((request, response) => {
 		if (request.url === '/robots.txt') { response.end(''); return; }
 		if (request.url?.includes('sitemap')) { response.statusCode = 404; response.end(); return; }
 		response.setHeader('Content-Type', 'text/html'); response.end(copy ?? source);
 	});
-	await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+
 	const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
-	const browser = await chromium.launch();
+
 	try {
-		const page = await browser.newPage(); await page.goto(url);
+		const page = await newPage(); await page.goto(url);
 		const pose = () => page.evaluate(() => ({ tab: document.querySelector('[role="tab"][aria-selected="true"]')?.id, disclosure: document.querySelector('details')?.open, slide: Array.from(document.querySelectorAll<HTMLElement>('[aria-roledescription="slide"]')).find(node => !node.hidden)?.id }));
 		const before = await pose();
 		const initialDom = await page.locator('main').evaluate(root => root.innerHTML);
@@ -74,6 +74,6 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('captures the initial route b
 		await page.locator('#next').click();
 		expect(await pose()).toMatchObject({ slide: 'slide-first' });
 	} finally {
-		await browser.close(); await new Promise<void>(resolve => server.close(() => resolve())); rmSync(root, { recursive: true, force: true });
+		  rmSync(root, { recursive: true, force: true });
 	}
 }, 180_000);

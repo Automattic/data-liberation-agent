@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { PNG } from 'pngjs';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, afterEach } from 'vitest';
+import { it, test } from '../../../test/browser.js';
 import {
 	canonicalRoutePath,
 	checkFidelity as checkLiveFidelity,
@@ -150,18 +151,16 @@ describe( 'checkWidthsFor', () => {
 } );
 
 describe( 'observePage typography', () => {
-	it.skipIf( skipBrowserTests )( 'does not compare line metrics for a clipped accessible-only label', async () => {
-		const browser = await chromium.launch();
-		const page = await browser.newPage( { viewport: { width: 390, height: 900 } } );
-		try {
+	it.skipIf( skipBrowserTests )( 'does not compare line metrics for a clipped accessible-only label', async ({ newPage }) => {
+
+		const page = await newPage( { viewport: { width: 390, height: 900 } } );
+		{
 			await page.setContent( `<!doctype html><style>
 				.visually-hidden { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(1px,1px,1px,1px); white-space:nowrap; line-height:normal; }
 			</style><header><span class="visually-hidden">Open Menu</span><p>Visible navigation label</p></header>` );
 			const observation = await observePage( page, page.url(), 390, 0, null, undefined, undefined, true );
 			expect( observation.typography?.map( ( item ) => item.key ) ).toContain( 'Visible navigation label' );
 			expect( observation.typography?.map( ( item ) => item.key ) ).not.toContain( 'Open Menu' );
-		} finally {
-			await browser.close();
 		}
 	} );
 } );
@@ -214,35 +213,32 @@ describe( 'checkFidelity', () => {
 		expect( report.scores.every( ( score ) => score.failures.some( ( reason ) => reason.includes( 'source motion not reproduced' ) ) ) ).toBe( true );
 	} );
 
-	it.skipIf( skipBrowserTests )( 'ignores a clipped focus-only fragment link while retaining the matching visible link', async () => {
+	it.skipIf( skipBrowserTests )( 'ignores a clipped focus-only fragment link while retaining the matching visible link', async ({ serve }) => {
 		const visible = '<nav><a href="#content">Skip to content</a></nav><main id="content"><h1>Home</h1><p>Visible editorial text.</p></main>';
 		const candidate = '<style>.focus-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}.focus-only:focus{clip-path:none;width:auto;height:auto}</style><a class="focus-only" href="#content">Skip to content</a>';
-		const server = createServer( ( request, response ) => {
+		const { server } = await serve(( request, response ) => {
 			response.setHeader( 'content-type', 'text/html' );
 			response.end( `<!doctype html><html><head><title>Home</title></head><body>${ request.headers.host?.startsWith( 'localhost' ) ? candidate : '' }${ visible }</body></html>` );
-		} );
-		await new Promise< void >( ( resolve ) => server.listen( 0, '127.0.0.1', resolve ) );
+		});
+
 		const port = ( server.address() as { port: number } ).port;
 		const directory = liberatedRun();
 		writeFileSync( join( directory, 'website', 'index.html' ), `<!doctype html><html><head><title>Home</title></head><body>${ visible }</body></html>` );
 		writeFileSync( join( directory, 'capture-receipt.json' ), JSON.stringify( { source: { url: `http://127.0.0.1:${ port }/` }, websiteRoot: 'website', routes: [ { url: `http://127.0.0.1:${ port }/`, path: 'website/index.html' } ] } ) );
-		try {
+		{
 			const report = await checkFidelity( { directory, candidateUrl: `http://localhost:${ port }`, widths: [ 1600, 390 ], settleMs: 0 } );
 			const score = report.scores.find( ( row ) => row.viewport === 1600 )!;
 			expect( score.source.textChars ).toBe( score.liberated.textChars );
 			expect( score.failures.filter( ( failure ) => failure.startsWith( 'text' ) ) ).toEqual( [] );
-		} finally {
-			server.closeAllConnections();
-			await new Promise< void >( ( resolve ) => server.close( () => resolve() ) );
 		}
 	}, 90_000 );
 
-	it.skipIf( skipBrowserTests )( 'measures the painted image when the copy moves its padding to a wrapping figure', async () => {
+	it.skipIf( skipBrowserTests )( 'measures the painted image when the copy moves its padding to a wrapping figure', async ({ serve }) => {
 		// Same painted image: the source pads the img itself, the copy pads a figure around it.
 		const head = '<style>*{box-sizing:border-box}body{margin:0}.box{width:400px}img{display:block;width:100%}</style>';
 		const source = `${ head }<main><h1>Home</h1><div class="box"><img src="/photo.svg" alt="Photo" style="padding:10%"></div></main>`;
 		const candidate = `${ head }<main><h1>Home</h1><div class="box"><figure style="margin:0;padding:10%"><img src="/photo.svg" alt="Photo"></figure></div></main>`;
-		const server = createServer( ( request, response ) => {
+		const { server } = await serve(( request, response ) => {
 			if ( request.url === '/photo.svg' ) {
 				response.setHeader( 'content-type', 'image/svg+xml' );
 				response.end( '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><rect width="400" height="300" fill="teal"/></svg>' );
@@ -250,25 +246,22 @@ describe( 'checkFidelity', () => {
 			}
 			response.setHeader( 'content-type', 'text/html' );
 			response.end( `<!doctype html><html><head><title>Home</title></head><body>${ request.headers.host?.startsWith( 'localhost' ) ? candidate : source }</body></html>` );
-		} );
-		await new Promise< void >( ( resolve ) => server.listen( 0, '127.0.0.1', resolve ) );
+		});
+
 		const port = ( server.address() as { port: number } ).port;
 		const directory = liberatedRun();
 		writeFileSync( join( directory, 'website', 'index.html' ), `<!doctype html><html><head><title>Home</title></head><body>${ source }</body></html>` );
 		writeFileSync( join( directory, 'capture-receipt.json' ), JSON.stringify( { source: { url: `http://127.0.0.1:${ port }/` }, websiteRoot: 'website', routes: [ { url: `http://127.0.0.1:${ port }/`, path: 'website/index.html' } ] } ) );
-		try {
+		{
 			const report = await checkFidelity( { directory, candidateUrl: `http://localhost:${ port }`, widths: [ 1600 ], settleMs: 0 } );
 			const score = report.scores[ 0 ]!;
 			expect( score.source.widestImage ).toBe( 320 );
 			expect( score.liberated.widestImage ).toBe( 320 );
 			expect( score.failures.filter( ( failure ) => failure.includes( 'image' ) ) ).toEqual( [] );
-		} finally {
-			server.closeAllConnections();
-			await new Promise< void >( ( resolve ) => server.close( () => resolve() ) );
 		}
 	}, 90_000 );
 
-	it.skipIf( skipBrowserTests )( 'measures a source subpage in place when its nav links to fragments on another page', async () => {
+	it.skipIf( skipBrowserTests )( 'measures a source subpage in place when its nav links to fragments on another page', async ({ serve }) => {
 		// A client-routed builder: the subpage's nav links to sections of the home
 		// page. Following one routes the app home, so the source must be measured
 		// without treating another page's fragment as an in-page anchor.
@@ -284,11 +277,11 @@ ${ routed ? `<script>document.addEventListener('click', (event) => {
   document.body.innerHTML = '<main><h1>Home</h1><p>' + 'Home copy that is much longer. '.repeat(60) + '</p><section id="features">F</section><section id="contact">C</section></main>';
 });</script>` : '' }
 </body></html>`;
-		const server = createServer( ( req, res ) => {
+		const { server } = await serve(( req, res ) => {
 			res.setHeader( 'content-type', 'text/html' );
 			res.end( req.url?.startsWith( '/other' ) ? other( true ) : '<!doctype html><html><head><title>Home page</title></head><body><main><h1>Home</h1></main></body></html>' );
-		} );
-		await new Promise< void >( ( resolve ) => server.listen( 0, '127.0.0.1', resolve ) );
+		});
+
 		const origin = `http://localtest.me:${ ( server.address() as { port: number } ).port }`;
 		const dir = mkdtempSync( join( tmpdir(), 'liberation-check-' ) );
 		dirs.push( dir );
@@ -306,15 +299,12 @@ ${ routed ? `<script>document.addEventListener('click', (event) => {
 				],
 			} )
 		);
-		try {
+		{
 			const report = await checkFidelity( { directory: dir, widths: [ 1440 ], routes: [ '/other/' ], settleMs: 200 } );
 			const score = report.scores.find( ( entry ) => entry.route === '/other/' && entry.viewport === 1440 )!;
 			expect( score.source.title ).toBe( 'Other page' );
 			expect( score.failures.filter( ( failure ) => failure.startsWith( 'title' ) || failure.startsWith( 'text' ) ) ).toEqual( [] );
 			expect( score.source.hashTargets ).toEqual( [] );
-		} finally {
-			server.closeAllConnections();
-			await new Promise< void >( ( resolve ) => server.close( () => resolve() ) );
 		}
 	}, 90_000 );
 	it( 'compares each route against a candidate copy instead of the capture', async () => {
@@ -617,17 +607,17 @@ ${ routed ? `<script>document.addEventListener('click', (event) => {
 } );
 
 describe.skipIf( skipBrowserTests )( 'comparison screenshot transaction', () => {
-	it( 'captures the baseline before dialog probes change scroll and visibility', async () => {
+	it( 'captures the baseline before dialog probes change scroll and visibility', async ({ serve }) => {
 		const html = ( scroll: boolean ) => `<!doctype html><html><head><title>Dialog baseline</title>
 			<style>body{margin:0;background:white}#top{height:900px;background:#123456}#bottom{height:2000px;background:#abcdef}</style>
 			</head><body><main><div id="top"><h1>Article</h1>
 			<button aria-haspopup="true" aria-controls="panel" onclick="document.getElementById('panel').hidden=false;${ scroll ? 'window.scrollTo(0,1500)' : '' }">Open</button>
 			<div id="panel" role="dialog" hidden>Details</div></div><div id="bottom">Footer</div></main></body></html>`;
-		const server = createServer( ( _request, response ) => {
+		const { server } = await serve(( _request, response ) => {
 			response.setHeader( 'content-type', 'text/html' );
 			response.end( html( true ) );
-		} );
-		await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+		});
+
 		const origin = `http://localtest.me:${ ( server.address() as { port: number } ).port }`;
 		const dir = liberatedRun();
 		writeFileSync( join( dir, 'website', 'index.html' ), html( false ) );
@@ -635,26 +625,23 @@ describe.skipIf( skipBrowserTests )( 'comparison screenshot transaction', () => 
 			source: { url: origin + '/' }, websiteRoot: 'website',
 			routes: [ { url: origin + '/', path: 'website/index.html' } ],
 		} ) );
-		try {
+		{
 			await checkFidelity( { directory: dir, widths: [ 1600 ], settleMs: 0, screenshots: true } );
 			for ( const side of [ 'source', 'liberated' ] ) {
 				const png = PNG.sync.read( readFileSync( join( dir, 'compare', 'index', '1600', `${ side }.png` ) ) );
 				const offset = ( 400 * png.width + 800 ) * 4;
 				expect( [ ...png.data.subarray( offset, offset + 3 ) ] ).toEqual( [ 0x12, 0x34, 0x56 ] );
 			}
-		} finally {
-			server.closeAllConnections();
-			await new Promise<void>( resolve => server.close( () => resolve() ) );
 		}
 	}, 90_000 );
 } );
 
 describe.skipIf( skipBrowserTests )( 'compare runtime emoji canonicalization', () => {
-	it.each( [
+	it.for( [
 		{ declared: true, extraRequest: false },
 		{ declared: false, extraRequest: false },
 		{ declared: true, extraRequest: true },
-	] )( 'source declaration: $declared, unrelated request: $extraRequest', async ( { declared, extraRequest } ) => {
+	] )( 'source declaration: $declared, unrelated request: $extraRequest', { timeout: 90_000 }, async ( { declared, extraRequest }, { serve, newPage } ) => {
 		const html = ( body: string, declaration = '' ) => `<!doctype html><html ${ declaration }><head><meta charset="utf-8"><title>Emoji</title></head><body><main>${ body }</main></body></html>`;
 		const sourceHtml = html( `Hello 😉${ declared ? '<script>window._wpemojiSettings = {};</script>' : '' }` );
 		// Simulate core's runtime replacing the authored text, rather than
@@ -673,14 +660,14 @@ describe.skipIf( skipBrowserTests )( 'compare runtime emoji canonicalization', (
 			// emoji exemption merely because its host/path match an emoji image.
 			${ extraRequest ? "fetch(img.src).catch(() => {});" : '' }
 		</script>`, 'data-blocks-engine-capture-runtime-emoji="wordpress"' );
-		const server = createServer( ( _request, response ) => {
+		const { server } = await serve(( _request, response ) => {
 			response.setHeader( 'content-type', 'text/html' );
 			response.end( sourceHtml );
-		} );
-		await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+		});
+
 		const origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
-		const candidate = createServer( ( _request, response ) => { response.setHeader( 'content-type', 'text/html' ); response.end( candidateHtml ); } );
-		await new Promise<void>( resolve => candidate.listen( 0, '127.0.0.1', resolve ) );
+		const { server: candidate } = await serve(( _request, response ) => { response.setHeader( 'content-type', 'text/html' ); response.end( candidateHtml ); });
+
 		const candidateUrl = `http://127.0.0.1:${ ( candidate.address() as { port: number } ).port }`;
 		const dir = liberatedRun();
 		writeFileSync( join( dir, 'capture-receipt.json' ), JSON.stringify( {
@@ -688,9 +675,9 @@ describe.skipIf( skipBrowserTests )( 'compare runtime emoji canonicalization', (
 		} ) );
 		// The candidate declares support too: only the captured website may authorize it.
 		// Build that document through capture's runtime normalization, not authored markup.
-		const browser = await chromium.launch();
-		try {
-			const page = await browser.newPage();
+
+		{
+			const page = await newPage();
 			await page.goto( `${ origin }/` );
 			expect( await page.getAttribute( 'html', 'data-blocks-engine-capture-runtime-emoji' ) ).toBeNull();
 			await restoreRuntimeEmoji( page );
@@ -723,14 +710,8 @@ describe.skipIf( skipBrowserTests )( 'compare runtime emoji canonicalization', (
 					expect( score.failures.filter( failure => /copy requested/.test( failure ) ) ).toEqual( [] );
 				}
 			}
-		} finally {
-			await browser.close();
-			candidate.closeAllConnections();
-			await new Promise<void>( resolve => candidate.close( () => resolve() ) );
-			server.closeAllConnections();
-			await new Promise<void>( resolve => server.close( () => resolve() ) );
 		}
-	}, 90_000 );
+	} );
 } );
 
 describe.skipIf( skipBrowserTests )( 'checkFidelity with a source that pings on exit', () => {

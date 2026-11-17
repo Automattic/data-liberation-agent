@@ -1,8 +1,8 @@
-import { createServer } from 'node:http';
 import { gzipSync } from 'node:zlib';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { chromium } from 'playwright';
-import { describe, expect, it } from 'vitest';
+import { describe, expect } from 'vitest';
+import { it } from '../../test/browser.js';
 import { documentRedirect, isNavigationTimeout, sameRouteScriptNavigation, navigateSourceDocument, inspectSourceDocument, SOURCE_NAVIGATION_LIMITS, SourceNavigationError, storeExternalBoundary, validateExternalBoundary } from './source-navigation.js';
 import { join } from 'node:path';
 import { SOURCE_DOCUMENT_MAX_BYTES } from './source-document-policy.js';
@@ -64,16 +64,16 @@ describe('source response declarations', () => {
 });
 
 describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executablePath()))('bounded main-document navigation', () => {
-	it('admits full large decoded HTML and revalidates late external declarations without fetching them', async () => {
+	it('admits full large decoded HTML and revalidates late external declarations without fetching them', async ({ serve, newPage }) => {
 		const padding = 'x'.repeat(2 * 1024 * 1024 + 128);
 		const image = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="8" height="8"%3E%3Crect width="8" height="8" fill="red"/%3E%3C/svg%3E';
 		const html = `<!doctype html><title>Large neutral document</title><body><script type="application/json">"${padding}"</script><h1 id="tail">Complete terminal text</h1><img src='${image}'></body>`;
 		let outbound = 0;
-		const foreign = createServer((_request, response) => { outbound++; response.end('foreign'); });
-		await new Promise<void>(resolve => foreign.listen(0, '127.0.0.1', resolve));
+		const { server: foreign } = await serve((_request, response) => { outbound++; response.end('foreign'); });
+
 		const target = `http://127.0.0.1:${(foreign.address() as {port:number}).port}/external`;
 		let reloads = 0;
-		const server = createServer((request, response) => {
+		const { server } = await serve((request, response) => {
 			response.setHeader('content-type', 'text/html');
 			response.setHeader('content-encoding', 'gzip');
 			// A browser-language redirect: the delivered document replaces itself
@@ -86,12 +86,12 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 				: request.url === '/reload' && reloads++ === 0 ? `${html}<meta http-equiv="refresh" content="0">` : html;
 			response.end(gzipSync(body));
 		});
-		await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+
 		const origin = `http://127.0.0.1:${(server.address() as {port:number}).port}`;
-		const browser = await chromium.launch();
+
 		const directory = mkdtempSync(join(process.cwd(), '.navigation-evidence-'));
 		try {
-			const page = await browser.newPage();
+			const page = await newPage();
 			const result = await navigateSourceDocument(page, `${origin}/large`);
 			expect(result.boundary).toBeUndefined();
 			expect(result.navigationUrl).toBe(`${origin}/large`);
@@ -128,18 +128,17 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 				expect(entry.documents[profile].url).toBe(`${origin}/large`);
 			}
 		} finally {
-			await browser.close(); rmSync(directory, {recursive:true, force:true});
-			server.closeAllConnections(); foreign.closeAllConnections();
-			await Promise.all([new Promise<void>(resolve => server.close(() => resolve())), new Promise<void>(resolve => foreign.close(() => resolve()))]);
+			 rmSync(directory, {recursive:true, force:true});
+
 		}
 	}, 60_000);
-	it('uses real HTTP/meta/Refresh evidence without fetching foreign documents and retains same-origin browser identity', async () => {
+	it('uses real HTTP/meta/Refresh evidence without fetching foreign documents and retains same-origin browser identity', async ({ serve, newContext, newPage }) => {
 		let outbound = 0;
-		const foreign = createServer((_request, response) => { outbound++; response.end('foreign'); });
-		await new Promise<void>(resolve => foreign.listen(0, '127.0.0.1', resolve));
+		const { server: foreign } = await serve((_request, response) => { outbound++; response.end('foreign'); });
+
 		const target = `http://127.0.0.1:${(foreign.address() as {port:number}).port}/secret?token=private#meaning`;
 		const scriptReloads = new Map<string, number>();
-		const server = createServer((request, response) => {
+		const { server } = await serve((request, response) => {
 			const path = new URL(request.url!, 'http://fixture.test').pathname;
 			response.setHeader('content-type','text/html');
 			if (path === '/external-http') { response.writeHead(302, {location:target}); response.end(); }
@@ -172,12 +171,12 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			else if (path === '/slow') setTimeout(() => response.end('<p>Too late</p>'), 300);
 			else response.end('<base href="./assets/"><h1 id="text">Article</h1><button onclick="location.href=\'/elsewhere\'">Navigate</button>');
 		});
-		await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+
 		const origin = `http://127.0.0.1:${(server.address() as {port:number}).port}`;
-		const browser = await chromium.launch();
-		try {
+
+		{
 			for (const javaScriptEnabled of [true, false]) {
-				const context = await browser.newContext({javaScriptEnabled});
+				const context = await newContext({javaScriptEnabled});
 				const page = await context.newPage();
 				for (const [path, mechanism, status] of [['external-http','http',302], ['external-refresh','refresh-header',200], ['external-meta','meta-refresh',200], ['external-meta-delayed','meta-refresh',200]] as const) {
 					const result = await navigateSourceDocument(page, `${origin}/${path}`);
@@ -199,7 +198,7 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 				expect(await page.evaluate(() => ({url:document.URL, base:document.baseURI}))).toEqual({url:`${origin}/slash/`, base:`${origin}/slash/assets/`});
 				await context.close();
 			}
-			const page = await browser.newPage();
+			const page = await newPage();
 			for (const [path, error] of [['loop-a','loop'],['hop/0','hop budget'],['script','Unexplained'],['script-query-path','Unexplained'],['script-query-foreign','another site'],['script-query-post','Unexplained']] as const) await expect(navigateSourceDocument(page, `${origin}/${path}`)).rejects.toThrow(error);
 			// A same-document script reload is the document's own lifecycle, not
 			// drift: it settles through the bounded reload acquisition, and a
@@ -220,24 +219,21 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			expect(isRouteDrift(page.url(), `${origin}/article`)).toBe(true);
 			expect(outbound).toBe(0);
 			expect(SOURCE_NAVIGATION_LIMITS.hops).toBe(4);
-		} finally {
-			await browser.close(); server.closeAllConnections(); foreign.closeAllConnections();
-			await Promise.all([new Promise<void>(resolve => server.close(() => resolve())),new Promise<void>(resolve => foreign.close(() => resolve()))]);
 		}
 	}, 60_000);
-	it('completes on document arrival, reports a held subresource, and still times out a document that never arrives', async () => {
+	it('completes on document arrival, reports a held subresource, and still times out a document that never arrives', async ({ serve, newPage }) => {
 		// Held responses are released only when the server closes.
-		const server = createServer((request, response) => {
+		const { server } = await serve((request, response) => {
 			response.setHeader('content-type', 'text/html');
 			if (request.url === '/held-image' || request.url === '/never') return;
 			if (request.url === '/held') { setTimeout(() => response.end('<h1 id="text">Delivered</h1><img src="/held-image">'), 300); return; }
 			response.end('<h1 id="text">Complete</h1>');
 		});
-		await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+
 		const origin = `http://127.0.0.1:${(server.address() as {port:number}).port}`;
-		const browser = await chromium.launch();
-		try {
-			const page = await browser.newPage();
+
+		{
+			const page = await newPage();
 			const started = Date.now();
 			const held = await navigateSourceDocument(page, `${origin}/held`, {timeoutMs: 1_500});
 			expect(Date.now() - started).toBeLessThan(5_000);
@@ -252,26 +248,23 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			expect(never).toBeInstanceOf(Error);
 			expect(never).not.toBeInstanceOf(SourceNavigationError);
 			expect(String(never)).toMatch(/Timeout/);
-		} finally {
-			await browser.close(); server.closeAllConnections();
-			await new Promise<void>(resolve => server.close(() => resolve()));
 		}
 	}, 30_000);
-	it('gives a slow document hop the remaining navigation budget and releases its guard when the budget runs out', async () => {
+	it('gives a slow document hop the remaining navigation budget and releases its guard when the budget runs out', async ({ serve, newPage }) => {
 		// A slow but healthy origin: the document takes ~7 s, past any fixed
 		// 5 s per-response cap, and well within the 30 s navigation budget.
-		const server = createServer((request, response) => {
+		const { server } = await serve((request, response) => {
 			response.setHeader('content-type', 'text/html');
 			if (request.url === '/never') return;
 			if (request.url === '/slow-redirect') { setTimeout(() => { response.writeHead(302, {location: '/slow'}); response.end(); }, 1_000); return; }
 			if (request.url === '/slow') { setTimeout(() => response.end('<h1 id="text">Slow document</h1>'), 7_000); return; }
 			response.end('<h1 id="text">Complete</h1>');
 		});
-		await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+
 		const origin = `http://127.0.0.1:${(server.address() as {port:number}).port}`;
-		const browser = await chromium.launch();
-		try {
-			const page = await browser.newPage();
+
+		{
+			const page = await newPage();
 			let started = Date.now();
 			const slow = await navigateSourceDocument(page, `${origin}/slow`);
 			expect(Date.now() - started).toBeGreaterThanOrEqual(7_000);
@@ -297,14 +290,11 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 				expect(after.response?.status()).toBe(200);
 				expect(await page.locator('#text').textContent()).toBe('Complete');
 			}
-		} finally {
-			await browser.close(); server.closeAllConnections();
-			await new Promise<void>(resolve => server.close(() => resolve()));
 		}
 	}, 60_000);
-	it('bounds origin admission by the navigation budget while a throttled slot is held', async () => {
-		const server = createServer((_request, response) => { response.setHeader('content-type', 'text/html'); response.end('<h1>Admitted</h1>'); });
-		await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+	it('bounds origin admission by the navigation budget while a throttled slot is held', async ({ serve, newContext }) => {
+		const { server } = await serve((_request, response) => { response.setHeader('content-type', 'text/html'); response.end('<h1>Admitted</h1>'); });
+
 		const origin = `http://127.0.0.1:${(server.address() as {port:number}).port}`;
 		const governors = new SourceRequestGovernors({concurrency: 1});
 		const governor = governors.forOrigin(origin);
@@ -312,9 +302,9 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 		governor.observeBrowserOutcome(429, '0');
 		await governor.acquire();
 		const held = setTimeout(() => governor.release(), 10_000);
-		const browser = await chromium.launch();
+
 		try {
-			const context = await browser.newContext();
+			const context = await newContext();
 			governSourceContext(context, governors, origin);
 			const page = await context.newPage();
 			const started = Date.now();
@@ -323,8 +313,7 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			expect(isNavigationTimeout(failed)).toBe(true);
 		} finally {
 			clearTimeout(held); governor.release();
-			await browser.close(); server.closeAllConnections();
-			await new Promise<void>(resolve => server.close(() => resolve()));
+
 		}
 	}, 30_000);
 });

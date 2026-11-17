@@ -158,9 +158,18 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('screenshot smoke (real Chromium
     });
     await new Promise<void>((r) => login.listen(0, '127.0.0.1', r));
     const destination = `http://127.0.0.1:${(login.address() as { port: number }).port}`;
-    const source = createServer((_req, res) => {
+    let navigationRefused!: () => void;
+    const refusal = new Promise<void>((resolve) => { navigationRefused = resolve; });
+    const source = createServer(async (req, res) => {
+      if (req.url === '/load-blocker') {
+        // Keep the initial-navigation guard installed until Chromium reports
+        // the refusal, rather than racing the 0ms timer against the load event.
+        await refusal;
+        res.end();
+        return;
+      }
       res.writeHead(200, { 'Content-Type': 'text/html' });
-      res.end(`<h1>Loading…</h1><script>setTimeout(() => location.href = '${destination}/login?redirectUrl=' + encodeURIComponent(location.href), ${delay})</script>`);
+      res.end(`<h1>Loading…</h1>${delay === 0 ? '<img src="/load-blocker">' : ''}<script>setTimeout(() => location.href = '${destination}/login?redirectUrl=' + encodeURIComponent(location.href), ${delay})</script>`);
     });
     await new Promise<void>((r) => source.listen(0, '127.0.0.1', r));
     const url = `http://127.0.0.1:${(source.address() as { port: number }).port}/`;
@@ -169,7 +178,13 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('screenshot smoke (real Chromium
       const result = await captureScreenshots({
         urls: [url], outputDir, concurrency: 1,
         viewports: [{ id: 'desktop', width: 1440, height: 900 }],
+        initScript: async (page) => {
+          page.on('requestfailed', (request) => {
+            if (request.isNavigationRequest() && new URL(request.url()).origin === destination) navigationRefused();
+          });
+        },
       });
+      if (delay === 0) await refusal;
       expect(result.captured).toBe(0);
       const manifest = JSON.parse(readFileSync(join(outputDir, 'screenshots', 'manifest.json'), 'utf8'));
       expect(manifest.entries[url]?.html).toBeUndefined();
@@ -179,6 +194,7 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('screenshot smoke (real Chromium
       const failures = JSON.parse(readFileSync(join(outputDir, 'screenshots', 'failures.json'), 'utf8')) as Array<{ error: string }>;
       expect(failures.some(({ error }) => error.includes(`This page sends visitors to another site (${new URL(destination).host})`))).toBe(true);
     } finally {
+      navigationRefused(); // Release a pending fixture response on failure too.
       await Promise.all([source, login].map((server) => new Promise<void>((r) => server.close(() => r()))));
       rmSync(outputDir, { recursive: true, force: true });
     }

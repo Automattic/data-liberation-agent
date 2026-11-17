@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, vi, afterEach } from 'vitest';
+import { it } from '../../test/browser.js';
 import type { PlatformAdapter } from '../types.js';
 
 const state = vi.hoisted(() => ({ runtime: false, redirected: false, multiple: false, body: undefined as string | undefined }));
@@ -304,7 +305,7 @@ describe('orchestrated HTTP review capture', () => {
 		expect(browserCapture).not.toHaveBeenCalled();
 	});
 
-	it('projects declared DOM and selected/document state with runtime CSS through the real orchestration and offline browser', async () => {
+	it('projects declared DOM and selected/document state with runtime CSS through the real orchestration and offline browser', async ({ newPage }) => {
 		state.runtime = true;
 		const outputDir = directory();
 		const result = await captureWebsite(
@@ -317,11 +318,11 @@ describe('orchestrated HTTP review capture', () => {
 		expect(html).toContain('class="js"');
 		const { chromium } = await import('playwright');
 		const { serveCapture } = await import('./serve-capture.js');
-		const browser = await chromium.launch();
+
 		const server = await serveCapture(outputDir);
 		try {
 			for (const width of [390, 768, 1440]) {
-				const page = await browser.newPage({ viewport: { width, height: 900 } });
+				const page = await newPage({ viewport: { width, height: 900 } });
 				await page.route('**/*', (route) =>
 					new URL(route.request().url()).origin === new URL(server.url).origin ? route.continue() : route.abort()
 				);
@@ -336,7 +337,7 @@ describe('orchestrated HTTP review capture', () => {
 			}
 		} finally {
 			await server.close();
-			await browser.close();
+
 		}
 		expect(result.complete).toBe(false);
 	});

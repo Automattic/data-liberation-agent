@@ -76,11 +76,19 @@ export function retainPartialPostBaseline( c: PostBaselineContext ): void {
 }
 
 /** Baseline artifacts are complete before any of these probes may mutate the page.
- * Scripted links remain last: a client-routed link can re-render the document. */
+ * Cheap whole-page probes run before per-control ones, which can exhaust the
+ * shared budget. Scripted links remain last: a client-routed link can
+ * re-render the document. */
 export const postBaselineSteps: CaptureStep<PostBaselineContext>[] = [
 	step( { id: 'dialogs', bound: 'probe-budget', run: async c => {
 		await restoreTopScrollState( c.page );
 		await withReadOnlyProbes( c.page, () => dismissOverlays( c.page ) );
+	} } ),
+	// Scroll states are one bounded probe of the page chrome; the per-trigger
+	// probes below can spend the whole shared budget on a control-heavy page.
+	step( { id: 'scroll-states', bound: 'probe-budget', guard: 'read-only', when: c => ! c.entry.scrollStates?.toggles.length, run: async c => {
+		const states = await captureScrollStates( c.page, c.url );
+		if ( states?.toggles.length ) c.entry.scrollStates = states;
 	} } ),
 	step( { id: 'shared-chrome', bound: 'probe-budget', when: c => Boolean( c.sharedChrome ), run: async c => {
 		c.state.chrome = await reuseSharedChrome( c.page, c.sharedChrome! );
@@ -155,10 +163,6 @@ export const postBaselineSteps: CaptureStep<PostBaselineContext>[] = [
 	} } ),
 	step( { id: 'shared-chrome', bound: 'probe-budget', when: c => Boolean( c.state.chrome?.skip ), run: c => clearChromeMarks( c.page ) } ),
 	step( { id: 'shared-chrome', continuePhase: true, when: c => Boolean( c.state.interactions ), run: async c => { c.state.promoted = true; c.promote( c.state.interactions! ); } } ),
-	step( { id: 'scroll-states', bound: 'probe-budget', guard: 'read-only', when: c => ! c.entry.scrollStates?.toggles.length, run: async c => {
-		const states = await captureScrollStates( c.page, c.url );
-		if ( states?.toggles.length ) c.entry.scrollStates = states;
-	} } ),
 	step( { id: 'scripted-links', guard: 'read-only', when: c => Boolean( c.scriptedLinkSignatures.length ), run: async c => {
 		const startedAt = Date.now();
 		const evidence = await probeScriptedLinks( c.page, c.scriptedLinkSignatures, Math.min( SCRIPTED_LINK_BUDGET_MS, c.routeRemainingMs() / 4 ) );

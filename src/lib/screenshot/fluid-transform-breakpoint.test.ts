@@ -1,15 +1,15 @@
-import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { chromium } from 'playwright';
-import { expect, it } from 'vitest';
+
+import { expect } from 'vitest';
+import { it } from '../../../test/browser.js';
 import { captureScreenshots } from './screenshotter.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 
 // Real capture/export (~15s per case), including initial-document projection
 // and computed-style serialization. Use the production adaptive sweep.
 // The positioned case also verifies absolute dimensions against source samples.
-it.each( [ 'identity scale', 'varying dimensions', 'constant dimensions', 'positioned dimensions' ] )( 'exports %s across viewport breakpoints', async scenario => {
+it.for( [ 'identity scale', 'varying dimensions', 'constant dimensions', 'positioned dimensions' ] )( 'exports %s across viewport breakpoints', { timeout: 90_000 }, async (scenario, { serve, newPage }) => {
 	const parent = join( process.cwd(), '.tmp-test' );
 	mkdirSync( parent, { recursive: true } );
 	const outputDir = mkdtempSync( join( parent, 'fluid-scale-breakpoint-' ) );
@@ -50,13 +50,13 @@ it.each( [ 'identity scale', 'varying dimensions', 'constant dimensions', 'posit
 			frame.style.transformOrigin = width < 559.172 ? '0 0' : '';
 		}; addEventListener('resize', fit); fit();
 		</script></body></html>`;
-	const server = createServer( ( request, response ) => {
+	const { server } = await serve(( request, response ) => {
 		response.setHeader( 'Content-Type', 'text/html' );
 		response.end( request.url === '/copy/' ? portable : fixture );
-	} );
-	await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+	});
+
 	const sourceUrl = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }/`;
-	const browser = await chromium.launch();
+
 	try {
 		const capture = await captureScreenshots( {
 			urls: [ sourceUrl ], outputDir, concurrency: 1, settleMs: 0, deviceMode: 'auto',
@@ -65,7 +65,7 @@ it.each( [ 'identity scale', 'varying dimensions', 'constant dimensions', 'posit
 		expect( capture.failed ).toBe( 0 );
 		exportWebsiteCapture( { outputDir, sourceUrl, platform: 'generic', summary: {}, failures: [] } );
 		portable = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
-		const copy = await browser.newPage();
+		const copy = await newPage();
 		await copy.goto( `${ sourceUrl }copy/` );
 		for ( const width of [ 768, 1024, 1200, 1440 ] ) {
 			await copy.setViewportSize( { width, height: 900 } );
@@ -85,8 +85,7 @@ it.each( [ 'identity scale', 'varying dimensions', 'constant dimensions', 'posit
 			if ( scenario === 'identity scale' && width === 1440 ) expect( geometry.width ).toBeCloseTo( 559.172, 1 );
 		}
 	} finally {
-		await browser.close();
-		await new Promise<void>( ( resolve, reject ) => server.close( error => error ? reject( error ) : resolve() ) );
+
 		rmSync( outputDir, { recursive: true, force: true } );
 	}
-}, 90_000 );
+} );

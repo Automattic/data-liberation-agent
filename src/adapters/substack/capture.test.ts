@@ -1,5 +1,6 @@
-import { chromium, type Browser } from 'playwright';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { describe, expect } from 'vitest';
+import { it } from '../../../test/browser.js';
 import { applySourceCleanup, cleanupPolicy } from '../../lib/source-cleanup.js';
 import { neutralizePlatformLinks } from './capture.js';
 import { substackAdapter } from './index.js';
@@ -31,12 +32,9 @@ const SUBSCRIBE_HERO = `<div class="full-email-form"><div class="vertically-cent
 </div></div>`;
 
 describe.skipIf(process.env.SKIP_BROWSER_TESTS)('Substack capture cleanup', () => {
-	let browser: Browser;
-	beforeAll(async () => { browser = await chromium.launch(); });
-	afterAll(async () => { await browser.close(); });
 
-	it('removes Substack footer chrome and legal links, keeping the owner copyright', async () => {
-		const page = await browser.newPage();
+	it('removes Substack footer chrome and legal links, keeping the owner copyright', async ({ newPage }) => {
+		const page = await newPage();
 		try {
 			await page.setContent(`<!doctype html><html><body>${POST}${FOOTER}</body></html>`);
 			await applySourceCleanup(page, cleanupPolicy(substackAdapter.liberation?.cleanupRules));
@@ -50,8 +48,8 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('Substack capture cleanup', () =
 		}
 	});
 
-	it('removes subscribe forms and their Substack consent line, keeping the publication name and tagline', async () => {
-		const page = await browser.newPage();
+	it('removes subscribe forms and their Substack consent line, keeping the publication name and tagline', async ({ newPage }) => {
+		const page = await newPage();
 		try {
 			await page.setContent(`<!doctype html><html><body>${SUBSCRIBE_HERO}</body></html>`);
 			await applySourceCleanup(page, cleanupPolicy(substackAdapter.liberation?.cleanupRules));
@@ -64,8 +62,8 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('Substack capture cleanup', () =
 		}
 	});
 
-	it('points sign-in controls and byline profile links at #, keeping the controls', async () => {
-		const page = await browser.newPage();
+	it('points sign-in controls and byline profile links at #, keeping the controls', async ({ newPage }) => {
+		const page = await newPage();
 		try {
 			await page.setContent(`<!doctype html><html><body>${HEADER}${POST}</body></html>`);
 			expect(await neutralizePlatformLinks(page)).toBe(3);

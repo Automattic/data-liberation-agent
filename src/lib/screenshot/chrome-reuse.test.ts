@@ -1,4 +1,5 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect } from 'vitest';
+import { it } from '../../../test/browser.js';
 import { createServer, type Server } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -71,10 +72,10 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'chrome copies und
 	} );
 
 	// One browser pass (~1 s): count actual style reads, not elapsed time.
-	it( 'reads styles only for structural candidates, once per root, and still rejects different paint', async () => {
-		const browser = await chromium.launch();
-		try {
-			const view = await browser.newPage();
+	it( 'reads styles only for structural candidates, once per root, and still rejects different paint', async ({ newPage }) => {
+
+		{
+			const view = await newPage();
 			const fixture = ( route: boolean ) => `<style>nav::before{content:"Menu";color:${ route ? 'blue' : 'red' }}</style>
 <header><nav><button>Open</button></nav><p>${ route ? 'Route-specific' : 'Home' }</p></header><footer>${ route ? 'Other' : 'Footer' }</footer>`;
 			await view.setContent( fixture( false ) );
@@ -97,15 +98,13 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'chrome copies und
 			// and the nav/button are not read again through their enclosing header.
 			expect( await calls.jsonValue() ).toEqual( [ 'NAV', 'NAV::before', 'NAV::after', 'BUTTON', 'BUTTON::before', 'BUTTON::after' ] );
 			await calls.dispose();
-		} finally {
-			await browser.close();
 		}
 	} );
 
-	it( 'matches a copy that renders alike under renamed ids and replays its states under the route\'s names', async () => {
-		const browser = await chromium.launch();
-		try {
-			const view = await browser.newPage();
+	it( 'matches a copy that renders alike under renamed ids and replays its states under the route\'s names', async ({ newPage }) => {
+
+		{
+			const view = await newPage();
 			// A builder's per-page copy of one header: ids and some classes carry the
 			// instance id, and the current-route link is styled apart.
 			const fixture = ( id: string, { color = 'red', text = 'Search', current = 'a', portal = true, template = '' } = {} ) => `<style>#${ id }_panel{color:${ color }}.${ id }-box{padding:2px}[aria-current]{color:green}header *{font-family:Arial}${ template }</style>
@@ -158,8 +157,6 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'chrome copies und
 			await view.setContent( fixture( 'top-b2' ) );
 			await view.locator( 'header div' ).evaluate( node => node.removeAttribute( 'id' ) );
 			expect( ( await reuseSharedChrome( view, { status: 'captured', durationMs: 0, evidence } ) ).decision ).toMatchObject( { chromeReused: false } );
-		} finally {
-			await browser.close();
 		}
 	} );
 } );
@@ -318,12 +315,12 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'shared chrome cap
 		}
 	} );
 
-	it( 'exports the reused menu and dialog working on the route that did not probe them', async () => {
+	it( 'exports the reused menu and dialog working on the route that did not probe them', async ({ newPage }) => {
 		exportWebsiteCapture( { outputDir, sourceUrl: url( '' ), platform: 'neutral', summary: {}, failures: [] } );
 		const site = await startStaticServer( join( outputDir, 'website' ) );
-		const browser = await chromium.launch();
+
 		try {
-			const view = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			const view = await newPage( { viewport: { width: 1440, height: 900 } } );
 			await view.goto( new URL( 'about/', site.url ).href );
 			// Both header controls are wired from the reused evidence, not by a source script.
 			expect( await view.locator( 'header [data-blocks-engine-capture-dialog-trigger]' ).count() ).toBe( 3 );
@@ -339,7 +336,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'shared chrome cap
 			await view.getByRole( 'button', { name: 'Contact' } ).click();
 			await expect.poll( () => view.getByText( 'Write to us any time.' ).isVisible() ).toBe( true );
 		} finally {
-			await browser.close();
+
 			await site.close();
 		}
 	}, 60_000 );
