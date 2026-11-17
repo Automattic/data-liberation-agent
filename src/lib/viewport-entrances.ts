@@ -10,6 +10,7 @@ interface EntranceState {
 	rootMargin: string;
 	threshold: number[];
 	repeat: boolean;
+	repeatSides?: Array<'above' | 'below'>;
 	/** Native CSS owns frames/time; the witness owns only play and terminal attributes. */
 	cssAnimations?: Array<{ name: string; timing: EffectTiming; frames: ComputedKeyframe[] }>;
 	startupContexts?: Array<{ width: number; height: number; started: boolean }>;
@@ -177,6 +178,11 @@ export function observeViewportEntrances(): void {
 			super.observe( element );
 		}
 	};
+	const recordRepeat = ( element: Element, state: EntranceState ) => {
+		state.repeat = true;
+		const side = element.getBoundingClientRect().bottom <= 0 ? 'above' : 'below';
+		state.repeatSides = [ ...new Set( [ ...( state.repeatSides ?? [] ), side ] as Array<'above' | 'below'> ) ].sort();
+	};
 	const play = Animation.prototype.play;
 	Animation.prototype.play = function(): void {
 		try {
@@ -188,7 +194,7 @@ export function observeViewportEntrances(): void {
 					( effect as KeyframeEffect ).pseudoElement || this.currentTime !== 0 || this.playbackRate !== 1 ) {
 					target.loss = 'CSS play lacks a supported viewport witness or starts from an unproven phase';
 				} else {
-					if ( target.cssComplete ) { target.state.repeat = true; target.cssComplete = false; target.cssStarted = false; target.state.cssAnimations = []; target.effects.clear(); target.finished.clear(); }
+					if ( target.cssComplete ) { recordRepeat( element!, target.state ); target.cssComplete = false; target.cssStarted = false; target.state.cssAnimations = []; target.effects.clear(); target.finished.clear(); }
 					if ( ! target.cssStarted ) { target.before = attributes( element! ); target.startup = navigationalPose; }
 					target.cssStarted = true;
 					const frames = ( effect as KeyframeEffect ).getKeyframes();
@@ -216,14 +222,14 @@ export function observeViewportEntrances(): void {
 				.map( name => [ name, { before: target.before[ name ] ?? null, after: after[ name ] ?? null } ] ) );
 			const unfinished = target.finished.size !== target.effects.size;
 			if ( target.cssComplete && ! target.entered && Object.keys( target.state.attributes ).every( name =>
-				( after[ name ] ?? null ) === target.state.attributes[ name ].before ) ) target.state.repeat = true;
+				( after[ name ] ?? null ) === target.state.attributes[ name ].before ) ) recordRepeat( element, target.state );
 			if ( ! unfinished && Object.keys( changed ).length ) { target.state.attributes = changed; target.cssComplete = true; target.confirmed = true; }
 			return;
 		}
 		if ( ! target.entered || target.scrollDriven && target.confirmed ) {
 			if ( target.confirmed && Object.keys( target.state.attributes ).every( key =>
 				( after[ key ] ?? null ) === target.state.attributes[ key ].before
-			) ) target.state.repeat = true;
+			) ) recordRepeat( element, target.state );
 			return;
 		}
 		if ( target.confirmed ) return;
@@ -437,10 +443,27 @@ function replayViewportEntrances(): void {
 				if ( entry.isIntersecting && ( ! state.cssAnimations || entry.intersectionRatio >= state.threshold[ 0 ] ) ) {
 					if ( state.cssAnimations ) start();
 					else { apply( 'after' ); if ( ! state.repeat ) observer.unobserve( element ); }
-				} else if ( state.repeat && ! running ) { apply( 'before' ); complete = false; }
+				} else if ( ! entry.isIntersecting && state.repeat && ! running &&
+					( ! state.repeatSides || state.repeatSides.includes( entry.boundingClientRect.top >= ( entry.rootBounds?.top ?? 0 ) ? 'below' : 'above' ) ) ) { apply( 'before' ); complete = false; }
 			}
 		}, { rootMargin: state.rootMargin, threshold: state.threshold } );
 		observer.observe( element );
+		if ( state.repeat ) {
+			// A scroll jump can cross the entire viewport with ratio zero at both
+			// ends. IO then emits no entry; re-arm it when the outside side changes.
+			const side = () => {
+				const box = element.getBoundingClientRect();
+				return box.bottom <= 0 ? 'above' : box.top >= innerHeight ? 'below' : undefined;
+			};
+			let previousSide = side();
+			addEventListener( 'scroll', () => {
+				const currentSide = side();
+				if ( previousSide && currentSide && previousSide !== currentSide ) {
+					observer.unobserve( element ); observer.observe( element );
+				}
+				previousSide = currentSide;
+			}, { passive: true } );
+		}
 		if ( state.cssAnimations && state.startupContexts ) {
 			const startup = state.startupContexts.find( pose => pose.width === document.documentElement.clientWidth && pose.height === document.documentElement.clientHeight );
 			if ( startup?.started ) start();
@@ -466,8 +489,8 @@ export function mergeViewportEntranceStates( left: string | undefined, right: st
 	if ( scope && left === undefined && a === undefined && b ) return scoped( b, b.devices ?? scope.right );
 	if ( scope && right === undefined && b === undefined && a ) return scoped( a, a.devices ?? scope.left );
 	if ( ! a || ! b ) return undefined;
-	const { startupContexts: aContexts, devices: aDevices, ...aLifecycle } = a;
-	const { startupContexts: bContexts, devices: bDevices, ...bLifecycle } = b;
+	const { startupContexts: aContexts, devices: aDevices, repeatSides: aSides, ...aLifecycle } = a;
+	const { startupContexts: bContexts, devices: bDevices, repeatSides: bSides, ...bLifecycle } = b;
 	if ( ! isDeepStrictEqual( aLifecycle, bLifecycle ) ) return undefined;
 	if ( ! scope && ! isDeepStrictEqual( aDevices, bDevices ) ) return undefined;
 	const contexts: NonNullable<EntranceState['startupContexts']> = [];
@@ -476,7 +499,9 @@ export function mergeViewportEntranceStates( left: string | undefined, right: st
 		if ( previous && previous.started !== context.started ) return undefined;
 		if ( ! previous ) contexts.push( context );
 	}
-	const merged = { ...aLifecycle, ...( aContexts || bContexts ? { startupContexts: contexts } : {} ) };
+	// Missing side evidence retains the legacy two-sided lifecycle.
+	const repeatSides = aSides && bSides ? [ ...new Set( [ ...aSides, ...bSides ] ) ].sort() : undefined;
+	const merged = { ...aLifecycle, ...( repeatSides ? { repeatSides } : {} ), ...( aContexts || bContexts ? { startupContexts: contexts } : {} ) };
 	return scope ? scoped( merged, [ ...( aDevices ?? scope.left ), ...( bDevices ?? scope.right ) ] ) : JSON.stringify( { ...merged, ...( aDevices ? { devices: aDevices } : {} ) } );
 }
 
@@ -491,7 +516,9 @@ function parseViewportEntranceState( raw: string | undefined ): EntranceState | 
 function validViewportEntranceState( state: EntranceState ): boolean {
 	return ! ( typeof state.rootMargin !== 'string' || ! /^-?\d+(?:\.\d+)?(?:px|%)(?:\s+-?\d+(?:\.\d+)?(?:px|%)){0,3}$/.test( state.rootMargin ) || ! Array.isArray( state.threshold ) || ! state.threshold.length ||
 		state.threshold.some( value => typeof value !== 'number' || value < 0 || value > 1 ) ||
-		typeof state.repeat !== 'boolean' || ! state.attributes || Object.keys( state.attributes ).length === 0 ||
+		typeof state.repeat !== 'boolean' ||
+		( state.repeatSides !== undefined && ( ! state.repeat || ! Array.isArray( state.repeatSides ) || ! state.repeatSides.length ||
+			new Set( state.repeatSides ).size !== state.repeatSides.length || state.repeatSides.some( side => side !== 'above' && side !== 'below' ) ) ) || ! state.attributes || Object.keys( state.attributes ).length === 0 ||
 		( state.cssAnimations !== undefined && ( state.threshold.length !== 1 || ! Array.isArray( state.cssAnimations ) || ! state.cssAnimations.length || state.cssAnimations.length > 32 ||
 			state.cssAnimations.some( binding => ! binding || typeof binding.name !== 'string' || ! binding.name || ! binding.timing || ! Array.isArray( binding.frames ) ) ) ) ||
 		( state.devices !== undefined && ( ! Array.isArray( state.devices ) || ! state.devices.length || state.devices.some( device => typeof device !== 'string' || ! /^[a-z][a-z0-9_-]{0,63}$/.test( device ) ) ) ) ||
