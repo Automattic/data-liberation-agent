@@ -521,8 +521,8 @@ describe( 'captureSelectableSetStates', () => {
 		const page = await newPage();
 		try {
 			await serve( page, `<main><div id="links">
-				<div style="cursor:pointer"><a href="/one"><span>Read one</span></a></div>
-				<div style="cursor:pointer"><a href="/two"><span>Read two</span></a></div>
+				<div style="cursor:pointer"><a href="/one" tabindex="0"><span>Read one</span></a></div>
+				<div style="cursor:pointer"><a href="/two" tabindex="0"><span>Read two</span></a></div>
 			</div><div id="disclosures">
 				<details><summary style="cursor:pointer"><span>Archive</span></summary><p>Archive content</p></details>
 				<details><summary style="cursor:pointer"><span>Labels</span></summary><p>Label content</p></details>
