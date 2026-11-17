@@ -148,7 +148,9 @@ export function readAssets( root: string ): ImageAssetRecord[] {
  */
 export function collectAssets( documents: ImageDocuments, resolve?: ImageResolver, storedFont: ( url: string ) => boolean = () => true ): ImageAssetRecord[] {
 	const groups: Array<{ urls: Set<string>; original: string; size: number; references: ImageAssetReference[]; kind: NonNullable<ImageAssetRecord['kind']> }> = [];
-	const add = ( values: string[], preferred: string, base: string, references: ImageAssetReference[], size = 0, kind: NonNullable<ImageAssetRecord['kind']> = 'image' ) => {
+	type Use = typeof groups[number] & { candidates: Set<string>; fallback: Set<string> };
+	const uses: Use[] = [];
+	const normalizedUrls = ( values: string[], base: string, kind: NonNullable<ImageAssetRecord['kind']> ) => {
 		const urls = new Set<string>();
 		for ( const value of values ) {
 			try {
@@ -159,20 +161,20 @@ export function collectAssets( documents: ImageDocuments, resolve?: ImageResolve
 				}
 			} catch { /* Invalid references cannot be fetched. */ }
 		}
+		return urls;
+	};
+	const add = ( values: string[], preferred: string, base: string, references: ImageAssetReference[], size = 0, kind: NonNullable<ImageAssetRecord['kind']> = 'image', srcset: string[] = [], src?: string ) => {
+		const urls = normalizedUrls( values, base, kind );
 		if ( ! urls.size ) return;
 		let original: string;
 		try { original = kind === 'image' ? resolvedImageOriginal( new URL( preferred, base ).href, resolve ) : new URL( preferred, base ).href; }
 		catch { original = [ ...urls ][ 0 ]; }
 		if ( ! urls.has( original ) ) original = [ ...urls ][ 0 ];
-		const overlapping = groups.filter( group => group.kind === kind && [ ...urls ].some( url => group.urls.has( url ) ) );
-		for ( const group of overlapping ) {
-			for ( const url of group.urls ) urls.add( url );
-			references.push( ...group.references );
-			// A CSS reference or smaller document must not demote the srcset original.
-			if ( group.size > size ) { original = group.original; size = group.size; }
-			groups.splice( groups.indexOf( group ), 1 );
-		}
-		groups.push( { urls, original, size, references, kind } );
+		const candidates = normalizedUrls( srcset, base, kind );
+		const fallback = normalizedUrls( src ? [ src ] : [], base, kind );
+		// An ordinary src rendition is identity evidence, not a fallback bridge.
+		if ( [ ...fallback ].some( value => candidates.has( value ) ) ) fallback.clear();
+		uses.push( { urls, original, size, references, kind, candidates, fallback } );
 	};
 	for ( const { html, url: documentUrl } of documents ) {
 		const $ = cheerio.load( html );
@@ -203,7 +205,7 @@ export function collectAssets( documents: ImageDocuments, resolve?: ImageResolve
 				values.push( lightbox );
 			}
 			const representative = portableSrcsetRepresentative( candidates );
-			if ( values.length ) add( values, lightbox ?? representative?.url ?? values[ 0 ], url, references, lightbox ? Infinity : representative?.size ?? 0 );
+			if ( values.length ) add( values, lightbox ?? representative?.url ?? values[ 0 ], url, references, lightbox ? Infinity : representative?.size ?? 0, 'image', candidates.map( candidate => candidate.url ), src );
 		} );
 		$( 'a[href]' ).each( ( i, node ) => {
 			const href = $( node ).attr( 'href' )!;
@@ -272,6 +274,40 @@ export function collectAssets( documents: ImageDocuments, resolve?: ImageResolve
 				} );
 			} catch { /* The stylesheet owner reports malformed CSS. */ }
 		}
+	}
+	// Decide fallback ownership over the complete inventory before joining anything.
+	// Otherwise a later document cannot undo an earlier placeholder bridge.
+	const fallbackCandidates = new Map<string, Set<string>[]>();
+	const sharedFallbacks = new Set<string>();
+	for ( const use of uses ) {
+		if ( ! use.candidates.size ) continue;
+		for ( const source of use.fallback ) {
+			const previous = fallbackCandidates.get( source ) ?? [];
+			if ( previous.some( candidates => ! [ ...use.candidates ].some( value => candidates.has( value ) ) ) ) sharedFallbacks.add( source );
+			previous.push( use.candidates );
+			fallbackCandidates.set( source, previous );
+		}
+	}
+	const joinGroup = ( urls: Set<string>, original: string, size: number, references: ImageAssetReference[], kind: NonNullable<ImageAssetRecord['kind']> ) => {
+		if ( ! urls.size ) return;
+		const overlapping = groups.filter( group => group.kind === kind && [ ...urls ].some( url => group.urls.has( url ) ) );
+		for ( const group of overlapping ) {
+			for ( const url of group.urls ) urls.add( url );
+			references.push( ...group.references );
+			// A CSS reference or smaller document must not demote the srcset original.
+			if ( group.size > size ) { original = group.original; size = group.size; }
+			groups.splice( groups.indexOf( group ), 1 );
+		}
+		groups.push( { urls, original, size, references, kind } );
+	};
+	for ( const use of uses ) {
+		const detached = use.kind === 'image' ? [ ...use.urls ].filter( source => sharedFallbacks.has( source ) ) : [];
+		for ( const source of detached ) {
+			use.urls.delete( source );
+			joinGroup( new Set( [ source ] ), source, 0, use.references.filter( ref => ref.source_url === source ), use.kind );
+		}
+		const references = use.references.filter( ref => ! detached.includes( ref.source_url ) );
+		joinGroup( use.urls, use.urls.has( use.original ) ? use.original : [ ...use.urls ][ 0 ], use.size, references, use.kind );
 	}
 	return groups.map( group => ( {
 		kind: group.kind, destination_owner: group.kind === 'font' ? 'theme' : 'media-library',
