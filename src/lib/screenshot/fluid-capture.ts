@@ -721,6 +721,12 @@ async function learnFluidGeometry(
 	let canvasFloor: number | null = null;
 	let unmodelled = 0;
 
+	const movingTransforms = new Set( await baseline.evaluate( ( state, { attribute, key } ) => {
+		const tracker = ( window as unknown as Record< symbol, RuntimeStyleWrites | undefined > )[ Symbol.for( key ) ];
+		const moving = ( state as unknown as { movingTransforms?: Set< string > } ).movingTransforms ?? new Set< string >();
+		for ( const element of state.elements() ) if ( tracker?.movingTransform( element ) ) moving.add( element.getAttribute( attribute )! );
+		return [ ...moving ];
+	}, { attribute: ID_ATTRIBUTE, key: RUNTIME_STYLE_WRITES_KEY } ) );
 	for ( const [ key, samples ] of observations ) {
 		// Not a geometry series, so neither learned nor unmodelled.
 		if ( ! holdsPixels( samples ) || key.includes( ':clip-' ) ) continue;
@@ -728,6 +734,7 @@ async function learnFluidGeometry(
 		// Any non-relative sample invalidates the entire offset relationship.
 		// Fitting the remaining relative samples would erase authored positioning.
 		if ( property === 'left' && nonRelative.has( id ) ) continue;
+		if ( property.startsWith( 'transform-' ) && movingTransforms.has( id ) ) continue;
 		if ( property === 'transform-scale' ) {
 			// Never fit a partial series through rotation, skew, translation or absence.
 			if ( samples.some( sample => ! Number.isFinite( sample.value ) ) ) continue;
@@ -1370,6 +1377,8 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 		const unreachable = ( window as unknown as Record< symbol, ( image: HTMLImageElement ) => boolean > )[ Symbol.for( reachabilityKey ) ];
 		// One serialized geometry record per tagged element, keyed by its id, so
 		// rest can be judged per element (see `perpetual` below).
+		const transforms = new Map< string, string >();
+		const movingTransforms = ( state as unknown as { movingTransforms?: Set< string > } ).movingTransforms ??= new Set< string >();
 		const snapshot = () => {
 			state.reconcile();
 			return new Map( state.elements().map( element => {
@@ -1380,6 +1389,11 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 					.map( property => [ property, pixel( style.getPropertyValue( property ) ) ] )
 					.filter( ( [ , value ] ) => value !== null );
 				const id = element.getAttribute( attribute ) ?? '';
+				// Repeated authored transform reads at this unchanged viewport
+				// distinguish script motion from a stable width-driven translation.
+				const previous = transforms.get( id );
+				if ( previous !== undefined && previous !== style.transform ) movingTransforms.add( id );
+				transforms.set( id, style.transform );
 				return [ id, JSON.stringify( [ id,
 					properties.map( property => pixel( style.getPropertyValue( property ) ) ), custom,
 					// Keep the whole transform, not just X: scale/rotation must invalidate

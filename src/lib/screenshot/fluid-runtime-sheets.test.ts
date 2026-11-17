@@ -29,6 +29,38 @@ const WIDTHS = [ 390, 768, 980, 1024, 1280, 1440, 1920 ];
 
 describe( 'runtime-written stylesheet offsets', () => {
 
+	it( 'leaves time-driven transforms live while learning stable width-driven translations', async ({ newContext }) => {
+		const context = await newContext( { viewport: { width: 1440, height: 900 } } );
+		await context.addInitScript( observeRuntimeStyleWrites );
+		const page = await context.newPage();
+		try {
+			await page.goto( 'data:text/html,' + encodeURIComponent( `<style>
+				#track { transition: transform 80ms linear; } div { width: 40px; height: 40px; }
+				</style><div id="track" style="transform:translateX(0px)"></div>
+				<div id="layout" style="transform:translateX(0px)"></div><script>
+				const track = document.getElementById('track');
+				let phase = 0, locked = false; window.advances = 0;
+				track.addEventListener('transitionend', () => { locked = false; window.advances++; });
+				setInterval(() => {
+					if (locked) return;
+					locked = true; phase++;
+					track.style.transform = 'translateX(' + (-phase * 40) + 'px)';
+				}, 150);
+				const resize = () => document.getElementById('layout').style.transform = 'translateX(' + innerWidth / 4 + 'px)';
+				addEventListener('resize', resize); resize();
+				</script>` ) );
+			await learnAndApplyFluidGeometry( page, { widths: [ 390, 768, 1024, 1440 ], settleMs: 30 } );
+			const rules = await page.locator( 'style[data-blocks-engine-capture-fluid-rules]' ).allTextContents();
+			expect( await page.locator( '#track' ).getAttribute( 'data-blocks-engine-capture-fluid-segment' ) ).toBeNull();
+			expect( rules.join( '' ) ).toContain( 'transform:' );
+			expect( await page.locator( '#layout' ).getAttribute( 'data-blocks-engine-capture-fluid-segment' ) ).not.toBeNull();
+			const before = await page.evaluate( () => ( window as unknown as { advances: number } ).advances );
+			await page.waitForFunction( before => ( window as unknown as { advances: number } ).advances >= before + 2, before );
+			await page.setViewportSize( { width: 768, height: 900 } );
+			await page.waitForFunction( () => getComputedStyle( document.getElementById( 'layout' )! ).transform === 'matrix(1, 0, 0, 1, 192, 0)' );
+		} finally { await context.close(); }
+	}, 30_000 );
+
 	it( 'keeps canvas offsets below the capture width instead of freezing the capture width sheet', async ({ newPage }) => {
 		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		const reference = await newPage();
