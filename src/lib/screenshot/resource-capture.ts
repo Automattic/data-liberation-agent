@@ -503,6 +503,9 @@ export class CapturedResourceStore {
 	// most MAX_CAPTURED_RENDER_CRITICAL_RESERVED_BYTES); media spends the rest.
 	private readonly mediaByteLimit: number;
 	private readonly resolvedSrcsetImages = new Set< string >();
+	// Like collectAssets, keep shared fallbacks out of unrelated srcset families.
+	// Ownership spans documents: a later route can invalidate an earlier alias.
+	private readonly imgFallbackRepresentatives = new Map< string, Set< string > >();
 
 	constructor(
 		outputDir: string,
@@ -773,8 +776,20 @@ export class CapturedResourceStore {
 				if ( target ) {
 					add( target, baseUrl, true );
 					const references = candidates.map( candidate => candidate.url );
-					// The img fallback is another rendition of this declared image.
-					if ( element.tagName === 'img' && node.attr( 'src' ) ) references.push( node.attr( 'src' )! );
+					// A fallback outside the candidate list is only a rendition while
+					// every img using it agrees on the representative. Shared lazy
+					// placeholders must retain their own bytes, even on later routes.
+					const fallback = element.tagName === 'img' && absolute( node.attr( 'src' ) ?? '', baseUrl );
+					if ( fallback && node.attr( 'src' ) && ! references.some( reference => absolute( reference, baseUrl ) === fallback ) ) {
+						const owners = this.imgFallbackRepresentatives.get( fallback ) ?? new Set< string >();
+						owners.add( target );
+						this.imgFallbackRepresentatives.set( fallback, owners );
+						if ( owners.size > 1 ) {
+							renditions.delete( fallback );
+							// add also removes any alias and omission seeded by an earlier document.
+							add( fallback, baseUrl, true, true );
+						} else references.push( fallback );
+					}
 					for ( const reference of references ) {
 						const url = absolute( reference, baseUrl );
 						if ( url && url !== target ) {
@@ -912,7 +927,8 @@ export class CapturedResourceStore {
 		// Explicit dependencies (metadata, CSS, another source) take precedence.
 		// Browser image responses alone are not independent declarations.
 		for ( const [ url, representative ] of renditions ) {
-			if ( this.manifest.resources[ url ] || this.explicitDependencies.has( url ) ) continue;
+			if ( this.manifest.resources[ url ] || this.explicitDependencies.has( url ) ||
+				( this.imgFallbackRepresentatives.get( url )?.size ?? 0 ) > 1 ) continue;
 			const resource = this.manifest.resources[ representative ];
 			if ( ! resource ) continue;
 			this.manifest.resources[ url ] = { ...resource };
