@@ -140,9 +140,9 @@ export function renderedHtml( html: string ): string {
 		.get();
 	$( 'body > div,body > nav' ).each( ( _index, element ) => {
 		const node = $( element );
-		const style = `${ node.attr( 'style' ) ?? '' };${
-			node.children().first().attr( 'style' ) ?? ''
-		}`;
+		// A hidden first child (e.g. a sprite or runtime mount) does not
+		// make its siblings, including the site's header, hidden replicas.
+		const style = node.attr( 'style' ) ?? '';
 		const links = node
 			.find( 'a[href]' )
 			.map( ( _i, link ) => $( link ).attr( 'href' ) ?? '' )

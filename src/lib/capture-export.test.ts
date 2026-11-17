@@ -3121,6 +3121,17 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( html ).toContain( '<h1>Home</h1>' );
 	} );
 
+	it( 'keeps headers after hidden runtime mounts with repeated legal-page navigation (#1949)', () => {
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		const nav = '<a href="/meet">MEET THE THERAPIST</a>'.repeat( 3 );
+		capture.page( 'https://example.com/privacy-policy', `<html><body><div><div style="display:none">Runtime mount</div><div><header id="site-header"><nav>${ nav }</nav></header><main><h1>Privacy Policy</h1></main></div></div></body></html>` );
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/privacy-policy', platform: 'generic', summary: {}, failures: [] } );
+		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+		expect( $( 'header nav a' ) ).toHaveLength( 3 );
+		expect( $( 'main h1' ).text() ).toBe( 'Privacy Policy' );
+	} );
+
 	it( 'drops inert shell mounts and hidden detached navigation replicas', () => {
 		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
 		const outputDir = capture.build();

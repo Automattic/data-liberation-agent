@@ -255,6 +255,36 @@ it( 'bounds class probing before fluid learning without losing delayed geometry'
 	}
 }, 60_000 );
 
+// Three routes have the same nav, but bold current labels shift its overflow widths.
+// One browser pass per route; approximately 10 seconds total.
+it( 'names shared nav width evidence independently of route-current geometry (#1949)', async () => {
+	const browser = await chromium.launch();
+	try {
+		const headers: string[] = [];
+		const contracts: string[] = [];
+		for ( const current of [ 0, 1, 2 ] ) {
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			await page.setContent( `<style>nav{font:20px serif}li{display:inline-block}a[aria-current]{font-weight:bold}.overflow{visibility:hidden}</style><header><nav><ul>${ [ 'Home', 'Meet the therapist', 'Rates' ].map( ( label, index ) => `<li><a href="/${ index }"${ index === current ? ' aria-current="page"' : '' }>${ label }</a></li>` ).join( '' ) }</ul></nav></header><script>
+			const items=[...document.querySelectorAll('li')];
+			const total=items.reduce((n,item)=>n+item.getBoundingClientRect().width,0);
+			const sync=()=>items.forEach((item,i)=>item.classList.toggle('overflow',innerWidth<500+total+i*40));
+			addEventListener('resize',sync);sync();</script>` );
+			await markInitialDocument( page );
+			const result = await captureViewportClassStates( page, { widths: [ 390, 1440 ], settleMs: 0 } );
+			expect( result.aliased ).toBe( 3 );
+			const html = projectInitialDocument( await page.content(), await page.content() );
+			headers.push( html.match( /<header>[\s\S]*?<\/header>/ )![ 0 ].replace( / aria-current="page"/g, '' ) );
+			contracts.push( await page.locator( 'body' ).getAttribute( 'data-blocks-engine-capture-width-class-contracts' ) ?? '' );
+			await page.close();
+		}
+		expect( new Set( contracts ).size ).toBeGreaterThan( 1 ); // Width evidence genuinely differs.
+		expect( headers[ 1 ] ).toBe( headers[ 0 ] );
+		expect( headers[ 2 ] ).toBe( headers[ 0 ] );
+	} finally {
+		await browser.close();
+	}
+}, 60_000 );
+
 // Two routes share a header whose script toggles a class at a width breakpoint.
 it.each( [
 	{ name: 'reuses a breakpoint proven either side of its flip', second: 768, sampled: [ 390, 767, 768, 1920 ], media: '(max-width:767px)' },
