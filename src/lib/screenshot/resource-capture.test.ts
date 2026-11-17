@@ -61,6 +61,42 @@ describe( 'CapturedResourceStore', () => {
 			expect( readFileSync( join( outputDir, resource.path ), 'utf8' ) ).toBe( `${ origin }${ name }.svg` );
 		}
 	});
+	it( 'captures shared img fallbacks independently while retaining single-image rendition aliases', async () => {
+		for ( const acrossDocuments of [ false, true ] ) {
+			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-srcset-fallback-' ) );
+			dirs.push( outputDir );
+			const origin = 'https://example.com/';
+			const store = new CapturedResourceStore( outputDir, origin, async url => ( {
+				finalUrl: url, status: 200, headers: new Headers( { 'content-type': 'image/svg+xml' } ),
+				body: Buffer.from( url ),
+			} ) );
+			const first = '<img src="/placeholder.svg" srcset="/first.svg 1600w">';
+			const second = '<img src="/placeholder.svg" srcset="/second.svg 1600w">';
+			const single = '<img src="/small.svg" srcset="/large.svg 1600w">';
+			const candidate = '<img src="/candidate.svg" srcset="/candidate.svg 400w, /candidate-large.svg 1600w">';
+			await store.captureDomDependencies( first + single + candidate + ( acrossDocuments ? '' : second ), origin );
+			if ( acrossDocuments ) {
+				await store.flush();
+				const initial = JSON.parse( readFileSync( join( outputDir, 'resources/manifest.json' ), 'utf8' ) );
+				expect( initial.resources[ `${ origin }placeholder.svg` ].path ).toBe( initial.resources[ `${ origin }first.svg` ].path );
+				await store.captureDomDependencies( second, `${ origin }next/` );
+			}
+			await store.flush();
+			const manifest = JSON.parse( readFileSync( join( outputDir, 'resources/manifest.json' ), 'utf8' ) );
+			expect( manifest.failures ).toEqual( [] );
+			const placeholder = manifest.resources[ `${ origin }placeholder.svg` ];
+			expect( readFileSync( join( outputDir, placeholder.path ), 'utf8' ) ).toBe( `${ origin }placeholder.svg` );
+			for ( const name of [ 'first', 'second' ] )
+				expect( placeholder.path ).not.toBe( manifest.resources[ `${ origin }${ name }.svg` ].path );
+			expect( manifest.omissions ).not.toContainEqual( expect.objectContaining( { url: `${ origin }placeholder.svg` } ) );
+			for ( const [ fallback, representative ] of [ [ 'small', 'large' ], [ 'candidate', 'candidate-large' ] ] ) {
+				const resource = manifest.resources[ `${ origin }${ fallback }.svg` ];
+				expect( resource.path ).toBe( manifest.resources[ `${ origin }${ representative }.svg` ].path );
+				expect( readFileSync( join( outputDir, resource.path ), 'utf8' ) ).toBe( `${ origin }${ representative }.svg` );
+				expect( manifest.omissions ).toContainEqual( { url: `${ origin }${ fallback }.svg`, representative: `${ origin }${ representative }.svg`, reason: 'redundant-srcset-rendition' } );
+			}
+		}
+	} );
 	it( 'queues inline-style images with other deferred media instead of fetching them (#1814)', async () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-deferred-style-' ) );
 		dirs.push( outputDir );
