@@ -69,7 +69,9 @@ export function observeRuntimeStyleWrites(): void {
 			transformWidth = innerWidth;
 			transformHeight = innerHeight;
 		}
-		for ( const [ index, mutation ] of mutations.entries() ) {
+		// Index loop: pages may patch Array.prototype.entries in the main world.
+		for ( let index = 0; index < mutations.length; index++ ) {
+			const mutation = mutations[ index ];
 			if ( innerWidth !== loadWidth ) {
 				mutation.addedNodes.forEach( node => { if ( node instanceof HTMLStyleElement ) bornElsewhere.add( node ); } );
 			}
