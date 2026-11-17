@@ -21,6 +21,7 @@ import {
 	portableInlineStyle,
 } from './capture-export.js';
 import { canonicalizeUnreferencedRuntimeIds } from './capture-export-render.js';
+import { canonicalizeGoogleSitesHtml } from '../adapters/google-sites/index.js';
 import { SectionSpecsStore } from './replicate/section-specs-store.js';
 import { MediaStubStore } from './resume-state/index.js';
 import { checkSelfConsistency } from './fidelity/self-consistency.js';
@@ -1636,6 +1637,29 @@ describe( 'exportWebsiteCapture', () => {
 			variants: 1,
 			outcome: 'collapsed-identity-subset',
 		} );
+	} );
+
+	it( 'exports Google Sites URL tiles with their declared URL and original sizing wrappers', () => {
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		const declaredUrl = 'https://widget.example/contact-widget?site=garden&view=contact';
+		const intermediateUrl = 'https://www.gstatic.com/atari/embeds/example/intermediate-frame-minified.html';
+		const html = canonicalizeGoogleSitesHtml( '<html><body><main>' +
+			'<div class="WIdY2d M1aSXe"><div style="padding-top:58.6080586081%"></div>' +
+			`<div class="YMEQtf"><div class="w536ob" data-url="${ declaredUrl.replace( '&', '&amp;' ) }" aria-label="Whole page embed">` +
+			`<iframe title="Contact widget" style="width:100%;height:100%" src="${ intermediateUrl }" data-blocks-engine-capture-visual-iframe-src="${ intermediateUrl }" data-blocks-engine-capture-visual-iframe-width="1155" data-blocks-engine-capture-visual-iframe-height="677"></iframe>` +
+			'</div></div></div></main></body></html>' );
+		capture.file( join( 'html', 'homepage.html' ), html );
+		capture.manifest( { version: 1, entries: { 'https://garden.example/': { html: 'html/homepage.html' } } } );
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://garden.example/', platform: 'google-sites', summary: {}, failures: [] } );
+		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+		expect( $( 'iframe' ) ).toHaveLength( 1 );
+		expect( $( 'div.w536ob > iframe' ).attr( 'src' ) ).toBe( declaredUrl );
+		expect( $( '.WIdY2d.M1aSXe > div' ).first().attr( 'style' ) ).toBe( 'padding-top:58.6080586081%' );
+		expect( $( '.WIdY2d.M1aSXe > .YMEQtf > .w536ob > iframe' ) ).toHaveLength( 1 );
+		expect( $( 'iframe' ).attr( 'title' ) ).toBe( 'Contact widget' );
+		expect( $( 'iframe' ).attr( 'height' ) ).toBe( '677' );
+		expect( $.html() ).not.toContain( intermediateUrl );
 	} );
 
 	it( 'preserves only capture-attested bounded HTTPS iframe surfaces', () => {

@@ -26,6 +26,22 @@ export function authoredEmbedDocument(source: string, url: string): string | und
 export function canonicalizeGoogleSitesHtml(html: string): string {
   // Documents keep their doctype (standards mode); serialized panels stay fragments.
   const $ = load(html, { xml: false }, /<(?:!doctype|html|head|body)\b/i.test(html));
+  // URL tiles need Google's postMessage runtime to populate the intermediate
+  // frame. Frozen HTML embeds the declared destination directly, without
+  // replacing the tile's wrappers or its measured sizing. Keep the attested
+  // source in sync: portable iframe sanitization uses it instead of src.
+  $('div.w536ob[data-url]').each((_index, element) => {
+    const tile = $(element);
+    const url = tile.attr('data-url')?.trim();
+    if (!url) return;
+    tile.find('iframe').each((_frameIndex, frame) => {
+      const iframe = $(frame);
+      iframe.attr('src', url);
+      if (iframe.attr('data-blocks-engine-capture-visual-iframe-src') !== undefined) {
+        iframe.attr('data-blocks-engine-capture-visual-iframe-src', url);
+      }
+    });
+  });
   $('*').each((_index, element) => {
     for (const attribute of ['jscontroller', 'jsaction', 'jsname', 'jsmodel', 'jsshadow', 'jsslot', 'jsowner', 'data-idom-class']) {
       $(element).removeAttr(attribute);
