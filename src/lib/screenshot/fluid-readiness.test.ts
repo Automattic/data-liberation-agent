@@ -71,6 +71,13 @@ describe( 'responsive readiness contract', () => {
 	it( 'observes opt-in relative slide offsets before source preparation and sampling', async ({ newPage }) => {
 		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
+			// The slide steps through eight offsets on a resize-scheduled interval.
+			// The whole animation (480 ms) outlasts one 200 ms quiet window, so rest
+			// must observe the stepping `left` to wait for it. Each step (60 ms) sits
+			// well inside that window and the whole run well inside the 2 s bound on
+			// tracked intervals (viewport-work.ts), so a loaded machine delaying timers
+			// has wide margins before rest could end mid-animation. 150 ms steps over 1.2 s left both margins
+			// thin (#1720): a delayed step outlasted the quiet window mid-animation.
 			await page.setContent( `<style>body { margin: 0; }</style><div id="slide" style="position:relative;left:144px">Slide text</div>
 				<script>
 				const slide = document.querySelector('#slide');
@@ -81,7 +88,7 @@ describe( 'responsive readiness contract', () => {
 					timer = setInterval(() => {
 						slide.style.left = ++tick < 8 ? tick + 'px' : innerWidth / 10 + 'px';
 						if (tick === 8) clearInterval(timer);
-					}, 150);
+					}, 60);
 				});
 				</script>` );
 			const prepared: number[] = [];
