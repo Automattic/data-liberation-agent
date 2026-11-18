@@ -35,6 +35,9 @@ import { EXPORT_PUBLICATION_OWNED } from './export-publication.js';
 import { sanitizeFrozenHtml } from './screenshot/freeze.js';
 import { SITE_ANALYSIS_FILES } from './screenshot/aggregator.js';
 import { missingRoutes } from './capture-usability.js';
+import { captureAssets } from './image-assets.js';
+import { imageSize } from 'image-size';
+import { MAX_PORTABLE_MEDIA_BYTES, MAX_PORTABLE_MEDIA_DIMENSION } from './portable-media-limits.js';
 let sharedBrowser: Browser;
 const contexts: BrowserContext[] = [];
 beforeAll( async () => { sharedBrowser = await chromium.launch( { headless: true } ); } );
@@ -2340,7 +2343,22 @@ describe( 'exportWebsiteCapture', () => {
 		capture.media( 'https://example.com/hero.png', 'media/hero.png', 'base' , media );
 		capture.media( 'https://example.com/hero.png?w=128', 'media/hero-2.png', '128' , media );
 		media.markSuccess( 'https://example.com/hero.png?w=4096', join( outputDir, 'media', 'hero-3.png' ) );
-		media.markSuccess( 'https://example.com/only-huge.png', join( outputDir, 'media', 'hero-3.png' ) );
+		const context = await browserContext();
+		const page = await context.newPage();
+		const encoded = await page.evaluate( () => {
+			const canvas = document.createElement( 'canvas' );
+			canvas.width = 2560;
+			canvas.height = 1280;
+			const ctx = canvas.getContext( '2d' )!;
+			ctx.fillStyle = 'red';
+			ctx.fillRect( 0, 0, canvas.width, canvas.height );
+			return canvas.toDataURL( 'image/png' ).split( ',' )[ 1 ];
+		} );
+		// Trailing padding keeps a decodable picture over the byte cap without
+		// committing a multi-megabyte fixture or generating random pixels.
+		const huge = Buffer.concat( [ Buffer.from( encoded, 'base64' ), Buffer.alloc( MAX_PORTABLE_MEDIA_BYTES ) ] );
+		capture.file( 'media/only-huge.png', huge );
+		media.markSuccess( 'https://example.com/only-huge.png', join( outputDir, 'media', 'only-huge.png' ) );
 		media.markSuccess( 'https://cdn.example/responsive.png?w=1200', join( outputDir, 'media', 'responsive.png' ) );
 		capture.media( 'https://cdn.example/responsive.png?w=320', 'media/responsive-mobile.png', 'responsive-mobile' , media );
 		capture.media( 'https://static.wixstatic.com/media/hash~mv2.jpg', 'media/wix.jpg', 'wix' , media );
@@ -2355,6 +2373,7 @@ describe( 'exportWebsiteCapture', () => {
 				join( outputDir, 'html', 'homepage.html' ),
 				'utf8'
 			) }<img src="/only-huge.png"><img src="https://cdn.example/images/asset.jpg/v1/fit/w_3939,h_3939/source.jpg/v1/fit/w_554,h_597/rendered.jpg"><script src="/uncaptured.js"></script   ><img src="images/blank.png"><div style="background-image:url(images/blank.png)"></div><div style="background-image:image-set(url('/missing.png?w=1280') 1x)"></div>` );
+		await captureAssets( outputDir, [ { url: 'https://example.com/shop/', html: '<img src="/only-huge.png">' } ], Date.now() - 1 );
 		const receiptPath = exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/shop/',  platform: 'fake',  title: 'Example',  summary: { pagesExtracted: 2 },  failures: [],  } );
 		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
 		expect(
@@ -2379,6 +2398,7 @@ describe( 'exportWebsiteCapture', () => {
 					path: 'website/media/avatar.png',
 				},
 				{ sourceUrl: 'https://example.com/hero.png?w=128', path: 'website/media/hero-2.png' },
+				{ sourceUrl: 'https://example.com/only-huge.png', path: 'website/media/only-huge-portable.jpg' },
 				{
 					sourceUrl: 'https://cdn.example/responsive.png?w=1200',
 					path: 'website/media/responsive.png',
@@ -2537,10 +2557,26 @@ describe( 'exportWebsiteCapture', () => {
 		} );
 		expect(
 			JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) ).unresolvedMedia
-		).toContainEqual( {
-			url: 'https://example.com/only-huge.png',
-			error: 'removed because media exceeds portable size or dimension limits',
-		} );
+		).not.toContainEqual( expect.objectContaining( { url: 'https://example.com/only-huge.png' } ) );
+		const $ = cheerio.load( readFileSync( join( outputDir, 'website/index.html' ), 'utf8' ) );
+		const reference = $( 'img' ).filter( ( _i, node ) => ( $( node ).attr( 'src' ) ?? '' ).includes( 'only-huge' ) ).attr( 'src' )!;
+		expect( reference ).toMatch( /^\/media\/only-huge-portable\.jpg$/ );
+		const portable = readFileSync( join( outputDir, 'website', reference ) );
+		expect( portable.length ).toBeLessThanOrEqual( MAX_PORTABLE_MEDIA_BYTES );
+		const size = imageSize( portable );
+		expect( Math.max( size.width, size.height ) ).toBe( MAX_PORTABLE_MEDIA_DIMENSION );
+		await page.setContent( `<img src="data:image/jpeg;base64,${ portable.toString( 'base64' ) }">` );
+		expect( await page.evaluate( async () => {
+			const img = document.querySelector( 'img' )!;
+			await img.decode();
+			const canvas = document.createElement( 'canvas' );
+			const ctx = canvas.getContext( '2d' )!;
+			ctx.drawImage( img, 0, 0 );
+			return [ ...ctx.getImageData( 0, 0, 1, 1 ).data ];
+		} ) ).toEqual( [ 254, 0, 0, 255 ] );
+		const inventory = JSON.parse( readFileSync( join( outputDir, 'image-assets.json' ), 'utf8' ) ).images[ 0 ];
+		expect( inventory.original ).toMatchObject( { width: 2560, height: 1280, source_url: 'https://example.com/only-huge.png' } );
+		expect( inventory.renditions[ 0 ].original ).toMatchObject( { width: 2048, height: 1024, source_url: 'https://example.com/only-huge.png' } );
 	} );
 
 	it( 'exports many large responsive routes within a constrained heap', () => {
