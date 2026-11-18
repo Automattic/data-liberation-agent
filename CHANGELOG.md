@@ -15,6 +15,23 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.36.6] - 2026-11-18
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- freeze the reference on the moment capture serialized so autoplaying carousels agree
+- drop box-tree evidence before assets and routes
+
+## [0.36.5] - 2026-11-18
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- decode over-bound originals directly at rendition size
+
 ## [0.36.4] - 2026-11-18
 
 ### Changed

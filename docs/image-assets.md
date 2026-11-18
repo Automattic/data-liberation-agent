@@ -63,7 +63,9 @@ instead of blanking an over-budget family. A raster original above the portable
 dimension ceiling (2048px) still exports as real media when its family has no
 smaller rendition and its verified bytes fit the byte cap: a placeholder would
 erase a picture the source shows, and WordPress scales oversized originals on
-upload. SVGs and non-images keep the dimension limit. The receipt's `original`
+upload. Non-images keep the dimension limit. SVGs (`image/svg+xml`) are exempt
+from it, because a vector's declared size is a layout hint rather than a decode
+cost; the byte limits still apply to them. The receipt's `original`
 describes whichever verified bytes were actually published, including its
 rendition URL and digest, not the full-size file it replaced. Budget blanks are
 counted in `portableMedia.blanked_count`, not `retained_external_count`.
