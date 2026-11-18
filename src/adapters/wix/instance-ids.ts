@@ -16,8 +16,14 @@
  * Markup captured from a page, such as an opened dialog, takes the names of
  * its `document`: a fragment holds only some of an instance's components, and
  * named on its own it would no longer match the page CSS that styles it.
+ *
+ * An instance already named by this canonicalization keeps its name. The export
+ * canonicalizes each route again after its stylesheets became linked files, so
+ * the markup then shows only some of the instance's components; renaming it
+ * from that subset would leave every external rule pointing at the old name.
  */
 const INSTANCE_REFERENCE = /\b(comp-[a-z0-9]+)_r_(comp-[a-z0-9]+)/gi;
+const CANONICAL_INSTANCE = /^comp-dla[0-9a-f]{8}$/i;
 
 export function canonicalizeWixInstanceIds( html: string, document: string = html ): string {
 	const tokenByInstance = new Map( instanceTokens( document ) );
@@ -29,6 +35,8 @@ export function canonicalizeWixInstanceIds( html: string, document: string = htm
 	// one token and merge rules meant for different elements. Keep such a page
 	// exactly as captured rather than guess.
 	if ( new Set( tokenByInstance.values() ).size !== tokenByInstance.size ) return html;
+	const named = new Set( [ ...`${ document }\n${ html }`.matchAll( INSTANCE_REFERENCE ) ].map( ( [ , instance ] ) => instance!.toLowerCase() ).filter( instance => CANONICAL_INSTANCE.test( instance ) ) );
+	if ( [ ...tokenByInstance.values() ].some( token => named.has( token ) ) ) return html;
 
 	// The instance element carries the bare instance id too (`id="<instance>"`,
 	// `<instance>-container`), and the page stylesheet targets it, so every
@@ -44,6 +52,7 @@ export function canonicalizeWixInstanceIds( html: string, document: string = htm
 function instanceTokens( html: string ): Map< string, string > {
 	const componentsByInstance = new Map< string, Set< string > >();
 	for ( const [ , instance, component ] of html.matchAll( INSTANCE_REFERENCE ) ) {
+		if ( CANONICAL_INSTANCE.test( instance! ) ) continue;
 		const components = componentsByInstance.get( instance! ) ?? new Set< string >();
 		components.add( component!.toLowerCase() );
 		componentsByInstance.set( instance!, components );
