@@ -3346,10 +3346,10 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	it( 'rejects an entrypoint whose encoded path escapes the website directory', () => {
 		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
 		const outputDir = capture.build();
-		capture.page( "https://example.com/", '<h1>Home</h1><a href="/%2e%2e%2fescape">Escape</a>' , { entry: { html: 'html/homepage.html' } } );
-		capture.page( "https://example.com/%2e%2e%2fescape", '<h1>Escape</h1>' , { entry: { html: 'html/escape.html' } } );
+		capture.page( "https://example.com/", '<h1>Home</h1><a href="/%00escape">Escape</a>' , { entry: { html: 'html/homepage.html' } } );
+		capture.page( "https://example.com/%00escape", '<h1>Escape</h1>' , { entry: { html: 'html/escape.html' } } );
 		expect( () =>
-			exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/%2e%2e%2fescape',  platform: 'fake',  summary: {},  failures: [],  } )
+			exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/%00escape',  platform: 'fake',  summary: {},  failures: [],  } )
 		).toThrow( 'escapes the website directory' );
 	} );
 
@@ -4996,16 +4996,28 @@ describe( 'exportWebsiteCapture per-route containment', () => {
 		expect( existsSync( join( outputDir, 'website/index.html' ) ) ).toBe( true );
 	} );
 
-	it( 'drops an unsafe captured route path and exports the linked homepage', () => {
-		const url = 'https://example.test/tag/a%2Fb';
+	it( 'exports a route whose segment encodes a slash at a hyphenated path, with links following it', () => {
+		const url = 'https://example.test/store/Filet_4%2F3.html';
 		const { outputDir, options } = fixture( {
-			home: { desktop: '<html><body><main><h1>Home</h1><a href="/tag/a%2Fb">Tag</a></main></body></html>' },
+			home: { desktop: '<html><body><main><h1>Home</h1><a href="/store/Filet_4%2F3.html">Filet</a></main></body></html>' },
+			filet: { desktop: page( 'Filet' ), url },
+		} );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( options ), 'utf8' ) );
+		expect( receipt.routes ).toContainEqual( expect.objectContaining( { url, path: 'website/store/Filet_4-3.html' } ) );
+		expect( receipt.summary ).toMatchObject( { routesCaptured: 2, routesFailed: 0, complete: true } );
+		expect( readFileSync( join( outputDir, 'website/index.html' ), 'utf8' ) ).toContain( 'href="/store/Filet_4-3.html"' );
+	} );
+
+	it( 'drops an unsafe captured route path and exports the linked homepage', () => {
+		const url = 'https://example.test/tag/a%00b';
+		const { outputDir, options } = fixture( {
+			home: { desktop: '<html><body><main><h1>Home</h1><a href="/tag/a%00b">Tag</a></main></body></html>' },
 			tag: { desktop: page( 'Tag' ), url },
 		} );
 		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( options ), 'utf8' ) );
 		expect( receipt.routes.map( ( route: { url: string } ) => route.url ) ).toEqual( [ options.sourceUrl ] );
 		expect( receipt.discoveryDiagnostics ).toContainEqual( {
-			code: 'route_path_unsafe', url, reason: 'Captured route path escapes the website directory: /tag/a%2Fb', unit: 'route', severity: 'error',
+			code: 'route_path_unsafe', url, reason: 'Captured route path escapes the website directory: /tag/a%00b', unit: 'route', severity: 'error',
 		} );
 		expect( receipt.summary ).toMatchObject( { routesDiscovered: 2, routesCaptured: 1, routesFailed: 1, complete: false } );
 		expect( readFileSync( join( outputDir, 'website/index.html' ), 'utf8' ) ).toContain( '<h1>Home</h1>' );
