@@ -27,7 +27,7 @@ import { loadSourceBaseline } from './load-baseline.js';
 import { type FailureEntry, type ManifestEntry, type ProfileDiagnostic } from './manifest-queue.js';
 import { captureNativeViewTimelines } from './native-view-timelines.js';
 import { type ArtifactPlan } from './output-layout.js';
-import { pageResponds, withEvaluateTimeout } from './page-helpers.js';
+import { dismissOverlays, pageResponds, withEvaluateTimeout } from './page-helpers.js';
 import { type PhaseLedger } from './phase-ledger.js';
 import { CapturedResourceStore } from './resource-capture.js';
 import { projectRootClassContracts, rootClassContracts, RootClassEvidence, sampleRootClassLadder, type RootClassContract } from './root-class-contracts.js';
@@ -349,12 +349,20 @@ export function baselineSteps(
 		if ( outcome?.swept ) process.stderr.write( `[timing] script-motion ${JSON.stringify( { url, viewport: viewport.id, ...outcome } )}\n` );
 	};
 
+	const recordLateConsent = async () => {
+		const consent = await dismissOverlays( page, { kinds: [ 'consent' ] } );
+		if ( consent.length ) args.entry.dismissed = [ ...( args.entry.dismissed ?? [] ), ...consent ];
+	};
+
 	const serializeDocument = async ( frozen: boolean ): Promise<{ html: string; documentUrl: { url: string; baseUrl: string } }> => {
 		args.diagnostics?.push( ...await removeRuntimeWidgets( page ) );
 		await sweepSourceCleanup( page, sourcePolicy );
 		await preserveStreamedVideoPosters( page, resourceStore, url ).catch ( orElse( undefined ) );
 		// Source width changes can rerender emoji replacement images (#954).
 		args.diagnostics?.push( ...await restoreRuntimeEmoji( page ) );
+		// Consent managers can mount (or remount) after the load-time checks.
+		// Keep route-local facts even when their copy differs from the entrypoint.
+		await recordLateConsent();
 		await stampNodeIds( page );
 		let laterNodes: BoxTree['nodes'] | undefined;
 		const learned = await capturePageHtml( page, args.diagnostics, undefined, nodes => { laterNodes = nodes; } );
@@ -448,6 +456,7 @@ export function baselineSteps(
 				args.diagnostics?.push( ...await removeRuntimeWidgets( page ) );
 				args.diagnostics?.push( ...await restoreRuntimeEmoji( page ) );
 				if ( args.beforeSerialize ) await args.beforeSerialize( page, { url, viewport: viewport.id, serverHtml } ).catch ( orElse( undefined ) );
+				await recordLateConsent();
 				const snapshot = await snapshotComponents( page ).catch ( orElse( undefined ) );
 				state.componentBaseline = snapshot && Array.isArray( snapshot.components ) ? snapshot : { components: [], controls: [] };
 				await markGalleryRoots( page ).catch ( orElse( undefined ) );
