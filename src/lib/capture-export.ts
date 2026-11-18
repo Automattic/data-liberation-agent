@@ -284,14 +284,14 @@ function recordExportBudget( stageDir: string, budget: ExportTotalBudget, plan: 
 		maxTotalBytes: budget.maxTotalBytes, maxFiles: budget.maxFiles,
 		reservedBytes: budget.reservedBytes, reservedFiles: budget.reservedFiles,
 		totalBytes: plan.totalBytes, files: plan.files, withinBudget: plan.withinBudget,
-		droppedAssets: exclusions.assets.size, droppedRenditions: exclusions.renditions.size, droppedRoutes: exclusions.routes.size, passes,
+		droppedAssets: exclusions.assets.size, droppedRenditions: exclusions.renditions.size, droppedBoxTrees: exclusions.boxTrees.size, droppedRoutes: exclusions.routes.size, passes,
 	};
 	const receiptPath = join( stageDir, 'capture-receipt.json' );
 	const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) ) as Record< string, unknown >;
 	receipt.exportBudget = exportBudget;
 	writeFileSync( receiptPath, `${ JSON.stringify( receipt, null, 2 ) }\n` );
-	if ( exclusions.assets.size || exclusions.renditions.size || exclusions.routes.size || ! plan.withinBudget )
-		process.stderr.write( `[budget] export website ${ plan.totalBytes } bytes in ${ plan.files } files (budget ${ budget.maxTotalBytes } bytes, ${ budget.maxFiles } files, ${ budget.reservedBytes } bytes reserved): dropped ${ exclusions.assets.size } assets, ${ exclusions.renditions.size } redundant renditions and ${ exclusions.routes.size } routes${ plan.withinBudget ? '' : '; entrypoint and its dependencies alone exceed the budget' }\n` );
+	if ( exclusions.assets.size || exclusions.renditions.size || exclusions.boxTrees.size || exclusions.routes.size || ! plan.withinBudget )
+		process.stderr.write( `[budget] export website ${ plan.totalBytes } bytes in ${ plan.files } files (budget ${ budget.maxTotalBytes } bytes, ${ budget.maxFiles } files, ${ budget.reservedBytes } bytes reserved): dropped ${ exclusions.assets.size } assets, ${ exclusions.renditions.size } redundant renditions, ${ exclusions.boxTrees.size } box-tree sidecars and ${ exclusions.routes.size } routes${ plan.withinBudget ? '' : '; entrypoint and its dependencies alone exceed the budget' }\n` );
 }
 
 function buildExportCapture(
@@ -495,9 +495,9 @@ function buildExportCapture(
 	writeExportBoxTrees( outputDir, websiteDir, retainedEntries.flatMap( entry => {
 		const sourcePath = capture.entries[ entry.url ]?.html;
 		return sourcePath ? [ { sourcePath, mobileSourcePath: capture.entries[ entry.url ]?.mobileHtml, path: routePathOf( entry.url ) } ] : [];
-	} ), inventory );
+	} ), inventory, exclusions.boxTrees );
 	// Media and page resources are the assets export can leave out; generated
-	// stylesheets and sidecars only shrink with the routes that need them.
+	// stylesheets only shrink with the routes that need them.
 	const droppable = new Map< string, string[] >();
 	const droppablePaths = new Set( [ ...mediaAssetPaths, ...resourceStage.assets.map( asset => asset.path ) ] );
 	for ( const [ sourceUrl, path ] of portablePathsBySource ) {

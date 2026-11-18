@@ -26,11 +26,13 @@ import { imageSetSites, isSrcsetShaped, srcsetCandidates } from './srcset.js';
  *    candidate) and otherwise prefers the widest candidate at or under 2048px;
  *    a dropped rendition is removed from every srcset that retains another
  *    candidate, so pages never show it as a missing image.
- * 2. Captured assets the entrypoint does not need, fonts last; within that,
+ * 2. Box-tree geometry evidence sidecars, largest first.
+ * 3. Captured assets the entrypoint does not need, fonts last; within that,
  *    largest first, videos before other media at equal size.
- * 3. Non-entry routes, last in route order first.
+ * 4. Non-entry routes, last in route order first.
  *
- * The entrypoint document and every file it references are never dropped.
+ * The entrypoint document and its content dependencies are never dropped;
+ * optional box-tree evidence can be dropped even for the entrypoint.
  * Dropped assets resolve like any uncaptured asset (`asset_exceeds_total_budget`);
  * dropped renditions are reported (`redundant_rendition_dropped`) and their
  * references rewritten away; dropped routes are missing routes
@@ -66,10 +68,12 @@ export interface ExportBudgetExclusions {
 	routes: Map< string, number >;
 	/** Source URL -> bytes of a redundant srcset rendition; export removes its references from every srcset that retains another candidate. */
 	renditions: Map< string, number >;
+	/** Website-relative sidecar path -> bytes of optional geometry evidence. */
+	boxTrees: Map< string, number >;
 }
 
 export function emptyExportBudgetExclusions(): ExportBudgetExclusions {
-	return { assets: new Map(), routes: new Map(), renditions: new Map() };
+	return { assets: new Map(), routes: new Map(), renditions: new Map(), boxTrees: new Map() };
 }
 
 export function validateMaxTotalBytes( maxTotalBytes: unknown ): void {
@@ -394,7 +398,7 @@ export function planExportBudget( input: ExportBudgetPlanInput ): ExportBudgetPl
 	const namesOf = new Map< string, Set< string > >();
 	const routePaths = new Set( input.routes.map( route => route.path ) );
 	const entryNeeds = referenceClosure( input.entrypointPath, files, websiteDir, byName, namesOf, routePaths );
-	const next: ExportBudgetExclusions = { assets: new Map( input.exclusions.assets ), routes: new Map( input.exclusions.routes ), renditions: new Map( input.exclusions.renditions ) };
+	const next: ExportBudgetExclusions = { assets: new Map( input.exclusions.assets ), routes: new Map( input.exclusions.routes ), renditions: new Map( input.exclusions.renditions ), boxTrees: new Map( input.exclusions.boxTrees ) };
 	let progressed = false;
 	const satisfied = () => excessBytes <= 0 && excessFiles <= 0;
 
@@ -413,11 +417,22 @@ export function planExportBudget( input: ExportBudgetPlanInput ): ExportBudgetPl
 		}
 	}
 
+	// Optional geometry evidence ranks below every unique content asset and route.
+	const droppedPaths = new Set< string >();
+	for ( const { path, bytes } of measured.files.filter( file => file.path.startsWith( 'box-tree/' ) && file.path.endsWith( '.json' ) && ! next.boxTrees.has( file.path ) )
+		.sort( ( a, b ) => b.bytes - a.bytes || compare( a.path, b.path ) ) ) {
+		if ( satisfied() ) break;
+		next.boxTrees.set( path, bytes );
+		droppedPaths.add( path );
+		excessBytes -= bytes;
+		excessFiles -= 1;
+		progressed = true;
+	}
+
 	const assets = input.assets
 		.filter( asset => files.has( asset.path ) && ! entryNeeds.has( asset.path ) && asset.sourceUrls.some( url => ! next.assets.has( url ) && ! next.renditions.has( url ) ) )
 		.map( asset => ( { ...asset, bytes: files.get( asset.path )!.bytes, rank: assetRank( asset.path ) } ) )
 		.sort( ( a, b ) => a.rank.font - b.rank.font || b.bytes - a.bytes || a.rank.kind - b.rank.kind || compare( a.path, b.path ) );
-	const droppedPaths = new Set< string >();
 	for ( const asset of assets ) {
 		if ( satisfied() ) break;
 		for ( const url of asset.sourceUrls ) next.assets.set( url, asset.bytes );
