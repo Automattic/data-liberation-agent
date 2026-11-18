@@ -1104,7 +1104,18 @@ export async function deriveTemplateClusterMembers( input: {
 		await import( './template-clusters.js' );
 	const { templateClusterUnits } = await import( './template-groups.js' );
 	const memberShape = structuredMemberShape( input.contentSource, input.contentEntries );
-	const { safeFetch } = await import( './media-fetch/safe-fetch.js' );
+	// Derivation documents go through the run's source governors, as grouping
+	// does: throttles wait out Retry-After and retry (#1685). A failed or non-2xx
+	// answer is the source's unavailability, never template evidence.
+	const sourceDocument = async ( url: string ): Promise< { html: string } | { unavailable: string } > => {
+		try {
+			const response = await safeFetch( url, { governors: input.governors, timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs, attribution: { phase: 'template-clusters', url } } );
+			if ( response.status < 200 || response.status >= 300 ) return { unavailable: `HTTP ${ response.status }` };
+			return { html: response.body.toString( 'utf8' ) };
+		} catch ( error ) {
+			return { unavailable: error instanceof Error ? error.message : String( error ) };
+		}
+	};
 	const { CapturedResourceStore } = await import( './screenshot/resource-capture.js' );
 	const { ManifestQueue } = await import( './screenshot/manifest-queue.js' );
 	const { slugify } = await import( './url/index.js' );
@@ -1239,8 +1250,22 @@ export async function deriveTemplateClusterMembers( input: {
 			}
 			const startedAt = Date.now();
 			try {
-				const repFetch = await safeFetch( group.representative, { timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs, governors: input.governors } );
-				const repServerHtml = repFetch.body.toString( 'utf8' );
+				const attempted = new Set( [ ...record.escalated, ...record.unavailable ].map( member => member.url ) );
+				const members = group.members
+					.filter( url => ! isCaptured( url ) && ! attempted.has( url ) )
+					.sort( ( a, b ) => a.localeCompare( b ) );
+				const sourceUnavailable = ( url: string, reason: string ) => {
+					const why = `source unavailable: ${ reason }`;
+					for ( const member of members ) record.unavailable.push( { url: member, reason: why } );
+					unavailableCount += members.length;
+					diagnostics.push( { code: ROUTE_TEMPLATE_ESCALATED, url, reason: `cluster ${ group.id } derivation ${ why }`, metrics: { clusterSize: group.size } } );
+				};
+				const repFetch = await sourceDocument( group.representative );
+				if ( 'unavailable' in repFetch ) {
+					sourceUnavailable( group.representative, `representative ${ repFetch.unavailable }` );
+					continue;
+				}
+				const repServerHtml = repFetch.html;
 				const repProcessedHtml = readFileSync( repHtmlPath, 'utf8' );
 				const repFeed = feedEntries.get( normalizedUrl( group.representative ) );
 				let feedVerified = Boolean( repFeed && feedBodyEquivalent( repProcessedHtml, repFeed ) );
@@ -1264,10 +1289,6 @@ export async function deriveTemplateClusterMembers( input: {
 				// with its real capture, offline, on the six acceptance checks. A
 				// mismatch (or a missing verification capture) fails the cluster: no
 				// member of it is ever derived (§3.5).
-				const attempted = new Set( [ ...record.escalated, ...record.unavailable ].map( member => member.url ) );
-				const members = group.members
-					.filter( url => ! isCaptured( url ) && ! attempted.has( url ) )
-					.sort( ( a, b ) => a.localeCompare( b ) );
 				// A captured member is the stronger verification: its real capture
 				// exists on disk, so the derived-vs-real comparison is actually
 				// scored. Preferred verification members are already in the budget.
@@ -1287,13 +1308,22 @@ export async function deriveTemplateClusterMembers( input: {
 					const verificationFeed = feedEntries.get( normalizedUrl( verificationUrl ) );
 					feedVerified = feedVerified && Boolean( verificationFeed && feedBodyEquivalent( realHtml, verificationFeed ) );
 					const feedHtml = feedVerified && repFeed && verificationFeed ? await feedMemberDocument( repServerHtml, repFeed, verificationFeed ) : undefined;
-					let memberHtml = feedHtml ?? ( await safeFetch( verificationUrl, { timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs, governors: input.governors } ) ).body.toString( 'utf8' );
+					const verificationFetch = feedHtml === undefined ? await sourceDocument( verificationUrl ) : { html: feedHtml };
+					if ( 'unavailable' in verificationFetch ) {
+						sourceUnavailable( verificationUrl, `verification member ${ verificationFetch.unavailable }` );
+						continue;
+					}
+					let memberHtml = verificationFetch.html;
 					let derivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml: memberHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, featuredImages: { representative: repFeed?.image, member: verificationFeed?.image }, ...( feedHtml ? { contentSlotSelector, memberHeadSlotSelector: contentSource?.memberHeadSlotSelector } : {} ) } );
 					if ( feedHtml && ( ! derivation.ok || ! compareDerivedWithCapture( { derivedHtml: derivation.html, realHtml, repServerHtml, memberServerHtml: memberHtml, styleNormalization: input.styleNormalization, baseUrl: group.representative } ).equal ) ) {
 						feedVerified = false;
 						diagnostics.push( { code: ROUTE_TEMPLATE_ESCALATED, url: verificationUrl, reason: 'feed template verification mismatch; using governed page acquisition for this cluster' } );
-						const fallback = await safeFetch( verificationUrl, { timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs, governors: input.governors } );
-						memberHtml = fallback.body.toString( 'utf8' );
+						const fallback = await sourceDocument( verificationUrl );
+						if ( 'unavailable' in fallback ) {
+							sourceUnavailable( verificationUrl, `verification member ${ fallback.unavailable }` );
+							continue;
+						}
+						memberHtml = fallback.html;
 						derivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml: memberHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, featuredImages: { representative: repFeed?.image, member: verificationFeed?.image } } );
 					}
 					if ( derivation.ok ) {
@@ -1347,18 +1377,13 @@ export async function deriveTemplateClusterMembers( input: {
 					const feedHtml = await memberDocument( index ) ?? ( feedVerified && repFeed && memberFeed ? await Promise.resolve( feedMemberDocument( repServerHtml, repFeed, memberFeed ) ).catch( () => undefined ) : undefined );
 					memberDocuments.delete( url );
 					lap( 'memberDocument' );
-					const response = feedHtml ? { status: 200, body: Buffer.from( feedHtml ) } : await safeFetch( url, { timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs, governors: input.governors } ).catch( ( error: unknown ) => {
-						record.unavailable.push( { url, reason: String( ( error as Error ).message ?? error ) } );
-						unavailableCount++;
-						return undefined;
-					} );
-					if ( ! response ) continue;
-					if ( response.status < 200 || response.status >= 300 ) {
-						record.unavailable.push( { url, reason: `HTTP ${ response.status }` } );
+					const response = feedHtml ? { html: feedHtml } : await sourceDocument( url );
+					if ( 'unavailable' in response ) {
+						record.unavailable.push( { url, reason: response.unavailable } );
 						unavailableCount++;
 						continue;
 					}
-					const memberServerHtml = response.body.toString( 'utf8' );
+					const memberServerHtml = response.html;
 					// A synthesized member is the representative's template by
 					// construction: its key is compared outside the content slot.
 					const slotSelector = feedHtml ? { contentSlotSelector, memberHeadSlotSelector: contentSource?.memberHeadSlotSelector } : {};
