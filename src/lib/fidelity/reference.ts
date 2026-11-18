@@ -21,6 +21,8 @@ import { watchSourceRuntimeErrors } from '../source-readiness.js';
 
 /** Upper bound for in-flight source images to settle before the reference is frozen. */
 const MEDIA_READY_TIMEOUT_MS = 10_000;
+/** Upper bound for images whose successful response is still streaming its body. */
+const MEDIA_STREAM_TIMEOUT_MS = 60_000;
 
 export interface ReferenceCollectorOptions {
 	initializePage?: (page: Page) => Promise<void>;
@@ -225,21 +227,30 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						// A response alone is insufficient: its body may still fail in transit.
 						const imageStatuses = new WeakMap<Request, number>();
 						const brokenImages = new Map<string, number>();
+						// A successful response whose body is still arriving is progress,
+						// not failure: large images on slow origins outlast the base window.
+						const streamingImages = new Set<string>();
 						const imageRequested = ( request: Request ) => { if ( request.resourceType() === 'image' ) brokenImages.delete( request.url() ); };
 						const imageResponse = ( response: Response ) => {
-							if ( response.request().resourceType() === 'image' ) imageStatuses.set( response.request(), response.status() );
+							if ( response.request().resourceType() !== 'image' ) return;
+							imageStatuses.set( response.request(), response.status() );
+							if ( response.status() < 400 ) streamingImages.add( response.request().url() );
 						};
 						const imageFinished = ( request: Request ) => {
+							if ( request.resourceType() === 'image' ) streamingImages.delete( request.url() );
 							const status = imageStatuses.get( request );
 							if ( status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 429 ) brokenImages.set( request.url(), status );
 						};
+						const imageFailed = ( request: Request ) => { if ( request.resourceType() === 'image' ) streamingImages.delete( request.url() ); };
 						referencePage.on( 'request', imageRequested );
 						referencePage.on( 'response', imageResponse );
 						referencePage.on( 'requestfinished', imageFinished );
+						referencePage.on( 'requestfailed', imageFailed );
 						stopImageRequests = () => {
 							referencePage!.off( 'request', imageRequested );
 							referencePage!.off( 'response', imageResponse );
 							referencePage!.off( 'requestfinished', imageFinished );
+							referencePage!.off( 'requestfailed', imageFailed );
 						};
 						await options.initializePage?.(referencePage);
 						runtimeErrors = await watchSourceRuntimeErrors( referencePage );
@@ -248,7 +259,9 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						if ( url !== 'about:blank' ) {
 							const navigation = options.routeScope || options.initializePage ? await navigateSourceDocument( referencePage, url, { publicUrlsOnly: options.publicUrlsOnly, routeScope: options.routeScope } ) : undefined;
 							if ( navigation?.boundary || navigation?.redirectedTo ) throw new Error( 'Reference document changed its route ownership or identity' );
-							const response = navigation ? navigation.response : await referencePage.goto( url, { waitUntil: 'load', timeout: 60_000 } );
+							// Match capture navigation: bounded layout, media and font checks
+							// below own readiness, not the load event of every resource.
+							const response = navigation ? navigation.response : await referencePage.goto( url, { waitUntil: 'domcontentloaded', timeout: 60_000 } );
 							if ( response && ! response.ok() ) throw new Error( `Reference navigation HTTP ${ response.status() }` );
 							navigationUrl = navigationDocumentUrl( url, response?.url() ?? url, Boolean( response?.request().redirectedFrom() ) );
 						}
@@ -287,9 +300,12 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 								return ! ( rect.width <= 50 || rect.height <= 50 || unreachable( image ) || ( image.complete && ( image.naturalWidth > 0 || broken.some( item => item.url === ( image.currentSrc || image.src ) ) ) ) );
 							} ).map( image => ( { url: image.currentSrc || image.getAttribute( 'src' )?.trim() || image.getAttribute( 'srcset' )?.trim() || '', alt: image.alt } ) );
 						}, { key: reachabilityKey, broken: [ ...brokenImages ].map( ( [ url, status ] ) => ( { url, status } ) ) } );
-						const mediaDeadline = Date.now() + MEDIA_READY_TIMEOUT_MS;
+						// Only images whose download is visibly progressing earn the
+						// longer bound; unstarted, failed and stalled ones keep the base window.
+						const mediaStart = Date.now();
+						const streaming = ( images: { url: string }[] ) => images.some( image => image.url ) && images.every( image => ! image.url || streamingImages.has( image.url ) );
 						let unsettled = await unsettledImages();
-						while ( unsettled.length && Date.now() < mediaDeadline ) {
+						while ( unsettled.length && Date.now() < mediaStart + ( streaming( unsettled ) ? MEDIA_STREAM_TIMEOUT_MS : MEDIA_READY_TIMEOUT_MS ) ) {
 							await referencePage.waitForTimeout( 250 );
 							unsettled = await unsettledImages();
 						}
@@ -297,7 +313,9 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						const mediaReady = ! pending.length;
 						if ( ! mediaReady ) {
 							entry.readiness.reasons.push( 'source images pending or failed' );
-							entry.readiness.diagnostics = [ ...entry.readiness.diagnostics ?? [], ...pending.slice( 0, 10 ).map( image => `source image pending or failed: ${ image.url }` ) ];
+							entry.readiness.diagnostics = [ ...entry.readiness.diagnostics ?? [], ...pending.slice( 0, 10 ).map( image => streamingImages.has( image.url )
+								? `source image still downloading after ${ MEDIA_STREAM_TIMEOUT_MS / 1000 }s: ${ image.url }`
+								: `source image pending or failed: ${ image.url }` ) ];
 						}
 						entry.readiness.mediaReady = mediaReady;
 						const sourceBrokenImages = await referencePage.evaluate( broken => broken.filter( item => [ ...document.images ].some( image => image.complete && image.naturalWidth === 0 && ( image.currentSrc || image.src ) === item.url ) ), [ ...brokenImages ].map( ( [ url, status ] ) => ( { url, status } ) ) );

@@ -15,6 +15,81 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.35.48] - 2026-11-18
+
+### Changed
+- regenerate plugin bundles
+- Let streaming source images outlast the base media-ready window
+
+## [0.35.47] - 2026-11-18
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- keep a fixed-width consent panel's width per breakpoint
+
+## [0.35.46] - 2026-11-18
+
+### Changed
+- regenerate plugin bundles
+- Key viewport entrances by rendered text
+- Settle viewport entrances visible when their CSS binding is lost
+
+### Fixed
+- fail unresolved copy anchors only when the copy does worse than the source
+- port App Market map widgets that name their location to a Google Maps embed
+- keep canonical instance ids stable when export re-canonicalizes a route
+- keep every referenced oversized crop of one family
+- report unavailable derivation sources instead of template failures
+- admit routes under a provisional memory estimate while the reference route calibrates
+
+## [0.35.45] - 2026-11-18
+
+### Changed
+- regenerate plugin bundles
+- settle the relative-slide fixture well inside readiness bounds
+- stop gating later widths on an image that never finishes
+
+### Fixed
+- freeze source references at DOMContentLoaded instead of load
+
+## [0.35.44] - 2026-11-17
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- freeze source references at DOMContentLoaded instead of load
+
+## [0.35.43] - 2026-11-17
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- make shared navigation route-neutral so every route shares one header
+
+## [0.35.42] - 2026-11-17
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- stop admitting routes once the source stops answering navigations
+
+## [0.35.41] - 2026-11-17
+
+### Changed
+- regenerate plugin bundles
+- use shared page fixture in media-settling serialization test
+- measure per-document sweep costs
+
+### Fixed
+- preserve distinct SPA routes sharing a canonical URL
+- leave script-driven transforms live during fluid learning
+- preserve viewport entrance repeat sides
+
 ## [0.35.40] - 2026-11-17
 
 ### Changed

@@ -4,7 +4,7 @@ import { devices, type Page } from 'playwright';
 import { expect } from 'vitest';
 import { it } from '../../test/browser.js';
 import * as cheerio from 'cheerio';
-import { observeViewportEntrances, stampViewportEntrances, collectViewportEntranceStartup } from './viewport-entrances.js';
+import { observeViewportEntrances, stampViewportEntrances, collectViewportEntranceStartup, withViewportEntrances } from './viewport-entrances.js';
 import { exportWebsiteCapture } from './capture-export.js';
 import { observePage } from './fidelity/check.js';
 import { checkMotion } from './fidelity/rendered-contract-checks.js';
@@ -191,8 +191,9 @@ it( 'rejects altered authored timing even when every named CSS animation is regi
 		const copy=await newPage({viewport:{width:1000,height:700}});
 		await copy.goto(`data:text/html,${encodeURIComponent(portable.replace('neutralFade 450ms','neutralFade 451ms'))}`);
 		await copy.evaluate(()=>scrollTo(0,1100));await copy.waitForTimeout(150);
-		expect((await pose(copy)).effects).toHaveLength(2);
-		expect((await pose(copy)).effects.every(effect=>effect.state==='paused')).toBe(true);
+		// The lost binding never plays; the entrance settles on its after pose
+		// instead of leaving content in the hidden pending pose.
+		expect(await pose(copy)).toMatchObject({state:'complete',opacity:'1',effects:[]});
 		expect(await copy.locator('#entrance').getAttribute('data-blocks-engine-capture-viewport-entrance-loss')).toBe('authored paused CSS animation binding changed');
 	} finally {if(!process.env.DLA_KEEP_DEVICE_EVIDENCE)rmSync(directory,{recursive:true,force:true})}
 },15_000 );
@@ -218,17 +219,37 @@ it( 'replays a binding whose keyframe properties another engine enumerated in a 
 	} finally {  if ( ! process.env.DLA_KEEP_DEVICE_EVIDENCE ) rmSync( directory, { recursive: true, force: true } ); }
 }, 15_000 );
 
-it( 'reports an in-view entrance whose lost binding never played instead of measuring its pending pose', async ({ newPage }) => {
+it( 'replays a binding whose lengths serialize at a different precision and settles a binding that moved', async ({ newPage }) => {
+	// The source's fractional custom property (177.140625px) reads back as
+	// 177.141px; the copy rounds it to 177.14px. That is not a changed binding.
+	const timing = { delay: 0, direction: 'normal', duration: 300, easing: 'linear', endDelay: 0, fill: 'backwards', iterationStart: 0, iterations: 1 };
+	const frames = [ { offset: 0, easing: 'linear', composite: 'auto', transform: 'translate(177.141px)', computedOffset: 0 }, { offset: 1, easing: 'linear', composite: 'auto', transform: 'translate(0px)', computedOffset: 1 } ];
+	const evidence = JSON.stringify( { attributes: { 'data-interact-enter': { before: null, after: 'done' } }, threshold: [ 0.15 ], rootMargin: '0px 0px 0px 0px', repeat: false, cssAnimations: [ { name: 'glide', timing, frames } ] } );
+	const page = await newPage( { viewport: { width: 1000, height: 700 } } );
+	await page.setContent( withViewportEntrances( `<!doctype html><html><head><style>
+@keyframes glide{from{transform:translate(var(--motion-left))}to{transform:translate(0)}}
+.entrance{--motion-left:177.14px;height:80px}.entrance:not([data-interact-enter]){visibility:hidden}
+#rounded:not([data-interact-enter=done]),#moved:not([data-interact-enter=done])>span{display:block;animation:glide .3s linear backwards paused}
+</style></head><body><div id="rounded" class="entrance" data-blocks-engine-capture-viewport-entrance='${ evidence }'>Rounded</div>
+<div id="moved" class="entrance" data-blocks-engine-capture-viewport-entrance='${ evidence }'><span>Moved</span></div></body></html>` ) );
+	const entered = ( id: string ) => page.locator( id ).evaluate( node => ( { visibility: getComputedStyle( node ).visibility, enter: node.getAttribute( 'data-interact-enter' ), loss: node.getAttribute( 'data-blocks-engine-capture-viewport-entrance-loss' ) } ) );
+	await expect.poll( () => entered( '#rounded' ) ).toEqual( { visibility: 'visible', enter: 'done', loss: null } );
+	expect( await entered( '#moved' ) ).toEqual( { visibility: 'visible', enter: 'done', loss: 'authored paused CSS animation binding changed' } );
+}, 15_000 );
+
+it( 'settles an in-view entrance whose lost binding never played and still reports the loss', async ({ newPage }) => {
 	 mkdirSync( '.tmp-test', { recursive: true } );
 	const directory = mkdtempSync( join( process.cwd(), '.tmp-test/finite-unrevealed-' ) );
 	try {
 		const source = await newPage( { viewport: { width: 1000, height: 700 } } ); await source.addInitScript( observeViewportEntrances );
 		await source.goto( `data:text/html,${ encodeURIComponent( fixture( false, true ) ) }` ); await source.waitForTimeout( 1200 );
 		const portable = await exportSource( source, directory );
-		for ( const [ html, unrevealed ] of [ [ portable, [] ], [ portable.replace( 'neutralFade 450ms', 'neutralFade 451ms' ), [ 'entrance: authored paused CSS animation binding changed' ] ] ] as const ) {
+		for ( const [ html, losses ] of [ [ portable, [] ], [ portable.replace( 'neutralFade 450ms', 'neutralFade 451ms' ), [ 'entrance: authored paused CSS animation binding changed' ] ] ] as const ) {
 			const page = await newPage( { viewport: { width: 1000, height: 700 } } );
 			const measured = await observePage( page, `data:text/html,${ encodeURIComponent( html ) }`, 1000, 1500, null, undefined, undefined, false, true );
-			expect( measured.entranceUnrevealed ).toEqual( unrevealed );
+			// A lost binding settles visible, so what is measured is the entered pose.
+			expect( measured.entranceUnrevealed ).toEqual( [] );
+			expect( measured.entranceLosses ).toEqual( losses );
 		}
 	} finally {  if ( ! process.env.DLA_KEEP_DEVICE_EVIDENCE ) rmSync( directory, { recursive: true, force: true } ); }
 }, 30_000 );

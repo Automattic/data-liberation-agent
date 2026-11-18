@@ -464,11 +464,38 @@ export async function learnAndApplyFluidGeometry(
 	}
 }
 
+interface FluidWidthTiming {
+	width: number;
+	resizeMs: number;
+	restMs: number;
+	rest: { sweep: 'sweep' | 'reused' | 'none'; ended: 'quiet' | 'deadline' };
+	measureMs: number;
+	runtimeSheetsMs: number;
+}
+
 async function learnFluidGeometry(
 	page: Page,
 	options: FluidSweepOptions,
 	baseline: Awaited<ReturnType<typeof captureFluidBaseline>>
 ): Promise<FluidLearningResult> {
+	const startedAt = Date.now();
+	// Only time the existing sampling awaits. Probes, preparation, fitting and
+	// capture-width restoration remain in otherMs; no extra browser work.
+	const widthTimings: FluidWidthTiming[] = [];
+	let memoReusedKeys = 0;
+	const emitTiming = ( tagged: number ) => {
+		const totalMs = Date.now() - startedAt;
+		const totals = { resizeMs: 0, restMs: 0, measureMs: 0, runtimeSheetsMs: 0 };
+		for ( const width of widthTimings ) {
+			for ( const key of Object.keys( totals ) as Array< keyof typeof totals > ) totals[ key ] += width[ key ];
+		}
+		const sampledMs = Object.values( totals ).reduce( ( sum, ms ) => sum + ms, 0 );
+		process.stderr.write( `[timing] fluid ${ JSON.stringify( {
+			url: page.url(), document: options.document ?? 'desktop', viewport: page.viewportSize(), taggedElements: tagged,
+			sampledWidths: widthTimings.map( timing => timing.width ), memoReusedKeys, widths: widthTimings,
+			totals: { ...totals, sampledMs, otherMs: totalMs - sampledMs, totalMs },
+		} ) }\n` );
+	};
 	// An explicit ladder is sampled as given; the default samples its coarse
 	// widths and refines the ladder only on evidence (see refinementWidths).
 	const adaptive = options.widths === undefined;
@@ -530,6 +557,7 @@ async function learnFluidGeometry(
 		await baseline.evaluate( ( state, attribute ) => {
 			for ( const element of state.elements() ) element.removeAttribute( attribute );
 		}, ID_ATTRIBUTE );
+		emitTiming( tagged );
 		return { applied: 0, unmodelled: 0, breakpoints: [], canvasFloor: null, byKind: {}, sampledWidths: [] };
 	}
 	await restoreLoadTimeSheets( page );
@@ -551,12 +579,19 @@ async function learnFluidGeometry(
 	const sampledWidths: number[] = [];
 	const sample = async ( width: number ) => {
 		sampledWidths.push( width );
+		let started = Date.now();
 		await resizeViewport( page, { width, height: original?.height ?? 900 } );
-		await waitForRestGeometry( page, baseline, settleMs, true, properties, true );
+		const resizeMs = Date.now() - started;
+		started = Date.now();
+		const rest = await waitForRestGeometry( page, baseline, settleMs, true, properties, true );
+		const restMs = Date.now() - started;
 		await options.prepareViewport?.( page );
 		await baseline.evaluate( state => state.reconcile() );
+		started = Date.now();
 		await observeRuntimeSheets( page );
+		const runtimeSheetsMs = Date.now() - started;
 
+		started = Date.now();
 		const measured = await baseline.evaluate(
 			( state, { attribute, properties } ) =>
 				state.elements().map( ( element ) => {
@@ -642,6 +677,7 @@ async function learnFluidGeometry(
 				} ),
 			{ attribute: ID_ATTRIBUTE, properties }
 		);
+		widthTimings.push( { width, resizeMs, restMs, rest, measureMs: Date.now() - started, runtimeSheetsMs } );
 		for ( const entry of measured ) {
 			if ( ! redundantMinHeight.has( entry.id ) ) redundantMinHeight.set( entry.id, entry.redundantMinHeight );
 			else if ( ! entry.redundantMinHeight ) redundantMinHeight.set( entry.id, false );
@@ -700,13 +736,8 @@ async function learnFluidGeometry(
 		waitedMs = reservation?.waitedMs ?? 0;
 		try {
 			const reused = memo ? reuseSweptSeries( observations, memoKeys, memo ) : new Map< string, GeometrySample[] >();
+			memoReusedKeys = reused.size;
 			reusedElements = new Set( [ ...reused.keys() ].map( key => key.slice( 0, key.indexOf( ':' ) ) ) ).size;
-			if ( process.env.FLUID_DEBUG ) {
-				const ids = [ ...new Set( [ ...observations.keys() ].map( key => key.slice( 0, key.indexOf( ':' ) ) ) ) ].filter( id => ! reused.has( [ ...observations.keys() ].find( key => key.startsWith( id + ':' ) )! ) );
-				const rows = ids.map( id => { const keys = memoKeys( id ); const stored = keys.map( k => memo!.get( k ) ).find( Boolean ); const props = [ ...observations ].filter( ( [ k ] ) => k.startsWith( id + ':' ) );
-					return { id, keys: keys.map( k => k.slice( 0, 160 ) ), stored: stored ? [ ...stored.keys() ] : null, props: props.map( ( [ k, v ] ) => [ k.slice( id.length + 1 ), v.map( x => [ x.viewport, x.value, x.container, x.transformOrigin ] ), stored?.get( k.slice( id.length + 1 ) )?.filter( x => [ 390, 768, 1920 ].includes( x.viewport ) ).map( x => [ x.viewport, x.value, x.container, x.transformOrigin ] ) ] ) }; } );
-				process.stderr.write( `[fluiddbg] ${ page.url() } doc=${ options.document } reused=${ reusedElements } unexplained=${ ids.length } memo=${ memo?.size } ${ JSON.stringify( rows.slice( 0, 8 ) ) }\n` );
-			}
 			const unexplained = () => new Map( [ ...observations ].filter( ( [ key ] ) => ! reused.has( key ) ) );
 			const sheetObservations = sheets ? await runtimeSheetSeries( page, sampledWidths ) : [];
 			const sheetsConstant = ( ! sheets || sheetObservations.length > 0 ) && sheetObservations.every( series => series.length === PROBE_WIDTHS.length &&
@@ -808,6 +839,12 @@ async function learnFluidGeometry(
 	let canvasFloor: number | null = null;
 	let unmodelled = 0;
 
+	const movingTransforms = new Set( await baseline.evaluate( ( state, { attribute, key } ) => {
+		const tracker = ( window as unknown as Record< symbol, RuntimeStyleWrites | undefined > )[ Symbol.for( key ) ];
+		const moving = ( state as unknown as { movingTransforms?: Set< string > } ).movingTransforms ?? new Set< string >();
+		for ( const element of state.elements() ) if ( tracker?.movingTransform( element ) ) moving.add( element.getAttribute( attribute )! );
+		return [ ...moving ];
+	}, { attribute: ID_ATTRIBUTE, key: RUNTIME_STYLE_WRITES_KEY } ) );
 	for ( const [ key, samples ] of observations ) {
 		// Not a geometry series, so neither learned nor unmodelled.
 		if ( ! holdsPixels( samples ) || key.includes( ':clip-' ) ) continue;
@@ -815,6 +852,7 @@ async function learnFluidGeometry(
 		// Any non-relative sample invalidates the entire offset relationship.
 		// Fitting the remaining relative samples would erase authored positioning.
 		if ( property === 'left' && nonRelative.has( id ) ) continue;
+		if ( property.startsWith( 'transform-' ) && movingTransforms.has( id ) ) continue;
 		if ( property === 'transform-scale' ) {
 			// Never fit a partial series through rotation, skew, translation or absence.
 			if ( samples.some( sample => ! Number.isFinite( sample.value ) ) ) continue;
@@ -1256,6 +1294,7 @@ async function learnFluidGeometry(
 		byKind.segmented = ( byKind.segmented ?? 0 ) + sampled.length;
 	}
 
+	emitTiming( tagged );
 	return {
 		applied: learned.length - frozen - frozenWidths.length + runtimeSheets.applied,
 		unmodelled: unmodelled + frozen + frozenWidths.length + runtimeSheets.unmodelled,
@@ -1443,10 +1482,10 @@ async function resizeViewport( page: Page, size: { width: number; height: number
  * of paying a full scroll-through at every width. Entrance replay still
  * sweeps for its own sake: its scroll-through is the point.
  */
-async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typeof captureFluidBaseline>>, settleMs = 0, lazy = false, properties: readonly string[] = LEARNABLE_PROPERTIES, reuseSweep = false ): Promise< void > {
+async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typeof captureFluidBaseline>>, settleMs = 0, lazy = false, properties: readonly string[] = LEARNABLE_PROPERTIES, reuseSweep = false ): Promise< FluidWidthTiming['rest'] > {
 	const { withEvaluateTimeout, installImageReachability } = await import( './page-helpers.js' );
 	const reachabilityKey = await installImageReachability( page );
-	await withEvaluateTimeout( baseline.evaluate( async ( state, { attribute, properties, settleMs, lazy, reuseSweep, reachabilityKey, workKey } ) => {
+	return await withEvaluateTimeout( baseline.evaluate( async ( state, { attribute, properties, settleMs, lazy, reuseSweep, reachabilityKey, workKey } ) => {
 		const started = Date.now();
 		const work = ( window as unknown as Record< symbol, ViewportWork > )[ Symbol.for( workKey ) ]!;
 		const sleep = work.sleep;
@@ -1455,6 +1494,8 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 		const unreachable = ( window as unknown as Record< symbol, ( image: HTMLImageElement ) => boolean > )[ Symbol.for( reachabilityKey ) ];
 		// One serialized geometry record per tagged element, keyed by its id, so
 		// rest can be judged per element (see `perpetual` below).
+		const transforms = new Map< string, string >();
+		const movingTransforms = ( state as unknown as { movingTransforms?: Set< string > } ).movingTransforms ??= new Set< string >();
 		const snapshot = () => {
 			state.reconcile();
 			return new Map( state.elements().map( element => {
@@ -1465,6 +1506,11 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 					.map( property => [ property, pixel( style.getPropertyValue( property ) ) ] )
 					.filter( ( [ , value ] ) => value !== null );
 				const id = element.getAttribute( attribute ) ?? '';
+				// Repeated authored transform reads at this unchanged viewport
+				// distinguish script motion from a stable width-driven translation.
+				const previous = transforms.get( id );
+				if ( previous !== undefined && previous !== style.transform ) movingTransforms.add( id );
+				transforms.set( id, style.transform );
 				return [ id, JSON.stringify( [ id,
 					properties.map( property => pixel( style.getPropertyValue( property ) ) ), custom,
 					// Keep the whole transform, not just X: scale/rotation must invalidate
@@ -1534,7 +1580,16 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 		let sweptHeight = Math.max( document.documentElement.scrollHeight, priorSweep?.height ?? 0 );
 		let visitedHeight = priorSweep?.height ?? 0;
 		let sweptContent = content();
+		let didSweep = false;
+		let ended: 'quiet' | 'deadline' = 'deadline';
+		// An image that stays pending on the same source through a whole rest
+		// deadline (a poster starved behind the host's video streams, a request
+		// the source never answers) will not finish during learning. Its box is
+		// already what every width measured. It stops gating the later widths of
+		// this learning run, as perpetual movers do. A new source gates again.
+		const stuck = ( state as unknown as { stuckImages?: Map< HTMLImageElement, string > } ).stuckImages ??= new Map();
 		const sweep = async () => {
+			didSweep = true;
 			// Timeouts the sweep's scroll events schedule are viewport work too.
 			work.arm();
 			// This body runs only when this width has new work: the first width,
@@ -1606,11 +1661,20 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 			// visibility is re-read above, so a later reveal invalidates the sweep.
 			// Native-lazy images clipped out of view by an overflow ancestor are
 			// equally unreachable by this vertical sweep.
-			const imagesReady = ! lazy || [ ...document.images ].every( image => image.complete || image.getClientRects().length === 0 || unreachable( image ) );
+			const imagesReady = ! lazy || [ ...document.images ].every( image => image.complete || image.getClientRects().length === 0 || unreachable( image ) ||
+				stuck.get( image ) === currentContent.sources.get( image ) );
 			// Pending timeouts cover debounces. A missing tagged role can also
 			// be between an unwrap and an rAF-driven refit: allow a second quiet
 			// window for its replacement, without charging intact documents that wait.
-			if ( Date.now() - quietSince >= QUIET_MS * ( state.missing() ? 2 : 1 ) && imagesReady && work.pending() === 0 ) break;
+			if ( Date.now() - quietSince >= QUIET_MS * ( state.missing() ? 2 : 1 ) && imagesReady && work.pending() === 0 ) {
+				ended = 'quiet';
+				break;
+			}
+		}
+		if ( lazy && ended === 'deadline' ) {
+			for ( const [ image, source ] of content().sources ) {
+				if ( ! image.complete && image.getClientRects().length > 0 && ! unreachable( image ) ) stuck.set( image, source );
+			}
 		}
 		// Later widths reuse this wait's visited extent and content (see `reuse`),
 		// so what the last sweep actually observed is what they compare against.
@@ -1618,6 +1682,7 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 			( state as unknown as { swept?: { height: number; content: ReturnType< typeof content > | null } } ).swept =
 				{ height: visitedHeight, content: sweptContent };
 		}
+		return { sweep: didSweep ? 'sweep' as const : reuse ? 'reused' as const : 'none' as const, ended };
 	}, { attribute: ID_ATTRIBUTE, properties: [ ...properties ], settleMs, lazy, reuseSweep, reachabilityKey, workKey: VIEWPORT_WORK_KEY } ), 25_000 + settleMs );
 }
 

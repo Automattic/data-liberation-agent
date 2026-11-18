@@ -75,7 +75,25 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			await page.locator( '.textFitted' ).waitFor( { state: 'attached' } );
 			await markInitialDocument( page );
 			const initial = await page.content();
-			const result = await learnAndApplyFluidGeometry( page, { settleMs: 10 } );
+			const stderr = vi.spyOn( process.stderr, 'write' );
+			const phaseStarted = Date.now();
+			let result;
+			let phaseMs;
+			let timing;
+			try {
+				result = await learnAndApplyFluidGeometry( page, { settleMs: 10 } );
+				phaseMs = Date.now() - phaseStarted;
+				const lines = stderr.mock.calls.map( ( [ line ] ) => String( line ) ).filter( line => line.startsWith( '[timing] fluid ' ) );
+				expect( lines ).toHaveLength( 1 );
+				timing = JSON.parse( lines[ 0 ]!.slice( '[timing] fluid '.length ) );
+			} finally { stderr.mockRestore(); }
+			const sampledMs = timing.widths.reduce( ( sum: number, width: { resizeMs: number; restMs: number; measureMs: number; runtimeSheetsMs: number } ) =>
+				sum + width.resizeMs + width.restMs + width.measureMs + width.runtimeSheetsMs, 0 );
+			expect( sampledMs ).toBeGreaterThan( 0 );
+			expect( sampledMs ).toBe( timing.totals.sampledMs );
+			expect( sampledMs ).toBeLessThanOrEqual( timing.totals.totalMs );
+			expect( timing.totals.totalMs ).toBeLessThanOrEqual( phaseMs );
+			expect( [ ...timing.sampledWidths ].sort( ( a: number, b: number ) => a - b ) ).toEqual( result.sampledWidths );
 			expect( result.sampledWidths.length ).toBeGreaterThan( 3 );
 			const exported = projectInitialDocument( initial, await page.content() );
 			expect( exported ).toContain( 'font-size: clamp(' );

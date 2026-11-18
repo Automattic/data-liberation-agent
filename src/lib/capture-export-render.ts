@@ -542,7 +542,8 @@ function uncapturedRouteAnchors(
 }
 
 export interface RenderedRoutes { unresolvedAnchors: RouteLinks['unresolvedAnchors']; diagnostics: RouteDiagnostic[]; responsiveIdentities: { ids: Map<string, string | string[]>; namedAliases: boolean; svgIds: Set<string> } }
-export function renderRoutePages( { retainedEntries, websiteDir, resourceReplacements, portableUrlByFamily, mixedSrcsetReferences, portableMediaReplacements, replaceResources, replaceMedia, mediaMetadataPathsBySource, portablePathsBySource, routePathOf, capturedRouteKeys, absentRouteKeys, omittedRouteKeys, resourceInputKeys, routeScope, boundaryRoutes, verifiedRouteObservations, sourceRouteLinks, portableServedPaths }: {
+export function renderRoutePages( { canonicalizeHtml, retainedEntries, websiteDir, resourceReplacements, portableUrlByFamily, mixedSrcsetReferences, portableMediaReplacements, replaceResources, replaceMedia, mediaMetadataPathsBySource, portablePathsBySource, routePathOf, capturedRouteKeys, absentRouteKeys, omittedRouteKeys, resourceInputKeys, routeScope, boundaryRoutes, verifiedRouteObservations, sourceRouteLinks, portableServedPaths }: {
+ canonicalizeHtml?: ( html: string ) => string;
  retainedEntries: CaptureEntry[]; websiteDir: string; resourceReplacements: Map<string, string>; portableUrlByFamily: Map<string, string>; mixedSrcsetReferences: MediaCandidates['mixedSrcsetReferences']; portableMediaReplacements: Map<string, string>;
  replaceResources: ReturnType<typeof preparePortableReplacements>; replaceMedia: ReturnType<typeof preparePortableReplacements>; mediaMetadataPathsBySource: Map<string, string>; portablePathsBySource: Map<string, string>; routePathOf: (url: string) => string;
  capturedRouteKeys: Set<string>; absentRouteKeys: Set<string>; omittedRouteKeys: Set<string>; resourceInputKeys: Set<string>; routeScope?: SiteRouteScope; boundaryRoutes: Set<string>; verifiedRouteObservations: RouteLinks['verifiedRouteObservations']; sourceRouteLinks: Map<string, string>; portableServedPaths: Set<string>;
@@ -672,7 +673,7 @@ export function renderRoutePages( { retainedEntries, websiteDir, resourceReplace
 		unresolvedAnchors.push(
 			...unresolvedCapturedAnchors( normalizedHtml, url, `/${ routePath }` )
 		);
-		writeFileSync( destination, namespaceExportBoxTreeIds( wireNativeControlState( wireNativeViewTimelines( withViewportEntrances( normalizedHtml ) ) ) ) );
+		writeFileSync( destination, namespaceExportBoxTreeIds( wireNativeControlState( wireNativeViewTimelines( withViewportEntrances( canonicalizeHtml ? canonicalizeHtml( normalizedHtml ) : normalizedHtml ) ) ) ) );
 		entry.identityHtmlPath = `${ htmlPath }.identity`;
 		writeFileSync( entry.identityHtmlPath, identityHtml );
 	}

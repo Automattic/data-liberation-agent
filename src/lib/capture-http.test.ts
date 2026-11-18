@@ -161,6 +161,33 @@ describe('orchestrated HTTP review capture', () => {
 			vi.mocked(safeFetch).mockImplementation(originalFetch);
 		}
 	});
+	it('keeps distinct rendered routes when an SPA shell gives both the homepage canonical', async () => {
+		const { captureWebsite: capture } = await import('../index.js');
+		const outputDir = directory();
+		const about = `${url}about`;
+		const originalFetch = vi.mocked(safeFetch).getMockImplementation()!;
+		vi.mocked(safeFetch).mockImplementation(async target => ({
+			finalUrl: target, status: 200,
+			headers: new Headers({ 'content-type': 'text/html' }),
+			body: Buffer.from(`<html><head><title>Static shell</title><link rel="canonical" href="/"><meta property="og:url" content="${url}"></head><body><nav><a href="/">Home</a><a href="/about">About</a></nav><main><h1>${target === url ? 'Home' : 'About'}</h1></main></body></html>`),
+		}));
+		const platform = adapter();
+		platform.discover = async () => ({ urls: [url, about].map(url => ({ url })) });
+		try {
+			const result = await capture({ url, outputDir, acquisition: 'http' }, { findAdapter: () => platform });
+			const receipt = JSON.parse(readFileSync(result.captureReceiptPath, 'utf8'));
+			expect(receipt.routes.map((route: { url: string }) => route.url)).toEqual([url, about]);
+			expect(receipt.duplicateRoutes).toEqual([]);
+			const homepage = readFileSync(join(outputDir, 'website/index.html'), 'utf8');
+			const aboutPage = readFileSync(join(outputDir, 'website/about/index.html'), 'utf8');
+			expect(homepage).toContain('<h1>Home</h1>');
+			expect(homepage).toContain('href="/about/index.html"');
+			expect(aboutPage).toContain('<h1>About</h1>');
+			expect(aboutPage).toContain('href="/index.html"');
+		} finally {
+			vi.mocked(safeFetch).mockImplementation(originalFetch);
+		}
+	});
 	it.each([
 		['an empty body', '\n\t<script>track()</script>\n', false],
 		['a lone image', '<img src="https://example.com/sign.png" alt="">', true],

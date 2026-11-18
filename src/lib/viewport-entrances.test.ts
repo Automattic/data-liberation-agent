@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { type Page } from 'playwright';
 import { describe, expect } from 'vitest';
 import { it } from '../../test/browser.js';
-import { observeViewportEntrances, stampViewportEntrances } from './viewport-entrances.js';
+import { mergeViewportEntranceStates, observeViewportEntrances, stampViewportEntrances, withViewportEntrances } from './viewport-entrances.js';
 import { stampNodeIds } from './screenshot/box-tree.js';
 import { exportWebsiteCapture } from './capture-export.js';
 import { triggerLazyLoad } from './screenshot/page-helpers.js';
@@ -31,8 +31,21 @@ async function pose( page: Page ) {
 }
 
 describe( 'source-observed viewport transition entrances', () => {
-	for ( const { repeat, scroll } of [ { repeat: false, scroll: false }, { repeat: true, scroll: false }, { repeat: true, scroll: true } ] ) it.skipIf( process.env.SKIP_BROWSER_TESTS )(
-		`captures and exports real timed viewport transitions (${ scroll ? 'scroll listener' : 'IO' }, ${ repeat ? 'repeating' : 'one-shot' })`, async ({ newPage }) => {
+	it( 'validates repeat sides and merges their union while retaining legacy two-sided evidence', () => {
+		const state = { attributes: { class: { before: 'pending', after: 'shown' } }, rootMargin: '0px', threshold: [ 0 ], repeat: true };
+		const raw = ( repeatSides: unknown ) => JSON.stringify( { ...state, repeatSides } );
+		expect( JSON.parse( mergeViewportEntranceStates( raw( [ 'below' ] ), raw( [ 'above' ] ) )! ).repeatSides ).toEqual( [ 'above', 'below' ] );
+		expect( JSON.parse( mergeViewportEntranceStates( raw( [ 'below' ] ), JSON.stringify( state ) )! ).repeatSides ).toBeUndefined();
+		for ( const repeatSides of [ [], [ 'below', 'below' ], [ 'left' ], 'below', null ] ) {
+			expect( mergeViewportEntranceStates( raw( repeatSides ), raw( repeatSides ) ) ).toBeUndefined();
+		}
+		const nonRepeating = JSON.stringify( { ...state, repeat: false, repeatSides: [ 'below' ] } );
+		expect( mergeViewportEntranceStates( nonRepeating, nonRepeating ) ).toBeUndefined();
+		expect( withViewportEntrances( `<div data-blocks-engine-capture-viewport-entrance='${ nonRepeating }'></div>` ) ).toContain( 'Invalid viewport entrance evidence' );
+	});
+
+	for ( const { repeat, scroll, belowOnly = false } of [ { repeat: false, scroll: false }, { repeat: true, scroll: false }, { repeat: true, scroll: true }, { repeat: true, scroll: true, belowOnly: true } ] ) it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+		`captures and exports real timed viewport transitions (${ scroll ? belowOnly ? 'below-only scroll listener' : 'scroll listener' : 'IO' }, ${ repeat ? 'repeating' : 'one-shot' })`, async ({ newPage }) => {
 		const directory = mkdtempSync( join( tmpdir(), 'liberation-viewport-entrances-' ) );
 		let server: Awaited<ReturnType<typeof startStaticServer>> | undefined;
 		try {
@@ -47,7 +60,7 @@ describe( 'source-observed viewport transition entrances', () => {
 				.replace( '<button>Hover</button>', '<h1 class="entrance arrived" id="hero">Visible at load</h1><button>Hover</button>' )
 				.replace( /setTimeout\(\(\)=>\{const observer=[\s\S]*?\},100\);/, `setTimeout(()=>{
 					function update(){for(const element of document.querySelectorAll('.entrance,.rest')){
-						const r=element.getBoundingClientRect();element.classList.toggle('arrived',r.top<innerHeight-60&&r.bottom>0);
+						const r=element.getBoundingClientRect();element.classList.toggle('arrived',r.top<innerHeight-60${ belowOnly ? '' : '&&r.bottom>0' });
 					}}
 					addEventListener('scroll',update,{passive:true});update();window.fixtureReady=true;
 				},100);` ) : fixture( repeat );
@@ -62,6 +75,7 @@ describe( 'source-observed viewport transition entrances', () => {
 			await stampViewportEntrances( source );
 			const evidence = await source.locator( 'section.entrance' ).getAttribute( 'data-blocks-engine-capture-viewport-entrance' );
 			expect( JSON.parse( evidence! ) ).toMatchObject( { repeat, rootMargin: scroll ? '0px' : '0px 0px -10% 0px', attributes: scroll ? { class: { before: 'entrance', after: 'entrance arrived' } } : { 'data-active': { before: 'false', after: 'true' } } } );
+			if ( repeat ) expect( JSON.parse( evidence! ).repeatSides ).toEqual( belowOnly ? [ 'below' ] : [ 'above', 'below' ] );
 			expect( Object.keys( JSON.parse( evidence! ).attributes ) ).not.toContain( 'data-blocks-engine-node-id' );
 			expect( JSON.parse( evidence! ).threshold[ 0 ] ).toBeCloseTo( scroll ? 0 : 0.2 );
 			if ( scroll ) {
@@ -95,6 +109,11 @@ describe( 'source-observed viewport transition entrances', () => {
 			await candidate.locator( 'section.entrance' ).evaluate( async element => { await Promise.all( element.getAnimations().map( effect => effect.finished ) ); } );
 			expect( await pose( candidate ) ).toMatchObject( { opacity: '1', transform: 'none' } );
 			expect( await candidate.locator( '.ambient' ).evaluate( element => element.getAnimations()[ 0 ]?.effect?.getTiming().iterations ) ).toBe( Infinity );
+			if ( belowOnly ) {
+				await candidate.evaluate( () => scrollTo( 0, document.body.scrollHeight ) );
+				await candidate.waitForTimeout( 200 );
+				expect( await candidate.locator( 'section.entrance' ).getAttribute( 'class' ) ).toBe( 'entrance arrived' );
+			}
 			await candidate.locator( 'button' ).hover();
 			expect( await candidate.locator( 'button' ).evaluate( element => element.getAnimations().some( effect => effect instanceof CSSTransition ) ) ).toBe( true );
 			if ( repeat ) await candidate.waitForFunction( scroll => scroll ? ! document.querySelector( 'section.entrance' )?.classList.contains( 'arrived' ) : document.querySelector( 'section.entrance' )?.getAttribute( 'data-active' ) === 'false', scroll );
@@ -158,15 +177,17 @@ addEventListener('scroll', update, { passive: true }); update();
 		}
 	}, 30_000 );
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )( 'matches an entrance whose copy drops the whitespace between its elements', async ({ newPage }) => {
+	it.skipIf( process.env.SKIP_BROWSER_TESTS )( 'matches an entrance by its rendered text, not serialization or unrendered markup', async ({ newPage }) => {
 
-		{
-			const page = await newPage( { viewport: { width: 1024, height: 700 } } );
-			const formatted = fixture( false ).replace( 'Viewport entrance</section>', '\n  <h2>Viewport</h2>\n  <p>entrance</p>\n</section>' );
-			const source = await observePage( page, `data:text/html,${ encodeURIComponent( formatted ) }`, 1024, 300, null );
-			const copy = await observePage( page, `data:text/html,${ encodeURIComponent( formatted.replace( /\n\s*/g, '' ) ) }`, 1024, 300, null );
-			expect( source.entranceTransitions ).toHaveLength( 2 );
-			expect( checkMotion( source, copy ) ).toEqual( {} );
+		const page = await newPage( { viewport: { width: 1024, height: 700 } } );
+		const formatted = fixture( false ).replace( 'Viewport entrance</section>', '\n  <h2>Viewport</h2>\n  <p>entrance</p>\n</section>' );
+		const source = await observePage( page, `data:text/html,${ encodeURIComponent( formatted ) }`, 1024, 300, null );
+		expect( source.entranceTransitions ).toHaveLength( 2 );
+		for ( const copy of [
+			formatted.replace( /\n\s*/g, '' ),
+			formatted.replace( '<p>entrance</p>', '<p>entrance</p><div style="display:none">Thank you for your response.</div>' ),
+		] ) {
+			expect( checkMotion( source, await observePage( page, `data:text/html,${ encodeURIComponent( copy ) }`, 1024, 300, null ) ) ).toEqual( {} );
 		}
 	}, 30_000 );
 
