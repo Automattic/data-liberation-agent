@@ -147,7 +147,13 @@ export async function settleDocument(
                 if (host.localName.endsWith('-iframe') && !host.querySelector('iframe')) pending.push(host);
               }
               for (const image of document.images) {
-                if (image.getAttribute('src')?.trim() || image.getAttribute('srcset')?.trim() || !image.checkVisibility()) continue;
+                // A <picture> can select a source without any src on its img.
+                // Readiness concerns mounting, not decoding an authored source
+                // (including data: URLs).
+                if (image.currentSrc || image.getAttribute('src')?.trim() || image.getAttribute('srcset')?.trim() || !image.checkVisibility()) continue;
+                if (image.parentElement?.matches('picture') && [...image.parentElement.children].some(child =>
+                  child.matches('source[srcset]') && child.getAttribute('srcset')?.trim() &&
+                  (!child.getAttribute('media') || matchMedia(child.getAttribute('media')!).matches))) continue;
                 const lazy = image.closest('[data-src], [data-srcset], [data-lazy-src], [data-lazy-srcset], [data-image-info]');
                 const variants = [...(image.parentElement?.children ?? [])].some(sibling =>
                   sibling !== image && sibling.matches('img, source') && (sibling.getAttribute('src')?.trim() || sibling.getAttribute('srcset')?.trim()));
@@ -163,7 +169,12 @@ export async function settleDocument(
               });
             };
             const settled = () => performance.now() - lastMutation >= quietMs && !animating() && pendingMedia().length === 0;
+            let finished = false;
+            let deadlineTimer: ReturnType<typeof setTimeout>;
             const finish = (reason: 'quiet' | 'deadline') => {
+              if (finished) return;
+              finished = true;
+              clearTimeout(deadlineTimer);
               observer.disconnect();
               const excludedMotion = [...candidates].filter(([, candidate]) => candidate.excluded).map(([element]) => {
                 const path: string[] = [];
@@ -176,6 +187,7 @@ export async function settleDocument(
               resolve({ reason, ...(excludedMotion.length ? { excludedMotion } : {}), ...(pending.length ? { pendingMedia: pending } : {}) });
             };
             const check = () => {
+              if (finished) return;
               for (const [element, candidate] of candidates) {
                 if (!element.isConnected || layoutBox(element) !== candidate.box) {
                   candidates.delete(element);
@@ -185,11 +197,16 @@ export async function settleDocument(
               if (performance.now() >= deadline) return finish('deadline');
               if (!settled()) return void setTimeout(check, 25);
               requestAnimationFrame(() => requestAnimationFrame(() => {
+                if (finished) return;
                 if (settled()) finish('quiet');
                 else if (performance.now() >= deadline) finish('deadline');
                 else setTimeout(check, 25);
               }));
             };
+            // Chromium may suspend animation frames for background/occluded
+            // pages. The bound must not depend on either confirmation frame:
+            // otherwise the in-page promise and observer survive Node's timeout.
+            deadlineTimer = setTimeout(() => finish('deadline'), timeoutMs);
             check();
           }),
         { quietMs, timeoutMs, animations, selector, ...(media ? { media } : {}) },

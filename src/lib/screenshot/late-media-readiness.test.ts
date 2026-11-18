@@ -1,6 +1,6 @@
 import { expect } from 'vitest';
 import { it } from '../../../test/browser.js';
-import { waitForStable } from './page-helpers.js';
+import { settleDocument, waitForStable } from './page-helpers.js';
 import { loadSourceBaseline } from './load-baseline.js';
 import type { ManifestEntry, ProfileDiagnostic } from './manifest-queue.js';
 
@@ -63,3 +63,29 @@ it('captures late footer media and names components still pending at the bound',
 	expect(failures).toEqual([]);
 	await pending!.releaseBaselineNavigation();
 }, 30_000);
+
+it('accepts authored picture sources and bounds readiness without animation frames', async ({ newPage }) => {
+	const page = await newPage();
+	const pixel = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+	await page.setContent(`<picture><source srcset="${pixel}"><img id="selected" width="24" height="24"></picture>
+		<picture><source srcset="${pixel}"><img src="${pixel}" width="24" height="24"></picture>
+		<img id="empty" width="24" height="24">`);
+	const quiet = await settleDocument(page, 'authored-media', { quietMs: 0, timeoutMs: 1_000, media: true });
+	expect(quiet.reason).toBe('quiet');
+	expect(quiet.pendingMedia).toBeUndefined();
+
+	// Model Linux Chromium withholding confirmation frames for an occluded
+	// page. Neither the in-page deadline nor observer cleanup may await rAF.
+	await page.evaluate(() => {
+		window.requestAnimationFrame = () => 0;
+	});
+	const bounded = await settleDocument(page, 'suspended-frames', { quietMs: 0, timeoutMs: 100, media: true });
+	expect(bounded.reason).toBe('deadline');
+	expect(bounded.ms).toBeLessThan(1_000);
+	expect(bounded.pendingMedia).toBeUndefined();
+
+	await page.setContent('<img id="pending" data-src="later" width="24" height="24">');
+	const pending = await settleDocument(page, 'pending-media', { quietMs: 0, timeoutMs: 100, media: true });
+	expect(pending.reason).toBe('deadline');
+	expect(pending.pendingMedia).toEqual(['#pending']);
+});
