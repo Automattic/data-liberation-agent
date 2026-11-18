@@ -15,6 +15,31 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.36.0] - 2026-11-18
+
+### Added
+- list the selected routes on the first capturing progress event
+
+### Changed
+- regenerate plugin bundles
+- Capture over HTTP when the entry's HTTPS certificate fails
+- reuse fluid sweeps for loaded width-srcset rendition swaps
+- Share in-flight fluid sweeps across concurrent routes
+
+### Fixed
+- recheck media mounts before serialization
+- exclude scroll-lazy images from settle readiness
+- preserve oversized raster images with bounded portable renditions
+- admit new frontier template clusters during browser capture
+- keep hidden script-rendered links whose #fragment has no target
+- run the entrypoint alone only when the time budget projects truncation
+- drop runtime track translation from frame-wired gallery stages
+- close speculative connections during server shutdown
+- stamp node identity in the serializer's snapshot task so every document gets a sidecar
+- keep a referenced oversized crop beside a bounded crop
+- treat an empty main landmark as an incomplete device document
+- ignore current-state class tokens when grouping landmarks
+
 ## [0.35.49] - 2026-11-18
 
 ### Changed
