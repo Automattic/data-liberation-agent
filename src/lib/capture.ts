@@ -45,6 +45,12 @@ export interface CaptureProgress {
 	current?: number;
 	total?: number;
 	url?: string;
+	/**
+	 * The routes selected for capture, in capture order. Sent once, on the first
+	 * `capturing` event (`current: 0`). Linked pages admitted while capturing can
+	 * raise `total` and arrive later as `url` without being listed here.
+	 */
+	urls?: string[];
 	elapsedMs?: number;
 	phaseElapsedMs?: number;
 }
@@ -586,7 +592,7 @@ async function runCaptureWebsite(
 		...omitted.map( url => ( { code: ROUTE_OMITTED_BY_BUDGET, url: documentRequestUrl( url ), reason: routeBudgetReason( routeLimit! ) } ) ),
 	];
 	if ( omitted.length ) process.stderr.write( `[capture] route budget ${ routeLimit }: capturing ${ urls.length } of ${ urls.length + omitted.length } routes\n` );
-	progress( { phase: 'capturing', current: 0, total: urls.length } );
+	progress( { phase: 'capturing', current: 0, total: urls.length, urls: [ ...urls ] } );
 	if ( options.acquisition === 'http' ) {
 		const result = await ( await import( './capture-http.js' ) ).captureHttpWebsite( { options, sourceUrl, platform: adapter, detection, routeScope, urls, startedAt, progress, title: inventory.siteMeta?.title, discoveryDiagnostics, templateGroups, templateClustersDecision, canonicalAliases: aliasProbe.aliases, governors: sourceGovernors } );
 		assertEntrypointHasContent( outputDir, options.url, sourceUrl );
