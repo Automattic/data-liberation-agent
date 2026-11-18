@@ -106,3 +106,32 @@ describe( 'wix beforeFluid image geometry', () => {
 		}
 	}, 30_000 );
 } );
+
+describe( 'serialized Wix image sources', () => {
+	const media = 'a1b2c3_0123456789abcdef0123456789abcdef~mv2.jpg';
+	const blur = `https://static.wixstatic.com/media/${ media }/v1/fill/w_147,h_82,al_c,q_80,usm_0.66_1.00_0.01,blur_2,enc_avif,quality_auto/${ media }`;
+	const sharp = `https://static.wixstatic.com/media/${ media }/v1/fill/w_700,h_391,al_c,q_80,enc_avif,quality_auto/${ media }`;
+	const attr = ( value: object ) => JSON.stringify( value ).replace( /"/g, '&quot;' );
+	// A gallery widget re-rendered after the live normalization: its images are
+	// back on their placeholders when the document is serialized.
+	const remounted = attr( { displayMode: 'fit', isLQIP: true, encoding: 'AVIF', imageData: { width: 2752, height: 1536, uri: media, name: '', displayMode: 'fit' } } );
+	const targeted = attr( { displayMode: 'fill', alignType: 'center', targetWidth: 700, targetHeight: 391, isLQIP: true, imageData: { width: 2752, height: 1536, uri: media, displayMode: 'fill' } } );
+	const canonicalize = ( html: string ) => wixAdapter.liberation!.canonicalizeHtml!( html );
+
+	it( 'points a declared image still on its blurred placeholder at its declared source', () => {
+		const html = `<main><wow-image class="image" data-image-info="${ remounted }" data-has-ssr-src=""><img src="${ blur }" alt="Item" style="width: 700px; height: 391px; object-fit: contain;"></wow-image>`
+			+ `<wow-image data-image-info="${ targeted }"><img src="${ blur.replace( /&/g, '&amp;' ) }" alt="Cover"></wow-image></main>`;
+		const out = canonicalize( html );
+		expect( out ).not.toContain( 'blur_2' );
+		expect( out ).toContain( `<img src="https://static.wixstatic.com/media/${ media }" alt="Item" style="width: 700px; height: 391px; object-fit: contain;">` );
+		expect( out ).toContain( `<img src="https://static.wixstatic.com/media/${ media }/v1/fill/w_700,h_391,al_c,q_85,enc_avif,quality_auto/${ media }" alt="Cover">` );
+	} );
+
+	it( 'leaves hydrated, undeclared and unnamed images unchanged', () => {
+		const unnamed = attr( { displayMode: 'fill', imageData: { width: 10, height: 10 } } );
+		const html = `<main><wow-image data-image-info="${ remounted }"><img src="${ sharp }" alt="Hydrated"></wow-image>`
+			+ `<div><img src="${ blur }" alt="Undeclared"></div>`
+			+ `<wow-image data-image-info="${ unnamed }"><img src="${ blur }" alt="Unnamed"></wow-image></main>`;
+		expect( canonicalize( html ) ).toBe( html );
+	} );
+} );
