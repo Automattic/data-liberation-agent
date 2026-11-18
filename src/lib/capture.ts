@@ -942,10 +942,47 @@ export async function fetchEntryDocument( url: string, governors: SourceRequestG
 			return cookie ? { Cookie: cookie } : undefined;
 		},
 	};
-	return safeFetch( url, entryFetchOptions ).catch( async error => {
-		if ( await completeSourceTlsChain( url, error ) ) return safeFetch( url, entryFetchOptions );
+	const fetchEntry = ( entryUrl: string ) => safeFetch( entryUrl, entryFetchOptions ).catch( async error => {
+		if ( await completeSourceTlsChain( entryUrl, error ) ) return safeFetch( entryUrl, entryFetchOptions );
 		throw error; // failure-class: operational
 	} );
+	return fetchEntry( url ).catch( async error => {
+		const insecure = httpFallbackUrl( url, error );
+		if ( ! insecure ) throw error; // failure-class: operational
+		// Capture continues from the HTTP address, as if it had been entered.
+		// HTTP that redirects back to the broken HTTPS reports the original failure.
+		return fetchEntry( insecure ).catch( () => { throw error; } ); // failure-class: operational
+	} );
+}
+
+/**
+ * Node error codes for an HTTPS certificate that fails verification. A bare
+ * domain is entered as HTTPS, and many shared hosts serve the host's own
+ * certificate for a customer domain whose site works over HTTP.
+ */
+const CERTIFICATE_FAILURES = new Set( [
+	'ERR_TLS_CERT_ALTNAME_INVALID',
+	'CERT_HAS_EXPIRED',
+	'CERT_NOT_YET_VALID',
+	'DEPTH_ZERO_SELF_SIGNED_CERT',
+	'SELF_SIGNED_CERT_IN_CHAIN',
+	'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+	'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+] );
+
+/** The `http:` form of an HTTPS entry URL whose certificate failed verification. */
+function httpFallbackUrl( url: string, failure: unknown ): string | undefined {
+	const parsed = new URL( url );
+	if ( parsed.protocol !== 'https:' ) return undefined;
+	let cause = failure;
+	for ( let i = 0; i < 5 && cause && typeof cause === 'object'; i++ ) {
+		if ( CERTIFICATE_FAILURES.has( String( ( cause as NodeJS.ErrnoException ).code ) ) ) {
+			parsed.protocol = 'http:';
+			return parsed.href;
+		}
+		cause = ( cause as Error ).cause;
+	}
+	return undefined;
 }
 
 export async function groupInventoryTemplates( input: { contentEntries?: import('../platform/types.js').StructuredContentEntry[]; sourceUrl: string; urls: string[]; routeScope?: import('../platform/types.js').SiteRouteScope; styleNormalization?: import('./template-groups.js').TemplateStyleNormalization; templateIdentity?: import('./template-groups.js').TemplateIdentity; outputDir: string; timeBudgetMs?: number; wholeInventory: boolean; governors: SourceRequestGovernors } ): Promise< {

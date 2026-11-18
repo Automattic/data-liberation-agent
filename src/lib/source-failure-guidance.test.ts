@@ -13,6 +13,7 @@ describe('source failure guidance', () => {
 		{ reason: 'HTTP 404', guidance: '' },
 		{ reason: 'certificate has expired', code: 'CERT_HAS_EXPIRED', guidance: "The site's HTTPS certificate is invalid (expired or self-signed); fix the certificate or send an export." },
 		{ reason: 'self-signed certificate', code: 'DEPTH_ZERO_SELF_SIGNED_CERT', guidance: "The site's HTTPS certificate is invalid (expired or self-signed); fix the certificate or send an export." },
+		{ reason: 'ERR_TLS_CERT_ALTNAME_INVALID', code: 'ERR_TLS_CERT_ALTNAME_INVALID', guidance: "The site's HTTPS certificate is for a different domain; fix the certificate or send an export." },
 		{ reason: 'read ECONNRESET', code: 'ECONNRESET', guidance: '' },
 	])('preserves the reason and supplies actionable guidance: $reason', async ({ reason, code, guidance }) => {
 		let error: unknown;
