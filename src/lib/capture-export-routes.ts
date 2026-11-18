@@ -238,8 +238,29 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 		reservedPaths.add( allocated );
 		return allocated;
 	};
+	// Keep DOM structure, attributes and media (not just text) as identity proof;
+	// metadata and executable/style payloads are not page content, and
+	// `data-blocks-engine-*` attributes are capture bookkeeping (node ids are
+	// numbered per capture, so one document captured twice differs by them).
+	// Cache only digests, rather than holding every parsed document in memory.
+	const contentDigests = new Map< T, string >();
+	const contentDigest = ( entry: T ): string => {
+		const cached = contentDigests.get( entry );
+		if ( cached !== undefined ) return cached;
+		const $ = cheerio.load( readFileSync( entry.htmlPath, 'utf8' ) );
+		$( 'script,style,link,meta,title' ).remove();
+		$( '*' ).each( ( _, element ) => {
+			if ( element.type !== 'tag' ) return;
+			for ( const name of Object.keys( element.attribs ) ) if ( name.startsWith( 'data-blocks-engine-' ) ) delete element.attribs[ name ];
+		} );
+		const digest = createHash( 'sha256' ).update( $( 'body' ).html()?.trim() ?? '' ).digest( 'hex' );
+		contentDigests.set( entry, digest );
+		return digest;
+	};
 	const contentAliasPartners = new Map< string, string >();
-	// A directory and default document may be distinct; reserve natural paths before suffixing.
+	// A directory and its default document (`/` and `/index.html`) share one
+	// natural path. They are one route when they render the same document;
+	// otherwise reserve natural paths before suffixing.
 	for ( const entry of capturedEntries ) {
 		const url = new URL( entry.url );
 		if ( url.search || url.hash || ! url.pathname.endsWith( '/index.html' ) ) continue;
@@ -254,10 +275,9 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 		const path = naturalRoutePath( entry.url );
 		if ( ! directory || naturalRoutePath( directoryUrl ) !== path ) continue;
 		if ( declaresCanonicalRoute( entry, directory ) || declaresCanonicalRoute( directory, entry ) ) continue;
-		if ( readFileSync( entry.htmlPath, 'utf8' ) === readFileSync( directory.htmlPath, 'utf8' ) ) {
+		if ( contentDigest( entry ) === contentDigest( directory ) ) {
 			contentAliasPartners.set( entry.url, directory.url );
 			contentAliasPartners.set( directory.url, entry.url );
-			continue;
 		}
 	}
 	const routePathOf = ( url: string ) => allocatedPaths.get( url ) ?? naturalRoutePath( url );
@@ -348,19 +368,6 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 	}
 	// Different paths do not compete for an output filename. A canonical link
 	// can be stale SPA shell metadata, so require matching rendered content too.
-	// Keep DOM structure, attributes and media (not just text) as identity proof;
-	// metadata and executable/style payloads are not page content. Cache only
-	// digests, rather than holding every parsed document in memory.
-	const contentDigests = new Map< T, string >();
-	const contentDigest = ( entry: T ): string => {
-		const cached = contentDigests.get( entry );
-		if ( cached !== undefined ) return cached;
-		const $ = cheerio.load( readFileSync( entry.htmlPath, 'utf8' ) );
-		$( 'script,style,link,meta,title' ).remove();
-		const digest = createHash( 'sha256' ).update( $( 'body' ).html()?.trim() ?? '' ).digest( 'hex' );
-		contentDigests.set( entry, digest );
-		return digest;
-	};
 	// Never infer aliases from social metadata, or drop cycles/chains with no final target.
 	const canonicalTargets = new Map< T, T >();
 	for ( const entry of retained ) {
