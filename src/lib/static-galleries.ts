@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import type { AnyNode } from 'domhandler';
 import type { CapturedDialogInteraction } from './screenshot/interaction-capture.js';
 import type { CapturedGallery } from './screenshot/gallery-capture.js';
 
@@ -10,6 +11,41 @@ function activate(event){var control=event.target.closest&&event.target.closest(
 var stage=event.target.closest&&event.target.closest('[data-blocks-engine-capture-gallery-stage][data-blocks-engine-capture-dialog-trigger]');if(!stage||!event.target.closest('img'))return;var owner=stage.closest('[data-blocks-engine-capture-gallery]'),panel=document.getElementById(stage.getAttribute('aria-controls'));if(!owner||!panel)return;var overlay=panel.querySelector('[data-blocks-engine-capture-gallery]'),items=frames(owner),selected=items[Number(owner.getAttribute('data-blocks-engine-capture-gallery-index'))],identity=selected&&selected.getAttribute('data-blocks-engine-capture-gallery-full-image');var target=overlay&&frames(overlay).findIndex(function(frame){return frame.getAttribute('data-blocks-engine-capture-gallery-image')===identity;});if(overlay&&target>=0)set(overlay,target);}
 document.addEventListener('click',activate,true);
 })();`;
+
+/**
+ * A frame-wired stage shows its visible frame in the first slot, so the source
+ * runtime's track translation (which positioned the original track at its
+ * active slide) would push that frame outside the slider. Drop it here, where
+ * the stage's role is known, so no later stage can hoist it into a rule.
+ */
+const TRANSLATION_PROPERTIES = new Set(['transform', '-webkit-transform', '-ms-transform', 'translate']);
+
+function declarations(style: string): string[] {
+	const out: string[] = [];
+	let depth = 0, quote = '', start = 0;
+	for (let i = 0; i < style.length; i++) {
+		const ch = style[i]!;
+		if (quote) { if (ch === '\\') i++; else if (ch === quote) quote = ''; }
+		else if (ch === '"' || ch === "'") quote = ch;
+		else if (ch === '(') depth++;
+		else if (ch === ')') depth = Math.max(0, depth - 1);
+		else if (ch === ';' && depth === 0) { out.push(style.slice(start, i)); start = i + 1; }
+	}
+	out.push(style.slice(start));
+	return out;
+}
+
+function dropRuntimeTranslation(stage: cheerio.Cheerio<AnyNode>): void {
+	const style = stage.attr('style');
+	if (style === undefined) return;
+	const kept = declarations(style).map(declaration => declaration.trim()).filter(declaration => {
+		if (!declaration) return false;
+		const colon = declaration.indexOf(':');
+		return colon < 0 || !TRANSLATION_PROPERTIES.has(declaration.slice(0, colon).trim().toLowerCase());
+	});
+	if (kept.length > 0) stage.attr('style', kept.join(';'));
+	else stage.removeAttr('style');
+}
 
 function wire($: cheerio.CheerioAPI, gallery: CapturedGallery, fullImages: boolean): boolean {
 	if (gallery.coverage !== 'complete' || gallery.restoration !== 'verified') return false;
@@ -50,6 +86,7 @@ function wire($: cheerio.CheerioAPI, gallery: CapturedGallery, fullImages: boole
 			}
 		}
 		stage.empty();
+		dropRuntimeTranslation(stage);
 		gallery.frames.forEach((frame, index) => {
 			const fragment = cheerio.load(frame.html, null, false);
 			const child = fragment.root().children().first();
