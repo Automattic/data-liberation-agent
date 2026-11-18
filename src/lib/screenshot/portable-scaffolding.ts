@@ -24,13 +24,15 @@ export function cleanPortableScaffolding(source: Document, snapshot: HTMLElement
     // A targetless `#` link with control semantics is a script-owned control
     // (a menu toggle, for example) that width-dependent CSS may hide only at
     // this capture width; it is not a disposable in-page navigation affordance.
-    if (node instanceof HTMLAnchorElement && node.getAttribute('href')?.startsWith('#')
-      && node.getAttribute('role')?.trim().toLowerCase() !== 'button'
+    // Only a top-of-document link (`#`, `#top`) is a disposable affordance. A
+    // named fragment without a target is rendered content (a script-rendered
+    // product name linking to an SPA route hash, for example): it stays, and
+    // export reports it as an unresolved anchor (#1984).
+    const topFragment = node instanceof HTMLAnchorElement && /^#(?:top)?$/i.test(node.getAttribute('href')?.trim() ?? '');
+    if (topFragment && node.getAttribute('role')?.trim().toLowerCase() !== 'button'
       && !['aria-haspopup', 'aria-expanded', 'aria-controls'].some(name => node.hasAttribute(name))) {
-      const fragment = node.getAttribute('href')!.slice(1);
-      let target: Element | null = null;
-      try { target = source.getElementById(decodeURIComponent(fragment)); } catch { /* malformed fragment has no target */ }
-      if (!target && !Array.from(source.getElementsByName(fragment)).some(element => element !== node)) {
+      const fragment = node.getAttribute('href')!.trim().slice(1);
+      if (!fragment || (!source.getElementById(fragment) && !Array.from(source.getElementsByName(fragment)).some(element => element !== node))) {
         const rect = node.getBoundingClientRect();
         const style = getComputedStyle(node);
         const hidden = rect.width === 0 || rect.height === 0 || style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0' || style.clip !== 'auto' || style.clipPath !== 'none';

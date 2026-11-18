@@ -101,3 +101,17 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports content without dismissed UI,
     rmSync(outputDir, { recursive: true, force: true });
   }
 }, 90_000);
+
+// #1984: one page, expected wall time under 2 seconds.
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('keeps script-rendered fragment links without a target inside a hidden page', async ({ newPage }) => {
+  const page = await newPage();
+  await page.setContent(`<!doctype html><body><main><h1>Shop</h1></main>
+    <section class="page" style="display:none"><div class="card"><div class="name">Alpha</div><div class="price">$150</div></div></section>
+    <a id="hidden-top" href="#top" style="position:absolute;width:0;height:0;overflow:hidden">Back to top</a>
+    <script>document.querySelectorAll('.name').forEach(n=>{const t=n.textContent;n.innerHTML='';const a=document.createElement('a');a.href='#detail';a.textContent=t.toUpperCase();n.append(a);});</script></body>`);
+  const diagnostics: ProfileDiagnostic[] = [];
+  const $ = load(await capturePageHtml(page, diagnostics));
+  expect($('.name > a[href="#detail"]').text()).toBe('ALPHA');
+  expect($('#hidden-top').length).toBe(0);
+  expect(diagnostics.filter(item => item.code === 'hidden_navigation_affordance_removed').map(item => item.reason)).toEqual(['a#hidden-top: hidden in-page link without a content target']);
+}, 30_000);
