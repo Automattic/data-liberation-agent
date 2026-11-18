@@ -1,13 +1,13 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { copyExclusive, moveExclusive } from './media-fetch/exclusive-file.js';
+import { copyExclusive, createExclusive, moveExclusive } from './media-fetch/exclusive-file.js';
 import { basename, extname, join, resolve as resolvePath } from 'node:path';
 import * as cheerio from 'cheerio';
 import postcss from 'postcss';
 import { imageSize } from 'image-size';
 import { rewriteCssUrlReferences, srcsetCandidates } from './srcset.js';
 import { metadataImageReferences } from './identity-resources.js';
-import { MAX_PORTABLE_MEDIA_DIMENSION, portableSrcsetRepresentative } from './portable-media-limits.js';
+import { MAX_PORTABLE_MEDIA_BYTES, MAX_PORTABLE_MEDIA_DIMENSION, portableSrcsetRepresentative } from './portable-media-limits.js';
 import { deriveFilenameFromUrl, downloadMedia, existingMediaNames, extensionFromContentType, safeFilename, type DownloadResult } from './media-fetch/media.js';
 import { isIntegrityError } from './failure-class.js';
 import { launchChromium } from './browser-kit/index.js';
@@ -37,7 +37,7 @@ export interface AssetRecord {
 		sha256: string;
 	} | null;
 	local_path?: string;
-	/** Independently acquired responsive bytes; never aliases of the original. */
+	/** Independently acquired or locally encoded responsive bytes. */
 	renditions?: AssetRecord[];
 	/** Capture-observed responsive widths, ordered nearest adequate first. */
 	rendered_width?: number;
@@ -347,7 +347,7 @@ export function svgDeclaredSize( bytes: Buffer ): { width: number; height: numbe
 }
 
 async function decodeImage( page: import('playwright').Page, bytes: Buffer, contentType: string ) {
-	return page.evaluate( async ( data ) => {
+	return page.evaluate( async ( { data, downscale, maxBytes, maxDimension } ) => {
 		const image = new Image();
 		image.src = data;
 		await Promise.race( [ image.decode(), new Promise<never>( ( _resolve, reject ) => {
@@ -363,8 +363,28 @@ async function decodeImage( page: import('playwright').Page, bytes: Buffer, cont
 		const pixels = ctx.getImageData( 0, 0, image.width, image.height ).data;
 		let alpha = false;
 		for ( let i = 3; i < pixels.length; i += 4 ) if ( pixels[ i ] < 255 ) { alpha = true; break; }
-		return { width: image.width, height: image.height, alpha };
-	}, `data:${ contentType };base64,${ bytes.toString( 'base64' ) }` );
+		let rendition: { data: string; width: number; height: number } | undefined;
+		if ( downscale && Math.max( image.width, image.height ) > maxDimension ) {
+			const scale = maxDimension / Math.max( image.width, image.height );
+			canvas.width = Math.max( 1, Math.floor( image.width * scale ) );
+			canvas.height = Math.max( 1, Math.floor( image.height * scale ) );
+			// Reduce geometry as well as quality if necessary: even noisy alpha
+			// images must fit the per-file cap without losing transparency.
+			for ( ;; ) {
+				ctx.drawImage( image, 0, 0, canvas.width, canvas.height );
+				const encoded = canvas.toDataURL( alpha ? 'image/webp' : 'image/jpeg', 0.85 );
+				if ( atob( encoded.split( ',' )[ 1 ] ).length <= maxBytes ) {
+					rendition = { data: encoded, width: canvas.width, height: canvas.height };
+					break;
+				}
+				canvas.width = Math.max( 1, Math.floor( canvas.width * 0.75 ) );
+				canvas.height = Math.max( 1, Math.floor( canvas.height * 0.75 ) );
+			}
+		}
+		return { width: image.width, height: image.height, alpha, rendition };
+	}, { data: `data:${ contentType };base64,${ bytes.toString( 'base64' ) }`,
+		downscale: contentType !== 'image/svg+xml' && bytes.length > MAX_PORTABLE_MEDIA_BYTES,
+		maxBytes: MAX_PORTABLE_MEDIA_BYTES, maxDimension: MAX_PORTABLE_MEDIA_DIMENSION } );
 }
 
 /** Verify originals first, then acquire responsive alternatives before the deadline.
@@ -428,6 +448,7 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 					}, rendition: true, parent } );
 				}
 			}
+			const encodedRenditions: Array<{ record: ImageAssetRecord; encoded: { data: string; width: number; height: number }; alpha: boolean }> = [];
 			for ( const { record, rendition, parent, rest } of jobs ) {
 				const source = record.resolved_original;
 				try {
@@ -461,7 +482,8 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 						page = await browser.newPage();
 						await page.route( '**/*', route => route.abort() );
 					}
-					const metadata = record.kind === 'image' ? await decodeImage( page!, bytes, contentType ) : {};
+					const decoded = record.kind === 'image' ? await decodeImage( page!, bytes, contentType ) : undefined;
+					const { rendition: encoded, ...metadata } = decoded ?? {};
 					if ( contentType === 'image/svg+xml' ) Object.assign( metadata, svgDeclaredSize( bytes ) );
 					// Browser decoding verifies pixels but applies EXIF rotation. The
 					// original describes the stored JPEG frame, not its display geometry.
@@ -481,6 +503,7 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 					record.original = { source_url: source, content_type: contentType, ...metadata, sha256: createHash( 'sha256' ).update( bytes ).digest( 'hex' ) };
 					record.local_path = localPath;
 					delete record.error;
+					if ( encoded && ! rendition ) encodedRenditions.push( { record, encoded, alpha: decoded!.alpha } );
 					if ( ! rendition ) for ( const url of record.source_urls ) stubs.markSuccess( url, localPath );
 					else ( parent!.renditions ??= [] ).push( record );
 					if ( ! rendition && record.kind === 'image' ) {
@@ -504,6 +527,27 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 					if ( ! rendition ) for ( const url of record.source_urls ) stubs.markFailure( url, record.error );
 					else if ( rest?.length ) jobs.push( { record: rest[ 0 ], rendition: true, parent, rest: rest.slice( 1 ) } );
 				}
+			}
+			// Source renditions win. Only publish a locally encoded fallback after
+			// all independent acquisition attempts have finished.
+			for ( const { record, encoded, alpha } of encodedRenditions ) {
+				if ( record.renditions?.some( child => child.original && child.local_path &&
+					Math.max( child.original.width ?? Infinity, child.original.height ?? Infinity ) <= MAX_PORTABLE_MEDIA_DIMENSION &&
+					readFileSync( child.local_path ).length <= MAX_PORTABLE_MEDIA_BYTES ) ) continue;
+				const contentType = encoded.data.slice( 5, encoded.data.indexOf( ';' ) );
+				const bytes = Buffer.from( encoded.data.split( ',' )[ 1 ], 'base64' );
+				const localPath = record.local_path!;
+				const source = record.resolved_original;
+				const { path } = createExclusive(
+					() => join( mediaDir, safeFilename( `${ basename( localPath, extname( localPath ) ) }-portable${ extensionFromContentType( contentType ) }`, names ) ),
+					path => writeFileSync( path, bytes, { flag: 'wx' } ),
+				);
+				( record.renditions ??= [] ).push( {
+					kind: 'image', destination_owner: record.destination_owner,
+					source_urls: record.source_urls, references: record.references, resolved_original: source, local_path: path,
+					original: { source_url: source, content_type: contentType, width: encoded.width, height: encoded.height,
+						alpha, sha256: createHash( 'sha256' ).update( bytes ).digest( 'hex' ) },
+				} );
 			}
 		}
 	} catch ( error ) {

@@ -56,6 +56,47 @@ it('records stored JPEG dimensions and EXIF orientation through capture asset ex
  } finally { rmSync(root, { recursive: true, force: true }); }
 }, 30000);
 
+it('encodes an over-limit alpha original as a bounded transparent rendition (~1s)', async ({ newPage }) => {
+ mkdirSync('.tmp-test', { recursive: true });
+ const root = mkdtempSync('.tmp-test/image-alpha-limit-');
+ try {
+  const page = await newPage();
+  const encoded = await page.evaluate(() => {
+   const canvas = document.createElement('canvas');
+   canvas.width = 2560;
+   canvas.height = 1280;
+   const ctx = canvas.getContext('2d')!;
+   ctx.fillStyle = 'red';
+   ctx.fillRect(0, 0, 1280, 1280);
+   return canvas.toDataURL('image/png').split(',')[1];
+  });
+  const bytes = Buffer.concat([Buffer.from(encoded, 'base64'), Buffer.alloc(5 * 1024 * 1024)]);
+  mkdirSync(join(root, 'resources'));
+  writeFileSync(join(root, 'resources/alpha.png'), bytes);
+  writeFileSync(join(root, 'resources/manifest.json'), JSON.stringify({ resources: {
+   'https://example.com/alpha.png': { path: 'resources/alpha.png', contentType: 'image/png' },
+  } }));
+  const [record] = await captureAssets(root, [{ url: 'https://example.com/', html: '<img src="/alpha.png">' }], Date.now() - 1);
+  expect(record.error).toBeUndefined();
+  expect(record.original).toMatchObject({ width: 2560, height: 1280, alpha: true });
+  const rendition = record.renditions![0];
+  expect(rendition.original).toMatchObject({ width: 2048, height: 1024, alpha: true, content_type: 'image/webp' });
+  const portable = readFileSync(rendition.local_path!);
+  expect(portable.length).toBeLessThanOrEqual(5 * 1024 * 1024);
+  expect(await page.evaluate(async data => {
+   const image = new Image();
+   image.src = data;
+   await image.decode();
+   const canvas = document.createElement('canvas');
+   canvas.width = image.width;
+   canvas.height = image.height;
+   const ctx = canvas.getContext('2d')!;
+   ctx.drawImage(image, 0, 0);
+   return [ctx.getImageData(0, 0, 1, 1).data[3], ctx.getImageData(image.width - 1, 0, 1, 1).data[3]];
+  }, `data:image/webp;base64,${portable.toString('base64')}`)).toEqual([255, 0]);
+ } finally { rmSync(root, { recursive: true, force: true }); }
+}, 30000);
+
 it('chooses the largest srcset candidate and delegates optimizer resolution to the adapter', () => {
  const records = collectImageAssets([{ url: 'https://example.com/', html: '<img src="small.webp" srcset="large.webp 900w, small.webp 100w"><div style="background:url(small.webp)"></div>' }]);
  expect(records).toHaveLength(1);
