@@ -393,8 +393,12 @@ function replayViewportEntrances(): void {
 	const reduced = matchMedia( '(prefers-reduced-motion: reduce)' );
 	// Engines enumerate a keyframe's properties in different orders (Chromium
 	// changed it between releases), so the binding compares values, not order.
+	// Lengths serialize at engine precision (177.140625px reads back as 177.141px,
+	// a compiled 177.14px as 177.14px), so numbers compare at two decimals.
+	const precise = ( number: number ) => Math.round( number * 100 ) / 100;
 	const signature = ( value: unknown ) => JSON.stringify( value, ( _key, field: unknown ) => field && typeof field === 'object' && ! Array.isArray( field )
-		? Object.fromEntries( Object.entries( field ).sort( ( [ left ], [ right ] ) => left < right ? -1 : left > right ? 1 : 0 ) ) : field );
+		? Object.fromEntries( Object.entries( field ).sort( ( [ left ], [ right ] ) => left < right ? -1 : left > right ? 1 : 0 ) )
+		: typeof field === 'number' ? precise( field ) : typeof field === 'string' ? field.replace( /\d*\.\d+/g, number => String( precise( Number( number ) ) ) ) : field );
 	for ( const element of document.querySelectorAll( '[data-blocks-engine-capture-viewport-entrance]' ) ) {
 		const state = JSON.parse( element.getAttribute( 'data-blocks-engine-capture-viewport-entrance' )! ) as EntranceState;
 		if ( element.closest( '[data-blocks-engine-capture-device-document]' ) && ! element.getClientRects().length ) continue;
@@ -422,6 +426,12 @@ function replayViewportEntrances(): void {
 			else inline.removeProperty( 'transition' );
 		}
 		let running = false, complete = false;
+		// A lost lifecycle settles on the after pose: the before pose is a
+		// hidden pending state, and nothing will ever play it to completion.
+		const lose = ( reason: string ) => {
+			element.setAttribute( 'data-blocks-engine-capture-viewport-entrance-loss', reason );
+			observer.disconnect(); running = false; complete = true; apply( 'after' );
+		};
 		const start = () => {
 			if ( running || complete ) return;
 			const effects = element.getAnimations().filter( ( animation ): animation is CSSAnimation => animation instanceof CSSAnimation &&
@@ -429,14 +439,14 @@ function replayViewportEntrances(): void {
 			const signatures = effects.map( effect => signature( { name: effect.animationName, timing: effect.effect?.getTiming(), frames: ( effect.effect as KeyframeEffect ).getKeyframes() } ) ).sort();
 			if ( JSON.stringify( signatures ) !== JSON.stringify( state.cssAnimations!.map( binding => signature( binding ) ).sort() ) ||
 				effects.some( effect => effect.playState !== 'paused' || effect.currentTime !== 0 ) ) {
-				element.setAttribute( 'data-blocks-engine-capture-viewport-entrance-loss', 'authored paused CSS animation binding changed' ); return;
+				lose( 'authored paused CSS animation binding changed' ); return;
 			}
 			running = true;
 			effects.forEach( effect => effect.play() );
 			void Promise.all( effects.map( effect => effect.finished ) ).then( () => {
 				apply( 'after' ); complete = true; running = false;
 				if ( ! state.repeat ) observer.unobserve( element );
-			}, () => { running = false; element.setAttribute( 'data-blocks-engine-capture-viewport-entrance-loss', 'CSS entrance completion was interrupted' ); } );
+			}, () => lose( 'CSS entrance completion was interrupted' ) );
 		};
 		const observer = new IntersectionObserver( entries => {
 			for ( const entry of entries ) {
