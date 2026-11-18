@@ -1,5 +1,5 @@
 import type { Page, Request } from 'playwright';
-import { mergeConsentLayouts, sameConsentLayout } from '../consent-banner-layout.js';
+import { fluidConsentShapes, mergeConsentLayouts, sameConsentLayout } from '../consent-banner-layout.js';
 import { expandCollapsedContent, waitForAppWidgets } from './dynamic-content.js';
 import { isSourcePromotion } from '../source-cleanup.js';
 import { isConsentNotice } from '../consent-overlay.js';
@@ -1746,8 +1746,9 @@ export async function dismissOverlays(
             }
             while (resizes < 32 && Date.now() < deadline) {
               const ordered = [...layouts].sort((a, b) => a.min_width! - b.min_width!);
+              const fluid = fluidConsentShapes(layouts);
               const index = ordered.findIndex((high, i) => i > 0
-                && !sameConsentLayout(ordered[i - 1], high) && high.min_width! - ordered[i - 1].max_width! > 1);
+                && !sameConsentLayout(ordered[i - 1], high, fluid) && high.min_width! - ordered[i - 1].max_width! > 1);
               if (index < 0) break;
               // Keep actual observations on both sides, never a guessed midpoint.
               // Re-sort each time: an intermediate sample may reveal a third layout.

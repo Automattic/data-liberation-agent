@@ -46,6 +46,26 @@ it('keeps otherwise identical layouts distinct when message margins differ', () 
   ]);
 });
 
+it('keeps fixed panel widths per breakpoint but merges a panel that follows the viewport', () => {
+  // A centered card that is 350px wide up to a breakpoint and 406px beyond it.
+  expect(mergeConsentLayouts([
+    { min_width: 1440, max_width: 1440, direction: 'column', span: 'inset', inline: 'center', width: 406 },
+    { min_width: 768, max_width: 768, direction: 'column', span: 'inset', inline: 'center', width: 350 },
+    { min_width: 1023, max_width: 1023, direction: 'column', span: 'inset', inline: 'center', width: 350 },
+    { min_width: 1024, max_width: 1024, direction: 'column', span: 'inset', inline: 'center', width: 406 },
+  ])).toEqual([
+    { max_width: 1023, direction: 'column', span: 'inset', inline: 'center', width: 350 },
+    { min_width: 1024, direction: 'column', span: 'inset', inline: 'center', width: 406 },
+  ]);
+  // Widths on one line across viewports (constant gutters, a share of the
+  // viewport) are one fluid layout.
+  for (const widths of [[342, 867, 1392], [351, 824, 1296]]) {
+    expect(mergeConsentLayouts([390, 915, 1440].map((viewport, i) => (
+      { min_width: viewport, max_width: viewport, direction: 'row' as const, span: 'inset' as const, inline: 'center' as const, width: widths[i] }
+    )))).toEqual([{ direction: 'row', span: 'inset', inline: 'center' }]);
+  }
+});
+
 // A consent platform (Usercentrics) renders its banner in the shadow tree of
 // an empty host placed after the page content: nothing is parked off-screen.
 it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a shadow-hosted banner without waiting for an entrance', async ({ newPage }) => {
@@ -214,6 +234,31 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('omits invisible borders and bisects m
       ]);
     }
   }
+});
+
+// A modal card (a custom HTML embed) with a fixed width that steps at a breakpoint.
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('bisects the breakpoint where a fixed-width card changes width', async ({ newPage }) => {
+  const page = await newPage({ viewport: { width: 1440, height: 900 } });
+  const popup = (card: string) => `<style>body{margin:0}#cookiePopup{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:2147483647}.backdrop{position:absolute;inset:0;background:rgba(0,0,0,.75)}
+    .card{position:relative;width:336px;padding:50px 35px 30px;border-radius:40px;background:#fff;display:flex;flex-direction:column;align-items:center}
+    ${card}</style>
+    <main style="min-height:1200px"><h1>Page title</h1><p>${'Page content that is not part of the popup. '.repeat(8)}</p></main>
+    <div id="cookiePopup"><div class="backdrop"></div><div class="card"><h2>These are no cookie settings.</h2><p>This is our attitude towards cookies.</p><button onclick="document.getElementById('cookiePopup').remove()">Accept all</button></div></div>`;
+  await page.setContent(popup('@media (max-width:1023px){.card{width:280px}}'));
+  const dismissed = await dismissOverlays(page, { consentViewports: [{ width: 768, height: 900 }] });
+  const banner = dismissed.find(item => item.consentBanner)?.consentBanner;
+  expect(banner?.position).toBe('center');
+  expect(banner?.presentation?.layout?.map(({ min_width, max_width, span, inline, width }) => ({ min_width, max_width, span, inline, width }))).toEqual([
+    { min_width: undefined, max_width: 1023, span: 'inset', inline: 'center', width: 350 },
+    { min_width: 1024, max_width: undefined, span: 'inset', inline: 'center', width: 406 },
+  ]);
+  // A card sized by the viewport stays one fluid layout.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.setContent(popup('.card{width:calc(80% - 70px)}'));
+  const fluid = (await dismissOverlays(page, { consentViewports: [{ width: 768, height: 900 }] })).find(item => item.consentBanner)?.consentBanner;
+  expect(fluid?.presentation?.layout?.map(({ min_width, max_width, width }) => ({ min_width, max_width, width }))).toEqual([
+    { min_width: undefined, max_width: undefined, width: undefined },
+  ]);
 });
 
 // One real capture/export pass (~15 seconds), no mocked browser or export seams.
