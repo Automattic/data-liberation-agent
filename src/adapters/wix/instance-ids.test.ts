@@ -48,6 +48,27 @@ describe( 'canonicalizeWixInstanceIds', () => {
 		expect( canonicalizeWixInstanceIds( html ) ).toBe( html );
 	} );
 
+	it( 'keeps an instance name once given, even when later markup shows fewer of its components', () => {
+		// The export canonicalizes each route again after its stylesheets became
+		// linked files. The markup alone then names only some of the instance's
+		// components; the linked rules still use the first name.
+		// The page stylesheet also styles a component the route does not render.
+		const source = page( 'comp-aaaa1111' ).replace( '</style>', '.comp-aaaa1111_r_comp-cart{display:none}</style>' );
+		const captured = canonicalizeWixInstanceIds( source );
+		const id = /id="(comp-dla[0-9a-f]{8})_r_comp-logo"/.exec( captured )?.[ 1 ];
+		expect( captured ).toContain( `.${ id }_r_comp-cart{display:none}` );
+		const exported = captured.replace( /<style>[\s\S]*?<\/style>/, '<link rel="stylesheet" href="/assets/css/page.css">' );
+		expect( exported ).toContain( `class="${ id }_r_comp-nav"` );
+		expect( canonicalizeWixInstanceIds( exported ) ).toBe( exported );
+		expect( canonicalizeWixCapturedHtml( exported ) ).toBe( exported );
+	} );
+
+	it( 'leaves a page untouched when a new instance would take a name already on the page', () => {
+		const captured = canonicalizeWixInstanceIds( page( 'comp-aaaa1111' ) );
+		const html = `${ captured }<div class="comp-cccc3333_r_comp-nav comp-cccc3333_r_comp-logo"></div>`;
+		expect( canonicalizeWixInstanceIds( html ) ).toBe( html );
+	} );
+
 	it( 'leaves markup without instance references unchanged', () => {
 		const html = '<div id="comp-abc" class="comp-abc-container">x</div>';
 		expect( canonicalizeWixInstanceIds( html ) ).toBe( html );
