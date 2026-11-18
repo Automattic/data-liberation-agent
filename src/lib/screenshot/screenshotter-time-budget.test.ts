@@ -87,6 +87,53 @@ it.skipIf( skipBrowser )( 'starts the entrypoint first and records deadline-admi
 	}
 }, 60_000 );
 
+it.skipIf( skipBrowser ).each( [
+	// 3 routes x 127s uncalibrated estimate / 2 workers = 190.5s.
+	{ fit: 'fits every route', admitWindowMs: 600_000, entryFirst: false },
+	{ fit: 'projects truncation', admitWindowMs: 150_000, entryFirst: true },
+] )( 'holds successors behind the entrypoint only when the budget $fit', async ( { admitWindowMs, entryFirst } ) => {
+	const requests = new Map< string, number >();
+	const server = createServer( ( request, response ) => {
+		const path = request.url ?? '';
+		if ( ! requests.has( path ) ) requests.set( path, Date.now() );
+		if ( path.includes( 'liberation-absent-' ) ) { response.writeHead( 404 ); response.end(); return; }
+		response.setHeader( 'content-type', 'text/html' );
+		// The entrypoint is slow, so a successor admitted beside it starts before it finishes.
+		setTimeout( () => response.end( `<!doctype html><html><head><title>${ path }</title></head><body><h1>${ path }</h1></body></html>` ), path === '/' ? 2_000 : 0 );
+	} );
+	await new Promise< void >( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+	const origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
+	mkdirSync( '.tmp-test', { recursive: true } );
+	const outputDir = mkdtempSync( join( process.cwd(), '.tmp-test', 'time-budget-entry-first-' ) );
+	try {
+		const now = Date.now();
+		let entryFinishedAt = Infinity;
+		const prioritized: string[][] = [];
+		const requestedBeforePriority = new Set< string >();
+		const result = await captureScreenshots( {
+			urls: [ `${ origin }/`, `${ origin }/a`, `${ origin }/b` ], primaryUrl: `${ origin }/`,
+			outputDir, settleMs: 0, learnFluid: false, viewports, concurrency: 2,
+			timeBudget: { timeBudgetMs: admitWindowMs + 60_000, admitUntil: now + admitWindowMs, abandonAt: now + admitWindowMs + 60_000, projectAdmission: true },
+			prioritizePendingRoutes: pending => {
+				for ( const url of pending ) if ( requests.has( new URL( url ).pathname ) ) requestedBeforePriority.add( url );
+				prioritized.push( pending );
+				return [ ...pending ].reverse();
+			},
+			onProgress: ( _current, _total, url ) => { if ( url === `${ origin }/` ) entryFinishedAt = Date.now(); },
+		} );
+		expect( result ).toMatchObject( { captured: 3, failed: 0 } );
+		const successorStartedAt = Math.min( requests.get( '/a' ) ?? Infinity, requests.get( '/b' ) ?? Infinity );
+		expect( successorStartedAt < entryFinishedAt ).toBe( ! entryFirst );
+		// Only routes still pending once the entrypoint finishes are reordered.
+		expect( prioritized.length ).toBeLessThanOrEqual( 1 );
+		expect( prioritized.flat().filter( url => requestedBeforePriority.has( url ) ) ).toEqual( [] );
+		if ( entryFirst ) expect( prioritized ).toEqual( [ [ `${ origin }/a`, `${ origin }/b` ] ] );
+	} finally {
+		await close( server );
+		rmSync( outputDir, { recursive: true, force: true } );
+	}
+}, 60_000 );
+
 it.skipIf( skipBrowser )( 'abandons a route still running at the deadline and exports usable partial output', async () => {
 	const { origin, server } = await site( new Set( [ '/slow' ] ) );
 	mkdirSync( '.tmp-test', { recursive: true } );

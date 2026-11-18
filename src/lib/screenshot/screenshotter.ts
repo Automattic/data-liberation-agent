@@ -1984,6 +1984,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		// browser is restarted only between segments to bound memory, preserving the
 		// restart-every-N invariant while keeping each worker on a stable browser.
 		let segStart = 0;
+		// Unstarted routes are reordered once, after the entrypoint settles.
+		let pendingPrioritized = ! opts.prioritizePendingRoutes;
+		let entrypointSettled = false;
 		while (segStart < urls.length && ! routeBudget?.closed() && ! routeDeadlines.stalled) {
 			const waveEnd = urls.length;
 			while ( segStart < waveEnd && ! routeBudget?.closed() && ! routeDeadlines.stalled ) {
@@ -1995,12 +1998,13 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					urlsSinceRestart = 0;
 				}
 				// Appended aliases and linked documents belong to the next wave.
-				// Finish the entrypoint before admitting its successors when the
-				// caller learns priorities from that already-rendered document.
-				const entryFirst = segStart === 0 && opts.prioritizePendingRoutes;
-				if ( segStart === 1 && opts.prioritizePendingRoutes ) {
-					urls.splice( segStart, urls.length - segStart, ...opts.prioritizePendingRoutes( urls.slice( segStart ) ) );
-				}
+				// The caller learns priorities from the rendered entrypoint, which
+				// only matter when the budget cannot fit every pending route: then
+				// the entrypoint finishes before its successors are admitted.
+				// Otherwise successors start alongside it, and the routes still
+				// pending when it finishes are reordered.
+				const entryFirst = segStart === 0 && opts.prioritizePendingRoutes
+					&& ! routeBudget?.fits( urls.slice( 0, waveEnd ).filter( url => ! reusedRoutes.has( url ) ).length, concurrency );
 				const segEnd = entryFirst ? 1 : browserRestartEvery > 0
 					? Math.min( waveEnd, segStart + browserRestartEvery - urlsSinceRestart )
 					: waveEnd;
@@ -2014,13 +2018,18 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				};
 				try {
 					while ( ( cursor < segEnd && budgetAdmits() ) || running.size ) {
+						if ( ! pendingPrioritized && ( entrypointSettled || reusedRoutes.has( urls[ 0 ]! ) ) ) {
+							pendingPrioritized = true;
+							const from = Math.max( 1, cursor );
+							urls.splice( from, urls.length - from, ...opts.prioritizePendingRoutes!( urls.slice( from ) ) );
+						}
 						while ( cursor < segEnd && budgetAdmits() && running.size < concurrency && admission.admit( admission.kind( urls[ cursor ]! ), runningKinds.values() ) ) {
 							const url = urls[ cursor++ ];
 							const kind = admission.kind( url );
 							routeBudget?.start( url );
 							if ( memoryAdmission ) process.stderr.write( `[memory-admission] ${ JSON.stringify( admission.diagnostic( kind, running.size + 1, url ) ) }\n` );
 							admission.start( kind );
-							const pending = processUrl( url ).finally( () => { partialRouteCommits.delete( url ); admission.release( kind ); routeBudget?.finish( url, probeOverruns.get( url ) ); routeDeadlines.finish( url ); } ).then( () => {
+							const pending = processUrl( url ).finally( () => { if ( url === urls[ 0 ] ) entrypointSettled = true; partialRouteCommits.delete( url ); admission.release( kind ); routeBudget?.finish( url, probeOverruns.get( url ) ); routeDeadlines.finish( url ); } ).then( () => {
 								if ( memoryAdmission ) admission.sample();
 							} );
 							// The slot frees even if abandonment unwinds slowly: the route's own
