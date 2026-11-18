@@ -34,6 +34,7 @@ import { projectRootClassContracts, rootClassContracts, RootClassEvidence, sampl
 import { restoreRuntimeEmoji } from './runtime-emoji.js';
 import { restoreLoadTimeSheets } from './runtime-style-writes.js';
 import { removeRuntimeWidgets } from './runtime-widgets.js';
+import { alignSourceMotion, motionChanges, readPaintedTokens, recordSourceMotion, type RouteMotionEvidence } from './motion-hold.js';
 import { analyzePage } from './site-analysis.js';
 import { preserveStreamedVideoPosters } from './streamed-video.js';
 import { captureViewportClassStates, type ViewportClassMemo } from './viewport-class-states.js';
@@ -58,6 +59,8 @@ export interface CapturePerViewportArgs {
 	sourceTraffic?: Parameters<CapturedResourceStore['captureSelectedSrcsets']>[2];
 	absentDocument?: ( html: string ) => Promise<boolean>;
 	rootClassEvidence: RootClassEvidence;
+	/** The route moment shared by every profile's serialization (#2007). */
+	routeMotion?: RouteMotionEvidence;
 	routeDeadlineMs: number;
 	routeRemainingMs: () => number;
 	serverLinks: Set<string>;
@@ -334,7 +337,7 @@ export function baselineSteps(
 	state: BaselineState,
 	fail: ( stage: FailureEntry['stage'], error: unknown, attempt?: number ) => void,
 	sourceErrors: () => string[],
-	capturePageHtml: ( page: Page, diagnostics?: ProfileDiagnostic[], serverHtml?: string, onBoxTree?: (observation: BoxTreeObservation | undefined) => void ) => Promise<string>,
+	capturePageHtml: ( page: Page, diagnostics?: ProfileDiagnostic[], serverHtml?: string, onBoxTree?: (observation: BoxTreeObservation | undefined) => void, onPainted?: ( painted: string[] ) => void ) => Promise<string>,
 ): CaptureStep<{ page: Page }>[] {
 	const { page, viewport, plan, url, slug, evaluateTimeoutMs, screenshotTimeoutMs, outputDir, entry, responsiveImages, resourceStore, mobileHeights, shouldAnalyze, aggregator } = args;
 	const { serverHtml, navigationUrl, sourcePolicy } = sourceLoad;
@@ -407,6 +410,15 @@ export function baselineSteps(
 		await resourceStore.captureDomDependencies( html, documentUrl.baseUrl );
 		return { html, documentUrl };
 	};
+	// Painted readings of this page before the baseline serialization: tokens
+	// that rotate between readings are what the reference must agree on (#2007).
+	let paintedLast: string[] | undefined;
+	const rotating = new Set<string>();
+	const samplePainted = ( painted: string[] ) => {
+		if ( paintedLast ) for ( const token of motionChanges( paintedLast, painted ) ) rotating.add( token );
+		paintedLast = painted;
+	};
+	const sampleMotion = async () => { if ( args.observeSource ) samplePainted( await readPaintedTokens( page ) ); };
 	const bindSavedBoxTree = ( html: string, document: string, report: boolean ) => {
 		const bound = bindBoxTreeEvidence( html, state.boxTree );
 		if ( 'tree' in bound ) return bound.tree;
@@ -423,6 +435,7 @@ export function baselineSteps(
 		},
 		{
 			id: 'baseline-reset', continuePhase: true, onFailure: 'drop-profile', partial: ( _ctx, error ) => { fail( 'evaluate', `source baseline reset unproven: ${ String( error ) }` ); }, run: async () => {
+				await sampleMotion();
 				await withEvaluateTimeout( normalizeCaptureState( page ), evaluateTimeoutMs );
 				await withEvaluateTimeout( normalizeGeneratedIds( page ), evaluateTimeoutMs );
 			}
@@ -468,12 +481,14 @@ export function baselineSteps(
 		},
 		{
 			id: 'script-motion', bound: { evaluateMs: SCRIPT_MOTION_BUDGET_MS + evaluateTimeoutMs }, onFailure: 'best-effort', run: async () => {
+				await sampleMotion();
 				await settleScriptEntrances();
 			}
 		},
 		{
 			id: 'baseline-snapshot', onFailure: 'throw', run: async () => {
 				// Initial component states are immutable evidence, read before exploration.
+				await sampleMotion();
 				args.diagnostics?.push( ...await removeRuntimeWidgets( page ) );
 				args.diagnostics?.push( ...await restoreRuntimeEmoji( page ) );
 				if ( args.beforeSerialize ) await args.beforeSerialize( page, { url, viewport: viewport.id, serverHtml } ).catch ( orElse( undefined ) );
@@ -489,9 +504,23 @@ export function baselineSteps(
 				await restoreLoadTimeSheets( page ).catch ( orElse( 0 ) );
 				await waitForMountedMedia();
 				await stampNodeIds( page );
+				// Another profile of this route already serialized: wait (held) for the
+				// source to show that moment, so every document of the route agrees.
+				const routeMoment = args.observeSource ? args.routeMotion?.get( url ) : undefined;
+				const aligned = routeMoment ? await alignSourceMotion( page, routeMoment, paintedLast ? [ paintedLast ] : [] ) : undefined;
 				let boxNodes: BoxTreeObservation | undefined;
-				state.initialDocument = await capturePageHtml( page, args.diagnostics, serverHtml,
-					(isDesktop || isMobile) && (plan.captureHtml || plan.captureMobileHtml) ? observation => { boxNodes = observation; } : undefined );
+				try {
+					state.initialDocument = await capturePageHtml( page, args.diagnostics, serverHtml,
+						(isDesktop || isMobile) && (plan.captureHtml || plan.captureMobileHtml) ? observation => { boxNodes = observation; } : undefined,
+						args.observeSource ? painted => {
+							samplePainted( painted );
+							const motion = { painted, rotating: [ ...new Set( [ ...rotating, ...routeMoment?.rotating ?? [] ] ) ].sort() };
+							recordSourceMotion( page, motion );
+							args.routeMotion?.claim( url, motion );
+						} : undefined );
+				} finally {
+					await aligned?.release();
+				}
 				const observed: BoxTreeObservation | undefined = boxNodes;
 				if (observed && 'mismatch' in observed) state.boxTreeMismatch = observed.mismatch;
 				else if (observed) state.boxTree = await captureBoxTree(page, state.initialDocument, boxViewports(), { name: viewport.id, nodes: observed.nodes }, mismatch => { state.boxTreeMismatch = mismatch; });

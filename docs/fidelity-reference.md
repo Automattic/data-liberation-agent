@@ -130,6 +130,19 @@ finite document-timeline effects, including effects they chain, while paused
 viewport-pending entrances remain pending. The controlled-scroll motion proof counts
 starts, pauses, seeks and scroll-timeline progress; clock progress or completion of
 an effect already running before the probe is not a scroll response.
+A reference cell's document and screenshots describe one held moment, and that
+moment is the one capture serialized (`src/lib/screenshot/motion-hold.ts`). An
+init script installed before source scripts lets capture and reference pause the
+source's own timeouts, intervals and animation frames without rewriting its
+state; callbacks registered during a hold (probe code) still run. Capture holds
+across its baseline serialization and records which text and images paint, plus
+the tokens that rotated (one appeared while another disappeared) while its page
+was alive. Later profiles of the route wait, held, for that same moment before
+they serialize. A reference cell releases and re-holds until every rotating token
+agrees with capture, bounded to 12 seconds; a cell that never agrees records a
+`source motion disagrees with capture` diagnostic and keeps its last moment.
+Static width differences never block agreement because only rotating tokens are
+compared, so an autoplaying carousel's reference shows the slide `website/` shows.
 Image geometry and typography use resting authored styles: animation keyframes
 (including ancestor, infinite, and scroll-driven effects) are temporarily removed
 on both sides, with static transforms preserved. Original keyframes are restored

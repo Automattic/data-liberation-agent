@@ -18,6 +18,7 @@ import { lockMainFrameNavigation } from '../screenshot/probe-guards.js';
 import { replayBrowserIdentity, type CaptureProfile } from '../screenshot/capture-profiles.js';
 import { observeViewportEntrances, collectViewportEntranceStartup } from '../viewport-entrances.js';
 import { watchSourceRuntimeErrors } from '../source-readiness.js';
+import { alignSourceMotion, MOTION_ALIGN_TIMEOUT_MS, observeMotionHold, readPaintedTokens, recordedSourceMotion } from '../screenshot/motion-hold.js';
 
 /** Upper bound for in-flight source images to settle before the reference is frozen. */
 const MEDIA_READY_TIMEOUT_MS = 10_000;
@@ -190,6 +191,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 					};
 					const rendererCrash = () => entry.readiness.reasons.push( 'source renderer crashed' );
 					let releaseNavigation: (() => Promise<void>) | undefined;
+					let releaseMotion: (() => Promise<void>) | undefined;
 					let navigationUrl = url;
 					try {
 						if ( identity?.screen && ! browser ) throw new Error( 'Preset screen replay requires a source browser context' );
@@ -256,6 +258,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						runtimeErrors = await watchSourceRuntimeErrors( referencePage );
 						referencePage.on( 'crash', rendererCrash );
 						await referencePage.addInitScript( observeViewportEntrances );
+						await referencePage.addInitScript( observeMotionHold );
 						if ( url !== 'about:blank' ) {
 							const navigation = options.routeScope || options.initializePage ? await navigateSourceDocument( referencePage, url, { publicUrlsOnly: options.publicUrlsOnly, routeScope: options.routeScope } ) : undefined;
 							if ( navigation?.boundary || navigation?.redirectedTo ) throw new Error( 'Reference document changed its route ownership or identity' );
@@ -277,6 +280,9 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 							// the strict check below still rejects failures/timeouts.
 							await waitForImages( referencePage! );
 						}, true, referencePage === page );
+						// What paints now; rotation between here and the frozen moment counts too.
+						const capturedMotion = recordedSourceMotion( page );
+						const paintedEarlier: string[][] = capturedMotion ? [ await readPaintedTokens( referencePage ) ] : [];
 						const cleanup = await readSourceCleanup( referencePage );
 						entry.readiness.cleanup = cleanup;
 						if ( cleanup.failures.length || cleanup.residual ) entry.readiness.reasons.push( 'source cleanup incomplete' );
@@ -318,6 +324,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 								: `source image pending or failed: ${ image.url }` ) ];
 						}
 						entry.readiness.mediaReady = mediaReady;
+						if ( capturedMotion ) paintedEarlier.push( await readPaintedTokens( referencePage ) );
 						const sourceBrokenImages = await referencePage.evaluate( broken => broken.filter( item => [ ...document.images ].some( image => image.complete && image.naturalWidth === 0 && ( image.currentSrc || image.src ) === item.url ) ), [ ...brokenImages ].map( ( [ url, status ] ) => ( { url, status } ) ) );
 						if ( sourceBrokenImages.length ) entry.readiness.sourceBrokenImages = sourceBrokenImages;
 						entry.readiness.fontsReady = ! observation.typography?.some( text => ! text.loaded );
@@ -328,6 +335,11 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						const stability = await settleDocument( referencePage, 'reference-admission', { quietMs: 500, timeoutMs: 5_000, animations: true } );
 						if ( stability.reason !== 'quiet' ) entry.readiness.reasons.push( 'source document did not settle' );
 						if ( stability.excludedMotion?.length ) entry.readiness.diagnostics = [ ...entry.readiness.diagnostics ?? [], ...stability.excludedMotion.map( selector => `source perpetual motion excluded: ${ selector }` ) ];
+						// Document and screenshots describe one held moment, the one capture
+						// serialized: an autoplaying carousel shows the captured slide (#2007).
+						const motion = await alignSourceMotion( referencePage, capturedMotion, paintedEarlier );
+						releaseMotion = motion.release;
+						if ( motion.disagreement.length ) entry.readiness.diagnostics = [ ...entry.readiness.diagnostics ?? [], `source motion disagrees with capture after ${ MOTION_ALIGN_TIMEOUT_MS / 1000 }s: ${ motion.disagreement.slice( 0, 5 ).join( ', ' ) }` ];
 						const html = await referencePage.content();
 						const shell = matchClientErrorShell( html, options.clientErrorShellSelectors );
 						if ( shell ) entry.readiness.reasons.push( `source client error shell: ${ shell }` );
@@ -347,6 +359,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						// Idempotent: a failed cell still reports its runtime errors.
 						recordRuntimeErrors();
 						stopImageRequests?.();
+						await releaseMotion?.();
 						try { await releaseNavigation?.(); }
 						finally {
 							referencePage?.off( 'crash', rendererCrash );
