@@ -10,15 +10,15 @@ import { readResolvedPage } from './site-includes.js';
 const skipBrowser = Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() );
 
 // Issue #2022: a static site serves its homepage at both `/` and `/index.html`,
-// declares `/index.html` canonical, and links its navigation to
-// `/index.html#home`. A head script runs only at `/`, so the two captures of
+// declares each address self-canonical, and links its navigation to
+// `/#home` or `/index.html#home` respectively. A head script runs only at `/`, so the two captures of
 // the one document differ by capture node ids. Both addresses are one route,
 // and every page's header links to it the same way.
-const header = '<header><a href="/index.html#home">Home</a> <a href="/about.html">About</a></header>';
+const header = ( home: string ) => `<header><a href="${ home }#home">Home</a> <a href="/about.html">About</a></header>`;
 const page = ( title: string, canonical: string ) => `<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>${ title }</title>
 <link rel="canonical" href="${ canonical }"><script>if(location.pathname==='/')document.head.appendChild(document.createElement('meta')).name='entry-hint';</script><style>body{margin:0;font:16px sans-serif}header{padding:16px;background:#123}header a{color:#fff}main{padding:16px;min-height:400px}</style></head>
-<body>${ header }<main id="home"><h1>${ title }</h1><p>${ title } body copy.</p></main><footer><p>Neutral footer</p></footer></body></html>`;
+<body>${ header( canonical === '/' ? '/' : '/index.html' ) }<main id="home"><h1>${ title }</h1><p>${ title } body copy.</p></main><footer><p>Neutral footer</p></footer></body></html>`;
 
 it.skipIf( skipBrowser )( 'exports a homepage served at / and /index.html as one route with identical header links', async () => {
 	const parent = join( process.cwd(), '.tmp-test' );
@@ -28,7 +28,7 @@ it.skipIf( skipBrowser )( 'exports a homepage served at / and /index.html as one
 		const path = ( request.url ?? '/' ).split( '?' )[ 0 ];
 		if ( path === '/robots.txt' ) { response.end( '' ); return; }
 		response.setHeader( 'Content-Type', 'text/html' );
-		if ( path === '/' || path === '/index.html' ) { response.end( page( 'Home', '/index.html' ) ); return; }
+		if ( path === '/' || path === '/index.html' ) { response.end( page( 'Home', path ) ); return; }
 		if ( path === '/about.html' ) { response.end( page( 'About', '/about.html' ) ); return; }
 		response.statusCode = 404;
 		response.end( 'not found' );

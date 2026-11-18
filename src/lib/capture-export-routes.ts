@@ -252,6 +252,17 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 		$( '*' ).each( ( _, element ) => {
 			if ( element.type !== 'tag' ) return;
 			for ( const name of Object.keys( element.attribs ) ) if ( name.startsWith( 'data-blocks-engine-' ) ) delete element.attribs[ name ];
+			// Compare link targets, not their spelling: a default document and
+			// its directory are the same target, including for self-fragments.
+			if ( element.attribs.href !== undefined ) {
+				try {
+					const target = new URL( element.attribs.href, entry.url );
+					target.pathname = target.pathname.replace( /\/index\.html$/, '/' );
+					element.attribs.href = target.href;
+				} catch {
+					// Leave malformed authored links unchanged.
+				}
+			}
 		} );
 		const digest = createHash( 'sha256' ).update( $( 'body' ).html()?.trim() ?? '' ).digest( 'hex' );
 		contentDigests.set( entry, digest );
