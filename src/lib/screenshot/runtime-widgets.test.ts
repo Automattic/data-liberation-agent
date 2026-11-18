@@ -54,7 +54,9 @@ it('removes cross-origin runtime islands but preserves authored and same-origin 
 		} else {
 			const port = (server.address() as { port: number }).port;
 			response.setHeader('Content-Type', 'text/html');
-			response.end(`<!doctype html><html><body><h1>Authored page</h1>
+			// The page wraps createElement with its own inline script, so the
+			// wrapper's page-origin frame precedes the widget's in every stack.
+			response.end(`<!doctype html><html><head><script>Object.defineProperty(document, 'createElement', { configurable: true, value: function (...args) { return Document.prototype.createElement.apply(this, args); } });</script></head><body><h1>Authored page</h1>
 				<form id="authored" style="position:fixed"><input name="newsletter"></form>
 				<script>const own = document.createElement('div'); own.id = 'own-widget'; own.style.position = 'fixed'; own.innerHTML = '<form id="own-form"></form>'; document.body.append(own);</script>
 				<script>document.body.insertAdjacentHTML('beforeend', '<div id="own-html-widget" style="position:fixed"><form id="own-html-form"></form></div>');</script>
