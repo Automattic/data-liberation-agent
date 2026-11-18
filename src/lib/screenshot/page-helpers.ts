@@ -18,6 +18,8 @@ export interface SettleOutcome {
   ms: number;
   /** Proven recurring, layout-neutral scripted motion ignored by this wait. */
   excludedMotion?: string[];
+  /** Selectors of media still awaiting a mounted frame or source at the bound. */
+  pendingMedia?: string[];
 }
 
 const readinessSinks = new WeakMap<Page, (wait: string, outcome: SettleOutcome) => void>();
@@ -72,15 +74,15 @@ export function observePageTraffic( page: Page, telemetry?: TelemetryRequest ): 
 export async function settleDocument(
   page: Page,
   wait: string,
-  { quietMs, timeoutMs, animations = false, selector }: { quietMs: number; timeoutMs: number; animations?: boolean; selector?: string },
+  { quietMs, timeoutMs, animations = false, selector, media = false }: { quietMs: number; timeoutMs: number; animations?: boolean; selector?: string; media?: boolean },
 ): Promise<SettleOutcome> {
   const started = Date.now();
-  let result: Pick<SettleOutcome, 'reason' | 'excludedMotion'> = { reason: 'deadline' };
+  let result: Pick<SettleOutcome, 'reason' | 'excludedMotion' | 'pendingMedia'> = { reason: 'deadline' };
   try {
     result = await withEvaluateTimeout(
       page.evaluate(
-        ({ quietMs, timeoutMs, animations, selector }) =>
-          new Promise<Pick<SettleOutcome, 'reason' | 'excludedMotion'>>((resolve) => {
+        ({ quietMs, timeoutMs, animations, selector, media }) =>
+          new Promise<Pick<SettleOutcome, 'reason' | 'excludedMotion' | 'pendingMedia'>>((resolve) => {
             const started = performance.now();
             const deadline = started + timeoutMs;
             let lastMutation = started;
@@ -136,8 +138,43 @@ export async function settleDocument(
             const animating = () => animations && document.getAnimations().some((animation) =>
               animation.playState === 'running' && animation.timeline === document.timeline &&
               animation.effect?.getComputedTiming().iterations !== Infinity);
-            const settled = () => performance.now() - lastMutation >= quietMs && !animating();
+            const pendingMedia = () => {
+              if (!media) return [];
+              const pending: Element[] = [];
+              // Custom iframe hosts declare their purpose before mounting a
+              // frame; arbitrary empty divs are not evidence of pending media.
+              for (const host of document.querySelectorAll('*')) {
+                if (host.localName.endsWith('-iframe') && !host.querySelector('iframe')) pending.push(host);
+              }
+              for (const image of document.images) {
+                // A <picture> can select a source without any src on its img.
+                // Readiness concerns mounting, not decoding an authored source
+                // (including data: URLs).
+                if (image.currentSrc || image.getAttribute('src')?.trim() || image.getAttribute('srcset')?.trim() || !image.checkVisibility()) continue;
+                if (image.parentElement?.matches('picture') && [...image.parentElement.children].some(child =>
+                  child.matches('source[srcset]') && child.getAttribute('srcset')?.trim() &&
+                  (!child.getAttribute('media') || matchMedia(child.getAttribute('media')!).matches))) continue;
+                const lazy = image.closest('[data-src], [data-srcset], [data-lazy-src], [data-lazy-srcset], [data-image-info]');
+                const variants = [...(image.parentElement?.children ?? [])].some(sibling =>
+                  sibling !== image && sibling.matches('img, source') && (sibling.getAttribute('src')?.trim() || sibling.getAttribute('srcset')?.trim()));
+                if (lazy || variants || image.loading === 'lazy') pending.push(image);
+              }
+              return pending.map(element => {
+                if (element.id) return `#${CSS.escape(element.id)}`;
+                const path: string[] = [];
+                for (let node: Element | null = element; node; node = node.parentElement) {
+                  path.unshift(`${node.localName}:nth-child(${node.parentElement ? [...node.parentElement.children].indexOf(node) + 1 : 1})`);
+                }
+                return path.join(' > ');
+              });
+            };
+            const settled = () => performance.now() - lastMutation >= quietMs && !animating() && pendingMedia().length === 0;
+            let finished = false;
+            let deadlineTimer: ReturnType<typeof setTimeout>;
             const finish = (reason: 'quiet' | 'deadline') => {
+              if (finished) return;
+              finished = true;
+              clearTimeout(deadlineTimer);
               observer.disconnect();
               const excludedMotion = [...candidates].filter(([, candidate]) => candidate.excluded).map(([element]) => {
                 const path: string[] = [];
@@ -146,9 +183,11 @@ export async function settleDocument(
                 }
                 return path.join(' > ');
               });
-              resolve({ reason, ...(excludedMotion.length ? { excludedMotion } : {}) });
+              const pending = reason === 'deadline' ? pendingMedia() : [];
+              resolve({ reason, ...(excludedMotion.length ? { excludedMotion } : {}), ...(pending.length ? { pendingMedia: pending } : {}) });
             };
             const check = () => {
+              if (finished) return;
               for (const [element, candidate] of candidates) {
                 if (!element.isConnected || layoutBox(element) !== candidate.box) {
                   candidates.delete(element);
@@ -158,14 +197,19 @@ export async function settleDocument(
               if (performance.now() >= deadline) return finish('deadline');
               if (!settled()) return void setTimeout(check, 25);
               requestAnimationFrame(() => requestAnimationFrame(() => {
+                if (finished) return;
                 if (settled()) finish('quiet');
                 else if (performance.now() >= deadline) finish('deadline');
                 else setTimeout(check, 25);
               }));
             };
+            // Chromium may suspend animation frames for background/occluded
+            // pages. The bound must not depend on either confirmation frame:
+            // otherwise the in-page promise and observer survive Node's timeout.
+            deadlineTimer = setTimeout(() => finish('deadline'), timeoutMs);
             check();
           }),
-        { quietMs, timeoutMs, animations, selector },
+        { quietMs, timeoutMs, animations, selector, ...(media ? { media } : {}) },
       ),
       timeoutMs + 1_000,
     );
@@ -222,19 +266,23 @@ export async function settleDocument(
  * capture — it simply falls back to whatever the DOM looked like at the
  * deadline, same as every other best-effort wait in this file. A declared
  * loading state additionally keeps finite timer sequences from being frozen
- * during a quiet gap between text updates.
+ * during a quiet gap between text updates. Empty custom iframe hosts and visible
+ * source-less images with lazy-source or sibling-variant evidence hold that same
+ * DOM bound; an idle gap before their mount timer is not readiness.
  */
 export async function waitForStable(
   page: Page,
   domTimeoutMs: number = 5_000,
+  onPendingMedia?: (selectors: string[]) => void,
 ): Promise<void> {
   // Navigation already awaited `load` within its own budget; a subresource
   // that is still pending must not fail the route here either.
   await page.waitForLoadState('load', { timeout: 5_000 }).catch(orElse( undefined ));
-  await Promise.all([
+  const [, outcome] = await Promise.all([
     waitForNetworkQuiet(page, 'network-quiet'),
-    settleDocument(page, 'stable', { quietMs: 500, timeoutMs: domTimeoutMs }),
+    settleDocument(page, 'stable', { quietMs: 500, timeoutMs: domTimeoutMs, media: true }),
   ]);
+  if (outcome.pendingMedia?.length) onPendingMedia?.(outcome.pendingMedia);
   await waitForFonts(page);
   await waitForDeclaredLoadingState(page);
 }

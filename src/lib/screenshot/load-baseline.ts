@@ -214,7 +214,12 @@ export async function loadSourceBaseline( args: SourceLoadInput ): Promise<Sourc
 	// --- settle, dismiss overlays, lazy load ----------------------------------
 	args.phases?.enter( 'settle' );
 	if ( args.recoverIncompleteDocument ) await page.waitForTimeout( Math.max( settleMs, 3_000 ) );
-	await waitForStable( page );
+	await waitForStable( page, 5_000, selectors => {
+		for ( const selector of selectors ) args.diagnostics?.push( {
+			code: 'media_mount_pending',
+			reason: `${ url }: media component ${ selector } remained unmounted at the readiness deadline`,
+		} );
+	} );
 	// The shorter phone pass must not freeze a load-delayed iframe reveal.
 	// No hidden frames means no timer or observer; permanent hides are bounded.
 	if ( isMobile ) await withEvaluateTimeout( page.evaluate( waitForHiddenEmbeds, 5_000 ), evaluateTimeoutMs ).catch( orElse( undefined ) );
