@@ -15,6 +15,21 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.35.46] - 2026-11-18
+
+### Changed
+- regenerate plugin bundles
+- Key viewport entrances by rendered text
+- Settle viewport entrances visible when their CSS binding is lost
+
+### Fixed
+- fail unresolved copy anchors only when the copy does worse than the source
+- port App Market map widgets that name their location to a Google Maps embed
+- keep canonical instance ids stable when export re-canonicalizes a route
+- keep every referenced oversized crop of one family
+- report unavailable derivation sources instead of template failures
+- admit routes under a provisional memory estimate while the reference route calibrates
+
 ## [0.35.45] - 2026-11-18
 
 ### Changed
