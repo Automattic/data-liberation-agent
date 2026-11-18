@@ -23,6 +23,13 @@ let crashes = 0;
 let attempts = 0;
 let browser;
 const pending = [];
+function trackPending(kind, promise) {
+  const outcome = { attempt: attempts, kind, status: 'pending' };
+  pending.push({ outcome, settled: promise.then(
+    () => Object.assign(outcome, { status: 'resolved' }),
+    error => Object.assign(outcome, { status: 'rejected', message: error.message }),
+  ) });
+}
 const cleanup = [];
 const logs = [];
 try {
@@ -38,15 +45,19 @@ try {
       if (!persistent && attempts > 1) return;
       const cdp = await page.context().newCDPSession(page);
       const response = page.waitForResponse(origin + '/pending');
-      pending.push(page.evaluate(() => fetch('/pending').then(r => r.text())).then(() => 'resolved', e => e.message));
-      pending.push((await response).body().then(() => 'resolved', e => e.message));
-      pending.push(page.evaluate(() => {
+      trackPending('fetch evaluate', page.evaluate(() => fetch('/pending').then(r => r.text())));
+      trackPending('response body', (await response).body());
+      trackPending('hung evaluate', page.evaluate(() => {
+        // Runtime.callFunctionOn's awaitPromise does not keep an otherwise
+        // unreachable promise alive. Without this page-side root, V8 can reject
+        // with "Promise was collected" before Page.crash even runs.
+        window.pendingEvaluation = new Promise(() => {});
         window.pendingEvaluationStarted = true;
-        return new Promise(() => {});
-      }).then(() => 'resolved', e => e.message));
+        return window.pendingEvaluation;
+      }));
       await page.waitForFunction(() => window.pendingEvaluationStarted);
       const crash = new Promise(resolve => page.once('crash', resolve));
-      pending.push(cdp.send('Page.crash').then(() => 'resolved', e => e.message));
+      trackPending('Page.crash', cdp.send('Page.crash'));
       await crash;
       crashes++;
       assert.equal(browser.isConnected(), true, 'only the renderer must fail');
@@ -59,8 +70,17 @@ try {
   const healthy = manifest.entries[origin + '/healthy'];
   assert.match(readFileSync(join(outputDir, healthy.html), 'utf8'), /Healthy later route/);
   assert.ok(healthy.desktop, 'later route screenshot must exist');
-  const pendingOutcomes = await Promise.all(pending);
-  assert.ok(pendingOutcomes.every(message => /crashed|closed|Execution context was destroyed|Promise was collected/i.test(message)), 'all pending work must reject and settle');
+  const pendingOutcomes = pending.map(({ outcome }) => outcome);
+  let settlementTimer;
+  try {
+    await Promise.race([
+      Promise.all(pending.map(({ settled }) => settled)),
+      new Promise(resolve => { settlementTimer = setTimeout(resolve, 5000); }),
+    ]);
+  } finally {
+    clearTimeout(settlementTimer);
+  }
+  assert.ok(pendingOutcomes.every(({ status, message }) => status === 'rejected' && /crashed|closed|Execution context was destroyed/i.test(message)), `all pending work must reject and settle: ${JSON.stringify(pendingOutcomes)}`);
   assert.deepEqual(cleanup, [0, 0], 'every route must close its contexts');
   assert.equal(browser.isConnected(), false, 'capture must close its browser');
   const require = createRequire(import.meta.url);
