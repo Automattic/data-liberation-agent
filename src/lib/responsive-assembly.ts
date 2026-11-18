@@ -1472,22 +1472,32 @@ export type ResponsivePortableNormalization = 'absent' | 'applied' | 'pending';
 /** Content evidence excludes bootstrap payloads and authored hidden content. This
  * is a conservative completeness check, not an equivalence test: a large loss
  * of BOTH sections and text indicates a shell, not ordinary device reflow.
+ * Shared site chrome can carry enough sections and text to mask a shell, so an
+ * empty main landmark beside a populated one is also a shell.
  */
 export function incompleteDeviceDocument( desktopHtml: string, mobileHtml: string ) {
+	const MEDIA = 'img,video,svg,canvas,iframe';
 	const measure = ( html: string ) => {
 		const $ = cheerio.load( html );
 		$( 'script,style,noscript,template,[hidden],[aria-hidden="true"]' ).remove();
+		const main = $( 'body main,body [role="main"]' ).filter( ( _, element ) => $( element ).parents( 'main,[role="main"]' ).length === 0 );
 		return {
 			sections: $( 'body section' ).length,
 			textLength: $( 'body' ).text().replace( /\s+/g, ' ' ).trim().length,
-			media: $( 'body img,body video,body svg,body canvas,body iframe' ).length,
+			media: $( 'body' ).find( MEDIA ).length,
+			main: main.length > 0
+				? { textLength: main.text().replace( /\s+/g, ' ' ).trim().length, media: main.find( MEDIA ).length }
+				: undefined,
 		};
 	};
 	const desktop = measure( desktopHtml );
 	const mobile = measure( mobileHtml );
+	const empty = ( a: { textLength: number; media: number }, b: { textLength: number; media: number } ) =>
+		a.textLength === 0 && a.media === 0 && ( b.textLength >= 100 || b.media >= 3 );
 	const deficient = ( a: typeof desktop, b: typeof desktop ) =>
 		( b.sections >= 4 && a.sections <= b.sections / 4 && b.textLength >= 400 && a.textLength < b.textLength / 2 ) ||
-		( a.textLength === 0 && a.media === 0 && ( b.textLength >= 100 || b.media >= 3 ) );
+		empty( a, b ) ||
+		( a.main !== undefined && b.main !== undefined && empty( a.main, b.main ) );
 	const device = deficient( mobile, desktop ) ? 'mobile' : deficient( desktop, mobile ) ? 'desktop' : undefined;
 	return device ? { device, desktop, mobile } : undefined;
 }
