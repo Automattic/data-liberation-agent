@@ -373,9 +373,11 @@ function withNetworkCause(error: unknown): unknown {
   // TLS failures carry a long OpenSSL dump; their code says the same thing.
   const readable = detail.length <= 100 && !detail.includes('\n') ? detail : '';
   const reason = readable && code && !readable.includes(code) ? `${readable} (${code})` : readable || code;
-  const guidance = ['CERT_HAS_EXPIRED', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN'].includes(code)
-    ? ". The site's HTTPS certificate is invalid (expired or self-signed); fix the certificate or send an export."
-    : '';
+  const guidance = code === 'ERR_TLS_CERT_ALTNAME_INVALID'
+    ? ". The site's HTTPS certificate is for a different domain; fix the certificate or send an export."
+    : ['CERT_HAS_EXPIRED', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN'].includes(code)
+      ? ". The site's HTTPS certificate is invalid (expired or self-signed); fix the certificate or send an export."
+      : '';
   return reason ? new TypeError(`${error.message}: ${reason}${guidance}`, { cause: error.cause }) : error;
 }
 
