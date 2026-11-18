@@ -214,7 +214,7 @@ export async function settleDocument(
             deadlineTimer = setTimeout(() => finish('deadline'), timeoutMs);
             check();
           }),
-        { quietMs, timeoutMs, animations, selector, ...(media ? { media } : {}), timerOnly },
+        { quietMs, timeoutMs, animations, selector, ...(media ? { media } : {}), ...(timerOnly ? { timerOnly } : {}) },
       ),
       timeoutMs + 1_000,
     );
