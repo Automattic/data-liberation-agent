@@ -11,6 +11,7 @@ import {
 	googleMapsViewFromLink,
 	isWixGoogleMapFrame,
 	wixAppInstance,
+	wixAppMapView,
 	wixEmbedNote,
 } from './embeds.js';
 
@@ -25,6 +26,7 @@ const INSTANCE = `7UqG_EpycyF9calKVehmsqGeIuka3seGpv-QJJliLrY.${ base64Url( {
 	siteOwnerId: 'cf2dfb92-9277-42cc-8440-d28b68b81db4',
 } ) }`;
 const APP_WIDGET = `https://dev-wix-languages.appspot.com/widget?pageId=vt13i&compId=comp-l76p8of1&viewerCompId=comp-l76p8of1&width=180&height=180&instance=${ INSTANCE }&commonConfig=%7B%22host%22%3A%22VIEWER%22%7D`;
+const APP_MAP = `https://events.wixapps.net/events-server/html/google-map-v2?locale=de&lat=51.3396955&lng=12.3730747&instance=${ INSTANCE }`;
 const HTML_EMBED = 'https://www-example-hoa-test.filesusr.com/html/cf2dfb_0123456789abcdef0123456789abcdef.html';
 
 describe( 'isWixGoogleMapFrame', () => {
@@ -50,6 +52,20 @@ describe( 'wixAppInstance', () => {
 		// An `instance` parameter that is not a signed Wix payload is not an app widget.
 		expect( wixAppInstance( 'https://widgets.example.test/w?instance=42' ) ).toBeNull();
 		expect( wixAppInstance( `https://widgets.example.test/w?instance=abc.${ base64Url( { other: 1 } ) }` ) ).toBeNull();
+	} );
+} );
+
+describe( 'wixAppMapView', () => {
+	it( 'reads the location an App Market map widget names in its URL', () => {
+		expect( wixAppMapView( APP_MAP ) ).toEqual( { lat: 51.3396955, lng: 12.3730747 } );
+	} );
+
+	it( 'ignores app widgets that are not maps or name no location', () => {
+		expect( wixAppMapView( APP_WIDGET ) ).toBeNull();
+		expect( wixAppMapView( APP_MAP.replace( 'lat=51.3396955&', '' ) ) ).toBeNull();
+		expect( wixAppMapView( APP_MAP.replace( '51.3396955', 'north' ) ) ).toBeNull();
+		// Without a signed instance it is not a Wix app widget.
+		expect( wixAppMapView( 'https://maps.example.test/map?lat=51.3&lng=12.3' ) ).toBeNull();
 	} );
 } );
 
@@ -142,6 +158,23 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime embed
 			expect( html ).not.toContain( 'appspot.com' );
 			// A Wix HTML embed is a public file and keeps working as it is.
 			expect( await page.locator( '#html-embed' ).getAttribute( 'src' ) ).toBe( HTML_EMBED );
+		}
+	}, 30_000 );
+
+	it( 'points an App Market map widget at a Google Maps embed of the location in its URL', async ({ newPage }) => {
+
+		{
+			const page = await newPage();
+			await page.route( /events\.wixapps\.net|maps\.google\.com/, ( route ) =>
+				route.fulfill( { contentType: 'text/html', body: '<p>map</p>' } )
+			);
+			await page.setContent( `<style>body{margin:0}iframe{border:0;display:block;width:640px;height:320px}</style><div data-hook="map"><iframe title="Map" src="${ APP_MAP }"></iframe></div>` );
+			await portWixRuntimeEmbeds( page );
+			expect( await page.locator( '[data-blocks-engine-capture-unported-embed]' ).count() ).toBe( 0 );
+			const map = page.locator( 'iframe[title="Map"]' );
+			expect( await map.getAttribute( 'src' ) ).toBe( 'https://maps.google.com/maps?q=51.339695%2C12.373075&z=15&hl=de&output=embed' );
+			expect( await map.getAttribute( 'data-blocks-engine-capture-ported-embed' ) ).toBe( 'wix-google-map' );
+			expect( await page.content() ).not.toContain( 'instance=' );
 		}
 	}, 30_000 );
 
