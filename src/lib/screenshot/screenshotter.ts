@@ -40,6 +40,7 @@ import { attributeSourcePhase } from '../browser-kit/source-traffic.js';
 import { createPhaseBudget } from './phase-budget.js';
 import { AbsentDocumentProbes, isAbsentDocumentError, isSourceCaptureUrl } from './absent-document.js';
 import { installRuntimeWidgetAttribution } from './runtime-widgets.js';
+import { holdSourceMotion, observeMotionHold, readPaintedTokens, releaseSourceMotion, RouteMotionEvidence } from './motion-hold.js';
 import { cleanPortableScaffolding } from './portable-scaffolding.js';
 import { ManifestQueue, type ManifestEntry, type FailureEntry, type ProfileDiagnostic } from './manifest-queue.js';
 import { createPhaseLedger, routePhaseBreakdown } from './phase-ledger.js';
@@ -145,7 +146,7 @@ import { assignNodeIds, observeBoxTree, BOX_TREE_STYLES, NODE_ID_ATTRIBUTE } fro
 /** Failure reason for a route whose source app crashed into its client error shell. */
 const CLIENT_ERROR_SHELL_FAILURE = 'client error shell';
 
-export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnostic[], serverHtml?: string, onBoxTree?: (observation: import('./box-tree.js').BoxTreeObservation | undefined) => void ): Promise< string > {
+export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnostic[], serverHtml?: string, onBoxTree?: (observation: import('./box-tree.js').BoxTreeObservation | undefined) => void, onPainted?: ( painted: string[] ) => void ): Promise< string > {
 	const iframeEvidenceAttributes = {
 		src: 'data-blocks-engine-capture-visual-iframe-src',
 		width: 'data-blocks-engine-capture-visual-iframe-width',
@@ -304,6 +305,9 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 	// scrolled. Restore the initial pose immediately before taking the snapshot;
 	// one-way class changes are restored on the snapshot below.
 	await restoreTopScrollState( page );
+	// The source's own timers stay held from serialization until its painted
+	// state is read, so an autoplaying carousel cannot advance in between (#2007).
+	const motionHeld = onPainted ? await holdSourceMotion( page ) : false;
 	try {
 		// Serialize in the renderer's current task. page.content() round-trips through
 		// DevTools and can race framework hydration, pairing a newer class namespace
@@ -580,11 +584,13 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				for ( const { element, parent, next } of detached.reverse() ) parent.insertBefore( element, next );
 			}
 		}, { boxTreeSource: observeBoxTree.toString(), boxTreeProperties: BOX_TREE_STYLES, captureBoxes: Boolean(onBoxTree), stampSource: assignNodeIds.toString(), nodeIdAttribute: NODE_ID_ATTRIBUTE, initialScrollClassAttribute: INITIAL_SCROLL_CLASS_ATTRIBUTE, observeControlSource: observeNativeControlState.toString(), controlAttribute: NATIVE_CONTROL_STATE_ATTRIBUTE, portMapsSource: portRenderedGoogleMaps.toString(), mapHostSource: isGoogleMapHost.toString(), iframeEvidenceAttributes, scaffoldingSource: cleanPortableScaffolding.toString(), shadowSource: portStaticShadowContent.toString(), parseSrcsetSource: parseSrcset.toString(), srcsetShapedSource: isSrcsetShaped.toString() } );
+		if ( onPainted ) onPainted( await readPaintedTokens( page ) );
 		onBoxTree?.(result.boxNodes);
 		diagnostics?.push( ...result.findings );
 		for ( const omitted of result.omittedStyles ?? [] ) diagnostics?.push( { code: 'runtime_stylesheet_omitted', reason: `Omitted unmatched runtime stylesheet (${ omitted.bytes } bytes, ${ omitted.rules } rules)` } );
 		return wireNativeControlState( result.html );
 	} finally {
+		if ( motionHeld ) await releaseSourceMotion( page );
 		await page.evaluate( ( evidenceAttributes ) => {
 			for ( const frame of document.querySelectorAll( 'iframe' ) ) {
 				for ( const attribute of Object.values( evidenceAttributes ) ) {
@@ -1266,6 +1272,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	const sharedChromeEnabled = Boolean( entrypoint && ( opts.sharedChrome ?? ! opts.viewports ) && ( urls.length > 1 || frontier ) );
 	const sharedChromeResults = new Map< string, SharedChromeProbe >();
 	const rootClassEvidence = new RootClassEvidence();
+	const routeMotion = new RouteMotionEvidence();
 	if ( ! opts.viewports && desktopProfile && phoneProfile && entrypoint ) {
 		const sessionContext = await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly, governors: opts.governors } );
 		const requested = opts.deviceMode ?? 'dual';
@@ -1649,6 +1656,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					await context.addInitScript( observeViewportEntrances );
 					await context.addInitScript( observeRuntimeStyleWrites );
 					await context.addInitScript( observeViewportWork );
+					await context.addInitScript( observeMotionHold );
 					const page = await context.newPage();
 					await opts.initScript?.( page ).catch( orElse( undefined ) );
 					errorGuard = guardPageErrors( page, reason => {
@@ -1663,6 +1671,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							sourceContextOptions: contextOptions,
 							sourceTraffic: { governors: opts.governors, sourceUrl: entryUrl, sourceTelemetry: opts.sourceTelemetry },
 							rootClassEvidence,
+							routeMotion,
 							absentDocument: isSourceCaptureUrl( url, opts.primaryUrl ?? urls[ 0 ] ) ? undefined : html => absentDocumentProbes.matches( url, html, async sibling => {
 								// Same identity and source-governed context, but never navigate the
 								// candidate itself or add the nonce to the discovery frontier.
