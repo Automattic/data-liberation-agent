@@ -1558,6 +1558,13 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 			for ( const id of before.keys() ) if ( ! after.has( id ) && ! perpetual.has( id ) ) same = false;
 			return same;
 		};
+		// While a new rendition is pending, naturalWidth still describes the
+		// loaded current request. Width descriptors take intrinsic width from
+		// sizes and share an aspect ratio; unlike density or art-directed sources,
+		// this swap cannot change layout and needs neither scrolling nor rest.
+		const renditionSwap = ( image: HTMLImageElement ) => image.naturalWidth > 0 &&
+			! image.closest( 'picture' )?.querySelector( 'source' ) &&
+			!! image.srcset.trim() && image.srcset.split( ',' ).every( candidate => /^\S+\s+[1-9]\d*w$/.test( candidate.trim() ) );
 		const content = () => ( {
 			rendered: new Map( [ ...document.images ].map( image => [ image, image.getClientRects().length > 0 ] ) ),
 			sources: new Map( [ ...document.images ].map( image =>
@@ -1570,7 +1577,7 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 		// their geometry effect is already part of the sampled snapshot.
 		const revealedPending = ( current: ReturnType< typeof content >, swept: ReturnType< typeof content > ) =>
 			[ ...current.rendered ].some( ( [ image, rendered ] ) =>
-				rendered && swept.rendered.get( image ) !== true && ! image.complete && ! unreachable( image ) );
+				rendered && swept.rendered.get( image ) !== true && ! image.complete && ! renditionSwap( image ) && ! unreachable( image ) );
 		// Two height memories with different jobs. The threshold keeps this width's
 		// own first read: scroll-linked chrome (a header that shrinks once scrolled)
 		// makes the same content shorter mid-sweep and taller again at the top, so
@@ -1633,7 +1640,8 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 			// Short, untracked polling also progresses when the page stops rendering frames.
 			await sleep( 16 );
 			const currentContent = content();
-			const changedImages = [ ...currentContent.sources ].filter( ( [ image, source ] ) => source !== sweptContent.sources.get( image ) );
+			const changedImages = [ ...currentContent.sources ].filter( ( [ image, source ] ) =>
+				source !== sweptContent.sources.get( image ) && ! renditionSwap( image ) );
 			const currentHeight = document.documentElement.scrollHeight;
 			visitedHeight = Math.max( visitedHeight, currentHeight );
 			if ( lazy && ( revealedPending( currentContent, sweptContent ) ||
@@ -1664,7 +1672,7 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 			// visibility is re-read above, so a later reveal invalidates the sweep.
 			// Native-lazy images clipped out of view by an overflow ancestor are
 			// equally unreachable by this vertical sweep.
-			const imagesReady = ! lazy || [ ...document.images ].every( image => image.complete || image.getClientRects().length === 0 || unreachable( image ) ||
+			const imagesReady = ! lazy || [ ...document.images ].every( image => image.complete || renditionSwap( image ) || image.getClientRects().length === 0 || unreachable( image ) ||
 				stuck.get( image ) === currentContent.sources.get( image ) );
 			// Pending timeouts cover debounces. A missing tagged role can also
 			// be between an unwrap and an rAF-driven refit: allow a second quiet
