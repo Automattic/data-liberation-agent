@@ -348,6 +348,54 @@ describe( 'planPortableMediaFamilies', () => {
 		expect( materialized.mediaReplacements.get( wide.sourceUrl ) ).toBe( '/media/wide.avif' );
 	} );
 
+	it( 'ships a referenced oversized crop beside a bounded crop of another aspect ratio', () => {
+		const dir = tempDir( 'media-mixed-ceiling-crops-' );
+		const homepage = join( dir, 'home.html' );
+		const narrow = candidate( dir, 'narrow.avif', 'https://cdn.example/bg/w_800,h_1960/bg.png', 300_000, 1960 );
+		const wide = candidate( dir, 'wide.avif', 'https://cdn.example/bg/w_1440,h_2440/bg.png', 400_000, 2440 );
+		writeFileSync( homepage, `<main><img src="${ narrow.sourceUrl }"><img src="${ wide.sourceUrl }"></main>` );
+		// Each profile serialized its own crop: only the narrow one fits the
+		// portable dimension ceiling, and it cannot stand in for the wide one.
+		for ( const [ crop, width, height, fill ] of [ [ narrow, 800, 1960, 110 ], [ wide, 1440, 2440, 119 ] ] as const ) {
+			crop.imageAsset = {
+				source_urls: [ crop.sourceUrl ], references: [], resolved_original: crop.sourceUrl,
+				original: {
+					source_url: crop.sourceUrl, content_type: 'image/avif', width, height,
+					sha256: createHash( 'sha256' ).update( Buffer.alloc( crop.bytes, fill ) ).digest( 'hex' ),
+				},
+			};
+		}
+		const budget = 1024 * 1024;
+		const plan = planPortableMediaFamilies( [ { family: 'bg', candidates: [ narrow, wide ] } ], budget, homepage );
+		expect( plan.families[ 0 ].admitted.map( entry => entry.candidate.sourceUrl ).sort() ).toEqual( [ wide.sourceUrl, narrow.sourceUrl ].sort() );
+		const materialized = materializePortableMedia( {
+			websiteDir: join( dir, 'website' ), plan, maxBytes: budget,
+			retainedReferences: new Map( [ [ 'bg', [ narrow.sourceUrl, wide.sourceUrl ] ] ] ),
+			failedMedia: [],
+		} );
+		expect( materialized.mediaReplacements.get( narrow.sourceUrl ) ).toBe( '/media/narrow.avif' );
+		expect( materialized.mediaReplacements.get( wide.sourceUrl ) ).toBe( '/media/wide.avif' );
+	} );
+
+	it( 'keeps a bounded rendition in place of an oversized original of the same crop', () => {
+		const dir = tempDir( 'media-same-crop-ceiling-' );
+		const homepage = join( dir, 'home.html' );
+		const small = candidate( dir, 'small.avif', 'https://cdn.example/bg/w_1000,h_1700/bg.png', 300_000, 1700 );
+		const large = candidate( dir, 'large.avif', 'https://cdn.example/bg/w_1440,h_2448/bg.png', 400_000, 2448 );
+		writeFileSync( homepage, `<main><img src="${ small.sourceUrl }"><img src="${ large.sourceUrl }"></main>` );
+		for ( const [ crop, width, height, fill ] of [ [ small, 1000, 1700, 115 ], [ large, 1440, 2448, 108 ] ] as const ) {
+			crop.imageAsset = {
+				source_urls: [ crop.sourceUrl ], references: [], resolved_original: crop.sourceUrl,
+				original: {
+					source_url: crop.sourceUrl, content_type: 'image/avif', width, height,
+					sha256: createHash( 'sha256' ).update( Buffer.alloc( crop.bytes, fill ) ).digest( 'hex' ),
+				},
+			};
+		}
+		const plan = planPortableMediaFamilies( [ { family: 'bg', candidates: [ small, large ] } ], 1024 * 1024, homepage );
+		expect( plan.families[ 0 ].admitted.map( entry => entry.candidate.sourceUrl ) ).toEqual( [ small.sourceUrl ] );
+	} );
+
 	it( 'rejects changed verified bytes even during baseline admission', () => {
 		const dir = tempDir( 'media-integrity-' );
 		const homepage = join( dir, 'home.html' );

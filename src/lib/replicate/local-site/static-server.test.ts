@@ -1,6 +1,8 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, readdirSync, statSync, symlinkSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { connect } from 'node:net';
+import { once } from 'node:events';
 import { join } from 'node:path';
 import { startStaticServer, resolveRequestPath, type StaticServer } from './static-server.js';
 import { extractSharedChrome } from '../../shared-chrome.js';
@@ -28,6 +30,27 @@ function makeSite(): string {
 }
 
 describe('startStaticServer', () => {
+  it('closes without waiting for a speculative connection to send a request', async () => {
+    const dir = makeSite();
+    server = await startStaticServer(dir);
+    // Deterministic equivalent of Chromium preconnecting while the page's
+    // context remains alive: TCP is connected but no HTTP request is sent.
+    const socket = connect(server.port, '127.0.0.1');
+    try {
+      await once(socket, 'connect');
+      const closed = server.close();
+      await expect(Promise.race([
+        closed.then(() => true),
+        new Promise<boolean>(resolve => {
+          const timer = setTimeout(() => resolve(false), 1000);
+          void closed.finally(() => clearTimeout(timer));
+        }),
+      ])).resolves.toBe(true);
+    } finally {
+      socket.destroy();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
   it('stores both landmarks once, preserves expanded bytes, and propagates one edit to two HTTP routes', async () => {
     const dir = makeSite();
     try {

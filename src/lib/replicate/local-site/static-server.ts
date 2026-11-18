@@ -128,7 +128,12 @@ export function startStaticServer(root: string): Promise<StaticServer> {
       resolvePromise({
         url,
         port,
-        close: () => new Promise<void>((r) => server.close(() => r())),
+        close: () => new Promise<void>((r) => {
+          server.close(() => r());
+          // Browsers can preconnect without sending a request. Such sockets
+          // are not idle HTTP connections and can hold close() open forever.
+          server.closeAllConnections();
+        }),
         pageUrl: (slug: string) => (slug === 'home' ? `${url}/` : `${url}/${slug}/`),
         urlForPage: (relPath: string) => {
           const noExt = relPath.replace(/\.html?$/i, '');

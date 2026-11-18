@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { IntegrityError } from './failure-class.js';
+import { sameMediaAspectRatio } from './media-aspect-ratio.js';
 import { MAX_PORTABLE_MEDIA_BYTES, MAX_PORTABLE_MEDIA_DIMENSION } from './portable-media-limits.js';
 
 /**
@@ -166,19 +167,32 @@ function selectMediaCandidates( candidates: PortableMediaCandidate[], allEligibl
 	// oversized originals on upload. SVGs and non-images keep the dimension limit.
 	// Each referenced original stays: profiles can serialize different crops of
 	// one family, and a crop cannot stand in for another aspect ratio.
+	const keepsOriginal = ( candidate: PortableMediaCandidate ): boolean =>
+		candidate.bytes <= familyByteCap( candidate ) &&
+		!! candidate.imageAsset?.original?.content_type.startsWith( 'image/' ) &&
+		candidate.imageAsset.original.content_type !== 'image/svg+xml';
 	const oversizedOriginals = ! bounded.length && ! headOriginal
-		? candidates.filter( candidate =>
-			candidate.bytes <= familyByteCap( candidate ) &&
-			candidate.imageAsset?.original?.content_type.startsWith( 'image/' ) &&
-			candidate.imageAsset.original.content_type !== 'image/svg+xml'
-		).sort(
+		? candidates.filter( keepsOriginal ).sort(
 			( a, b ) => b.dimension - a.dimension || a.bytes - b.bytes || a.sourceUrl.localeCompare( b.sourceUrl )
 		)
 		: [];
 	const referencedOversized = oversizedOriginals.filter( candidate => candidate.exactReferences.length > 0 );
 	const unboundedOriginals = headOriginal ? [ headOriginal ] : referencedOversized.length > 0 ? referencedOversized : oversizedOriginals.slice( 0, 1 );
 	const selected = allEligible && bounded.length > 0 ? bounded : exact.length > 0 ? exact : fallback ? [ fallback ] : unboundedOriginals;
-	return [ ...selected ].sort(
+	// A bounded rendition only stands in for references of its own crop. A
+	// referenced oversized crop with no same-aspect selection would otherwise
+	// be blanked, so it ships as its original like an all-oversized family.
+	const uncoveredCrops = bounded.length > 0
+		? candidates.filter( candidate =>
+			candidate.dimension > MAX_PORTABLE_MEDIA_DIMENSION &&
+			candidate.exactReferences.length > 0 &&
+			keepsOriginal( candidate ) &&
+			! selected.some( chosen =>
+				!! chosen.imageAsset?.original &&
+				sameMediaAspectRatio( chosen.imageAsset.original, candidate.imageAsset!.original! ) )
+		)
+		: [];
+	return [ ...selected, ...uncoveredCrops ].sort(
 		( a, b ) =>
 			b.dimension - a.dimension || a.bytes - b.bytes || a.sourceUrl.localeCompare( b.sourceUrl )
 	);

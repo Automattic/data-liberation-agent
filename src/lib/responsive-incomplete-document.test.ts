@@ -30,4 +30,19 @@ describe( 'incomplete dual-device documents', () => {
 		// A successful fresh capture is no longer rejected.
 		expect( assemble( complete, complete ).html ).toContain( 'Real captured page content.' );
 	} );
+
+	it.each( [ 'desktop', 'mobile' ] as const )( 'detects a $device shell whose shared chrome masks an empty main landmark', device => {
+		// Reduced Wix shape: header and footer sections carry the chrome text;
+		// the page widget inside main serialized in its empty, unhydrated state.
+		const chrome = ( main: string ) => `<!doctype html><html><body><div id="site"><header><section>${ 'Shop Events Portfolio Contact '.repeat( 4 ) }</section></header><main id="pages"><section>${ main }</section></main><footer><section>${ 'Imprint Privacy Newsletter '.repeat( 4 ) }</section></footer></div></body></html>`;
+		const complete = chrome( `<h1>Pride Collection</h1><p>${ 'Collection description. '.repeat( 10 ) }</p>` );
+		const shell = chrome( '<div class="project-widget is-empty"></div>' );
+		const finding = incompleteDeviceDocument( device === 'desktop' ? shell : complete, device === 'mobile' ? shell : complete );
+		expect( finding ).toMatchObject( { device } );
+		expect( finding?.[ device ].main ).toEqual( { textLength: 0, media: 0 } );
+		expect( incompleteDeviceDocument( complete, complete ) ).toBeUndefined();
+		// Device reflow that keeps any main content is not a shell.
+		const sparse = chrome( '<img src="/hero.jpg" alt="">' );
+		expect( incompleteDeviceDocument( sparse, complete ) ).toBeUndefined();
+	} );
 } );

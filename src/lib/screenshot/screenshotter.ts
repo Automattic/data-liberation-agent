@@ -140,12 +140,12 @@ function sendLog( server: CaptureLogSink | undefined, message: string ): void {
 	}
 }
 
-import { observeBoxTree, BOX_TREE_STYLES } from './box-tree.js';
+import { assignNodeIds, observeBoxTree, BOX_TREE_STYLES, NODE_ID_ATTRIBUTE } from './box-tree.js';
 
 /** Failure reason for a route whose source app crashed into its client error shell. */
 const CLIENT_ERROR_SHELL_FAILURE = 'client error shell';
 
-export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnostic[], serverHtml?: string, onBoxTree?: (nodes: import('./box-tree.js').BoxTree['nodes'] | undefined) => void ): Promise< string > {
+export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnostic[], serverHtml?: string, onBoxTree?: (observation: import('./box-tree.js').BoxTreeObservation | undefined) => void ): Promise< string > {
 	const iframeEvidenceAttributes = {
 		src: 'data-blocks-engine-capture-visual-iframe-src',
 		width: 'data-blocks-engine-capture-visual-iframe-width',
@@ -318,7 +318,7 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 		// The installed source cleanup sweeps first, in this same task: the
 		// settle and media waits above give the source time to mount a widget
 		// after the last sweep, and no source script runs between these two.
-		const result = await page.evaluate( ( { boxTreeSource, boxTreeProperties, captureBoxes, observeControlSource, controlAttribute, portMapsSource, mapHostSource, iframeEvidenceAttributes, scaffoldingSource, shadowSource, parseSrcsetSource, srcsetShapedSource, initialScrollClassAttribute } ) => {
+		const result = await page.evaluate( ( { boxTreeSource, boxTreeProperties, captureBoxes, stampSource, nodeIdAttribute, observeControlSource, controlAttribute, portMapsSource, mapHostSource, iframeEvidenceAttributes, scaffoldingSource, shadowSource, parseSrcsetSource, srcsetShapedSource, initialScrollClassAttribute } ) => {
 			( window as unknown as { __dlaCleanup?: { sweep: () => void } } ).__dlaCleanup?.sweep();
 			const box = ( node: Element | null ) => {
 				const bounds = node?.getBoundingClientRect();
@@ -518,6 +518,11 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 					}
 				};
 			};
+			// The settle and media waits before this task let the source runtime
+			// insert or clone nodes after the caller's stamp. Identity is completed
+			// here, in the same task as the snapshot, so the saved bytes and the
+			// box-tree observation describe one fully stamped tree (#1924).
+			if ( captureBoxes ) ( new Function( 'return (' + stampSource + ')' )() as typeof assignNodeIds )( document, nodeIdAttribute );
 			const restoreParagraphDescendants = repairParagraphDescendants();
 			try {
 				// Keep authored reset defaults in markup and observed properties in a
@@ -551,7 +556,7 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				// copy. This runs last: the walks above pair document and snapshot
 				// nodes by position.
 				for ( const hidden of snapshot.querySelectorAll( '[data-blocks-engine-capture-cleanup-hidden]' ) ) hidden.remove();
-				const boxNodes = captureBoxes ? (new Function('return (' + boxTreeSource + ')')() as typeof observeBoxTree)(snapshot, boxTreeProperties, 'data-blocks-engine-node-id') : undefined;
+				const boxNodes = captureBoxes ? (new Function('return (' + boxTreeSource + ')')() as typeof observeBoxTree)(snapshot, boxTreeProperties, nodeIdAttribute) : undefined;
 				return { html: `<!DOCTYPE html>${ snapshot.outerHTML }`, boxNodes, findings, omittedStyles: ( window as typeof window & { __dlaOmittedRuntimeStyles?: Array<{ bytes: number; rules: number }> } ).__dlaOmittedRuntimeStyles ?? [] };
 			} finally {
 				restoreParagraphDescendants();
@@ -574,7 +579,7 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				}
 				for ( const { element, parent, next } of detached.reverse() ) parent.insertBefore( element, next );
 			}
-		}, { boxTreeSource: observeBoxTree.toString(), boxTreeProperties: BOX_TREE_STYLES, captureBoxes: Boolean(onBoxTree), initialScrollClassAttribute: INITIAL_SCROLL_CLASS_ATTRIBUTE, observeControlSource: observeNativeControlState.toString(), controlAttribute: NATIVE_CONTROL_STATE_ATTRIBUTE, portMapsSource: portRenderedGoogleMaps.toString(), mapHostSource: isGoogleMapHost.toString(), iframeEvidenceAttributes, scaffoldingSource: cleanPortableScaffolding.toString(), shadowSource: portStaticShadowContent.toString(), parseSrcsetSource: parseSrcset.toString(), srcsetShapedSource: isSrcsetShaped.toString() } );
+		}, { boxTreeSource: observeBoxTree.toString(), boxTreeProperties: BOX_TREE_STYLES, captureBoxes: Boolean(onBoxTree), stampSource: assignNodeIds.toString(), nodeIdAttribute: NODE_ID_ATTRIBUTE, initialScrollClassAttribute: INITIAL_SCROLL_CLASS_ATTRIBUTE, observeControlSource: observeNativeControlState.toString(), controlAttribute: NATIVE_CONTROL_STATE_ATTRIBUTE, portMapsSource: portRenderedGoogleMaps.toString(), mapHostSource: isGoogleMapHost.toString(), iframeEvidenceAttributes, scaffoldingSource: cleanPortableScaffolding.toString(), shadowSource: portStaticShadowContent.toString(), parseSrcsetSource: parseSrcset.toString(), srcsetShapedSource: isSrcsetShaped.toString() } );
 		onBoxTree?.(result.boxNodes);
 		diagnostics?.push( ...result.findings );
 		for ( const omitted of result.omittedStyles ?? [] ) diagnostics?.push( { code: 'runtime_stylesheet_omitted', reason: `Omitted unmatched runtime stylesheet (${ omitted.bytes } bytes, ${ omitted.rules } rules)` } );
