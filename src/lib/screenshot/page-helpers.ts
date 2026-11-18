@@ -154,10 +154,14 @@ export async function settleDocument(
                 if (image.parentElement?.matches('picture') && [...image.parentElement.children].some(child =>
                   child.matches('source[srcset]') && child.getAttribute('srcset')?.trim() &&
                   (!child.getAttribute('media') || matchMedia(child.getAttribute('media')!).matches))) continue;
-                const lazy = image.closest('[data-src], [data-srcset], [data-lazy-src], [data-lazy-srcset], [data-image-info]');
+                // Intersection-driven images belong to the later lazy-load sweep,
+                // not this stationary readiness wait (or its pending findings).
+                const box = image.getBoundingClientRect();
+                if (box.bottom <= 0 || box.top >= innerHeight || box.right <= 0 || box.left >= innerWidth ||
+                  image.loading === 'lazy' || image.closest('[loading="lazy"], [data-src], [data-srcset], [data-lazy-src], [data-lazy-srcset], [data-image-info]')) continue;
                 const variants = [...(image.parentElement?.children ?? [])].some(sibling =>
                   sibling !== image && sibling.matches('img, source') && (sibling.getAttribute('src')?.trim() || sibling.getAttribute('srcset')?.trim()));
-                if (lazy || variants || image.loading === 'lazy') pending.push(image);
+                if (variants) pending.push(image);
               }
               return pending.map(element => {
                 if (element.id) return `#${CSS.escape(element.id)}`;
@@ -267,8 +271,8 @@ export async function settleDocument(
  * deadline, same as every other best-effort wait in this file. A declared
  * loading state additionally keeps finite timer sequences from being frozen
  * during a quiet gap between text updates. Empty custom iframe hosts and visible
- * source-less images with lazy-source or sibling-variant evidence hold that same
- * DOM bound; an idle gap before their mount timer is not readiness.
+ * in-viewport source-less images with sibling-variant evidence hold that same
+ * DOM bound; intersection-driven images are owned by the lazy-load sweep.
  */
 export async function waitForStable(
   page: Page,
