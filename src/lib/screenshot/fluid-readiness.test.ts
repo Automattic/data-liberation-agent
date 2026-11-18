@@ -424,6 +424,71 @@ describe( 'responsive readiness contract', () => {
 		} finally { await page.close(); }
 	}, 30_000 );
 
+	// One browser pass per behavior; expected wall time: about 5 seconds each.
+	for ( const artDirected of [ false, true ] ) {
+		it( artDirected ? 'resweeps pending art-directed picture sources' : 'reuses sweeps for pending width-descriptor rendition swaps', async ({ newPage }) => {
+			const page = await newPage( { viewport: { width: 390, height: 900 } } );
+			const requests: string[] = [];
+			try {
+				await page.route( 'https://neutral.test/*.svg', async route => {
+					requests.push( route.request().url() );
+					if ( ! route.request().url().endsWith( '/a.svg' ) ) return; // Hold larger renditions pending until page.close().
+					await route.fulfill( { contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200"/>' } );
+				} );
+				await page.setContent( `<style>body{margin:0}img{width:50vw;height:auto}</style>
+					<div id="box" style="width:195px;height:40px">Neutral text</div>
+					<div style="height:6000px">
+					<div style="height:5500px"></div>
+					${ artDirected ? '<picture><source media="(min-width: 800px)" srcset="https://neutral.test/b.svg 800w, https://neutral.test/c.svg 1600w" sizes="50vw">' : '' }
+					<img src="https://neutral.test/a.svg" width="400" height="200" loading="lazy" srcset="https://neutral.test/a.svg 400w, https://neutral.test/b.svg 800w, https://neutral.test/c.svg 1600w" sizes="50vw">
+					${ artDirected ? '</picture>' : '' }</div>
+					<script>
+					window.positions = [];
+					const scroll = window.scrollTo.bind(window);
+					window.scrollTo = options => { if (options.top > 0) positions.push(options.top); scroll(options); };
+					const box = document.querySelector('#box');
+					function resize() { box.style.width = innerWidth / 2 + 'px'; }
+					addEventListener('resize', resize); resize();
+					</script>` );
+				// Load the first native-lazy rendition before learning, then restore
+				// the offscreen position. Only later width selections stay pending.
+				await page.locator( 'img' ).scrollIntoViewIfNeeded();
+				await page.waitForFunction( () => document.images[ 0 ].naturalWidth > 0 );
+				await page.evaluate( () => {
+					// Intercepted pending requests in this Chromium clear naturalWidth.
+					// Model the retained loaded current request explicitly; selection,
+					// native lazy loading and replacement requests remain browser-driven.
+					const image = document.images[ 0 ];
+					const loadedWidth = image.naturalWidth;
+					Object.defineProperty( image, 'naturalWidth', { get: () => loadedWidth } );
+					window.scrollTo( { top: 0 } );
+					( window as unknown as { positions: number[] } ).positions = [];
+				} );
+				const result = await learnAndApplyFluidGeometry( page, {
+					widths: [ 390, 1000, 1800 ], settleMs: 0,
+					prepareViewport: async source => {
+						const observed = await source.evaluate( () => ( { width: innerWidth,
+							loaded: document.images[ 0 ].naturalWidth > 0, pending: ! document.images[ 0 ].complete } ) );
+						if ( observed.width > 390 ) expect( observed ).toMatchObject( { loaded: true, pending: true } );
+					},
+				} );
+				const positions = await page.evaluate( () => ( window as unknown as { positions: number[] } ).positions );
+				console.info( JSON.stringify( { fixture: artDirected ? 'pending-art-direction' : 'pending-width-renditions', scrollCount: positions.length, positions, result } ) );
+				expect( requests ).toContain( 'https://neutral.test/b.svg' );
+				expect( requests ).toContain( 'https://neutral.test/c.svg' );
+				expect( result.applied ).toBeGreaterThan( 0 );
+				for ( const width of [ 600, 1200, 1440 ] ) {
+					await page.setViewportSize( { width, height: 900 } );
+					expect( await page.locator( '#box' ).evaluate( element => element.getBoundingClientRect().width ) ).toBeCloseTo( width / 2, 0 );
+					expect( await page.locator( 'img' ).evaluate( element => element.getBoundingClientRect().height ) ).toBeCloseTo( width / 4, 0 );
+				}
+				const firstSweep = [ 900, 1800, 2700, 3600, 4500, 5400 ];
+				if ( artDirected ) expect( positions.length ).toBeGreaterThan( firstSweep.length );
+				else expect( positions ).toEqual( firstSweep );
+			} finally { await page.close(); }
+		}, 30_000 );
+	}
+
 	it( 'sweeps a later width that grows the document past the extent earlier widths visited', async ({ newPage }) => {
 		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
