@@ -71,6 +71,7 @@ import { renderedEntryNavigation } from './entry-navigation.js';
 import { spreadSample } from './route-budget.js';
 import { RouteTimeBudget } from './capture-time-budget.js';
 import { captureWebsite, DEFAULT_REFERENCE_SAMPLE, DEFAULT_CAPTURE_TIME_BUDGET_MS, downloadCaptureSectionMedia, IncompleteCaptureError, isUsableCapture, templateGroupingLimits } from './capture.js';
+import type { CaptureProgress } from './capture.js';
 import { exportWebsiteCapture } from './capture-export.js';
 import { captureSitePreview } from './site-preview.js';
 import * as reference from './fidelity/reference.js';
@@ -1048,6 +1049,26 @@ describe( 'captureWebsite phase progress', () => {
 		);
 
 		expect( phases ).toEqual( [ 'discovering', 'capturing', 'media', 'finalizing', 'complete' ] );
+	} );
+
+	it( 'lists the routes selected for capture on the first capturing event', async () => {
+		const events: CaptureProgress[] = [];
+		await captureWebsite(
+			{ url: sourceUrl, outputDir: root, onProgress: ( event ) => events.push( event ) },
+			{
+				findAdapter: () => ( {
+					id: 'generic',
+					platform: 'generic',
+					discover: async () => ( { urls: [] } ),
+					extract: async () => ( { title: '', content: '' } ),
+				} ),
+			}
+		);
+
+		const capturing = events.filter( ( event ) => event.phase === 'capturing' );
+		expect( capturing[ 0 ] ).toMatchObject( { current: 0, total: capturing[ 0 ].urls?.length } );
+		expect( capturing[ 0 ].urls ).toContain( sourceUrl );
+		expect( capturing.slice( 1 ).every( ( event ) => event.urls === undefined ) ).toBe( true );
 	} );
 } );
 
