@@ -293,30 +293,48 @@ describe( 'planPortableMediaFamilies', () => {
 				sha256: createHash( 'sha256' ).update( Buffer.alloc( 360_000, 116 ) ).digest( 'hex' ),
 			},
 		};
-		// SVGs keep the existing dimension limit.
-		const poster = candidate( dir, 'poster.svg', 'https://cdn.example/poster.svg', 1000, 3000 );
+		// Vector media is exempt from the raster dimension ceiling; its declared
+		// size is a layout hint. A non-image over the ceiling stays excluded.
+		const poster = candidate( dir, 'poster.svg', 'https://cdn.example/poster.svg', 4137, 3000 );
 		poster.imageAsset = {
 			source_urls: [ poster.sourceUrl ], references: [], resolved_original: poster.sourceUrl,
 			original: {
-				source_url: poster.sourceUrl, content_type: 'image/svg+xml', width: 1000, height: 3000,
-				sha256: createHash( 'sha256' ).update( Buffer.alloc( 1000, 112 ) ).digest( 'hex' ),
+				source_url: poster.sourceUrl, content_type: 'image/svg+xml', width: 3000, height: 534,
+				sha256: createHash( 'sha256' ).update( Buffer.alloc( 4137, 112 ) ).digest( 'hex' ),
 			},
 		};
+		const video = candidate( dir, 'clip.mp4', 'https://cdn.example/clip.mp4', 1000, 3000 );
 		const budget = 1024 * 1024;
 		const plan = planPortableMediaFamilies(
-			[ { family: tall.sourceUrl, candidates: [ tall ] }, { family: poster.sourceUrl, candidates: [ poster ] } ],
+			[
+				{ family: tall.sourceUrl, candidates: [ tall ] },
+				{ family: poster.sourceUrl, candidates: [ poster ] },
+				{ family: video.sourceUrl, candidates: [ video ] },
+			],
 			budget,
 			homepage,
 		);
-		expect( plan.families.map( decision => decision.outcome ) ).toEqual( [ 'selected', 'limit-excluded' ] );
+		expect( plan.families.map( decision => decision.outcome ) ).toEqual( [ 'selected', 'selected', 'limit-excluded' ] );
 		expect( plan.families[ 0 ].admitted.map( entry => entry.candidate.sourceUrl ) ).toEqual( [ tall.sourceUrl ] );
 		const materialized = materializePortableMedia( {
 			websiteDir: join( dir, 'website' ), plan, maxBytes: budget,
-			retainedReferences: new Map( [ [ tall.sourceUrl, [ '/tall.jpg' ] ], [ poster.sourceUrl, [ '/poster.svg' ] ] ] ),
+			retainedReferences: new Map( [
+				[ tall.sourceUrl, [ '/tall.jpg' ] ], [ poster.sourceUrl, [ '/poster.svg' ] ], [ video.sourceUrl, [ '/clip.mp4' ] ],
+			] ),
 			failedMedia: [],
 		} );
 		expect( materialized.mediaReplacements.get( '/tall.jpg' ) ).toBe( '/media/tall.jpg' );
-		expect( materialized.mediaReplacements.get( '/poster.svg' ) ).toBe( TRANSPARENT_IMAGE_DATA_URL );
+		expect( materialized.mediaReplacements.get( '/poster.svg' ) ).toBe( '/media/poster.svg' );
+		expect( materialized.mediaReplacements.get( '/clip.mp4' ) ).not.toBe( '/media/clip.mp4' );
+	} );
+
+	it( 'keeps the per-file byte limit for SVGs exempt from the dimension ceiling', () => {
+		const dir = tempDir( 'media-svg-bytes-' );
+		const homepage = join( dir, 'home.html' );
+		writeFileSync( homepage, '<main><img src="https://cdn.example/huge.svg"></main>' );
+		const huge = candidate( dir, 'huge.svg', 'https://cdn.example/huge.svg', 5 * 1024 * 1024 + 1, 100 );
+		const plan = planPortableMediaFamilies( [ { family: huge.sourceUrl, candidates: [ huge ] } ], 64 * 1024 * 1024, homepage );
+		expect( plan.families[ 0 ].outcome ).toBe( 'limit-excluded' );
 	} );
 
 	it( 'ships every referenced crop of one family above the dimension ceiling', () => {

@@ -122,6 +122,21 @@ export function mediaReferenceMatched(
 	return index.matched.has( reference );
 }
 
+/**
+ * Vector media has no decode cost proportional to its declared size: an SVG's
+ * `width`/`height` is a layout hint, so the raster pixel ceiling does not
+ * apply. Byte limits still do.
+ */
+export function isVectorMediaCandidate( candidate: PortableMediaCandidate ): boolean {
+	const contentType = candidate.imageAsset?.original?.content_type;
+	if ( contentType ) return contentType.split( ';' )[ 0 ].trim().toLowerCase() === 'image/svg+xml';
+	return /\.svgz?$/i.test( candidate.localPath );
+}
+
+function withinDimensionLimit( candidate: PortableMediaCandidate ): boolean {
+	return candidate.dimension <= MAX_PORTABLE_MEDIA_DIMENSION || isVectorMediaCandidate( candidate );
+}
+
 function selectMediaCandidate(
 	candidates: PortableMediaCandidate[],
 	maxBytes: number,
@@ -129,7 +144,7 @@ function selectMediaCandidate(
 	const bounded = candidates.filter(
 		( candidate ) =>
 			candidate.bytes <= maxBytes &&
-			candidate.dimension <= MAX_PORTABLE_MEDIA_DIMENSION
+			withinDimensionLimit( candidate )
 	);
 	return [ ...bounded ].sort(
 		( a, b ) =>
@@ -138,9 +153,7 @@ function selectMediaCandidate(
 }
 
 function selectMediaCandidates( candidates: PortableMediaCandidate[], allEligible = false ): PortableMediaCandidate[] {
-	const dimensionBounded = candidates.filter(
-		( candidate ) => candidate.dimension <= MAX_PORTABLE_MEDIA_DIMENSION
-	);
+	const dimensionBounded = candidates.filter( withinDimensionLimit );
 	const responsiveFamily =
 		dimensionBounded.filter( ( candidate ) => candidate.exactReferences.length > 0 ).length > 1;
 	const familyByteCap = ( candidate: PortableMediaCandidate ): number =>
@@ -152,7 +165,7 @@ function selectMediaCandidates( candidates: PortableMediaCandidate[], allEligibl
 	const fallback = selectMediaCandidate( bounded, MAX_PORTABLE_RESPONSIVE_MEDIA_BYTES );
 	// Head-only raster images have no rendered geometry to constrain. If no
 	// portable rendition exists, keep the verified original within the byte cap.
-	// SVGs retain their existing dimension limit.
+	// SVGs are never dimension-excluded, so they are already bounded here.
 	const headOriginal = ! fallback ? candidates.find( candidate =>
 		candidate.bytes <= MAX_PORTABLE_MEDIA_BYTES &&
 		candidate.exactReferences.length > 0 &&
@@ -164,7 +177,8 @@ function selectMediaCandidates( candidates: PortableMediaCandidate[], allEligibl
 	// A raster original above the dimension ceiling stays a real image when the
 	// family has no bounded rendition and its verified bytes fit the byte cap:
 	// a placeholder would erase a picture the source shows, and WordPress scales
-	// oversized originals on upload. SVGs and non-images keep the dimension limit.
+	// oversized originals on upload. Non-images keep the dimension limit; SVGs
+	// are exempt from it and are already bounded.
 	// Each referenced original stays: profiles can serialize different crops of
 	// one family, and a crop cannot stand in for another aspect ratio.
 	const keepsOriginal = ( candidate: PortableMediaCandidate ): boolean =>
@@ -184,7 +198,7 @@ function selectMediaCandidates( candidates: PortableMediaCandidate[], allEligibl
 	// be blanked, so it ships as its original like an all-oversized family.
 	const uncoveredCrops = bounded.length > 0
 		? candidates.filter( candidate =>
-			candidate.dimension > MAX_PORTABLE_MEDIA_DIMENSION &&
+			! withinDimensionLimit( candidate ) &&
 			candidate.exactReferences.length > 0 &&
 			keepsOriginal( candidate ) &&
 			! selected.some( chosen =>

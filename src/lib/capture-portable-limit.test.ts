@@ -3,11 +3,18 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as cheerio from 'cheerio';
+import { PNG } from 'pngjs';
 import { expect, it } from 'vitest';
 import { captureWebsite } from './capture.js';
 import { srcsetReferences } from './srcset.js';
 import { captureAssets } from './image-assets.js';
 import { exportWebsiteCapture } from './capture-export.js';
+
+// A real PNG of `width` with the 2048x100 family's aspect ratio: the raster
+// stand-in the portable dimension ceiling is measured against. A `-scaled`
+// original shares its renditions' aspect, so a bounded rendition stands in.
+const bandPng = (width: number) => { const png = new PNG({ width, height: Math.round(width * 100 / 2048) }); png.data.fill(255); return PNG.sync.write(png); };
+const pngWidth = (file: string) => PNG.sync.read(readFileSync(file)).width;
 
 const TALL_JPG = () => readFileSync(fileURLToPath(new URL('../../test/fixtures/resource-assets/tall-1920x2880.jpg', import.meta.url)));
 
@@ -27,8 +34,8 @@ async function captureFixture(body: string, check: (outputDir: string, url: stri
 			return;
 		}
 		const width = request.url?.includes('2048x') ? 2048 : request.url?.includes('-scaled') ? 2560 : request.url?.includes('300x') ? 300 : 2048;
-		response.setHeader('content-type', request.url === '/' ? 'text/html' : 'image/svg+xml');
-		response.end(request.url === '/' ? `<!doctype html><html><head><title>Photos</title>${head}</head><body>${body}</body></html>` : `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="100"><rect width="100%" height="100%" fill="red"/></svg>`);
+		response.setHeader('content-type', request.url === '/' ? 'text/html' : 'image/png');
+		response.end(request.url === '/' ? `<!doctype html><html><head><title>Photos</title>${head}</head><body>${body}</body></html>` : bandPng(width));
 	});
 	await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
 	const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
@@ -62,16 +69,16 @@ async function captureFixture(body: string, check: (outputDir: string, url: stri
 }
 
 it('captures and exports the widest portable srcset representative', async () => {
-	await captureFixture('<img src="/photo-300x100.svg" srcset="/photo-300x100.svg 300w, /photo-2048x100.svg 2048w, /photo-scaled.svg 2560w"><img src="/portrait-1152x2048.svg" srcset="/portrait-1152x2048.svg 1152w, /portrait-scaled.svg 1440w">', (dir, url) => {
+	await captureFixture('<img src="/photo-300x100.png" srcset="/photo-300x100.png 300w, /photo-2048x100.png 2048w, /photo-scaled.png 2560w"><img src="/portrait-1152x2048.png" srcset="/portrait-1152x2048.png 1152w, /portrait-scaled.png 1440w">', (dir, url) => {
 		const manifest = JSON.parse(readFileSync(join(dir, 'resources/manifest.json'), 'utf8'));
-		expect(manifest.resources[url + 'photo-scaled.svg']).toEqual(manifest.resources[url + 'photo-2048x100.svg']);
-		expect(manifest.resources[url + 'portrait-scaled.svg']).toEqual(manifest.resources[url + 'portrait-1152x2048.svg']);
+		expect(manifest.resources[url + 'photo-scaled.png']).toEqual(manifest.resources[url + 'photo-2048x100.png']);
+		expect(manifest.resources[url + 'portrait-scaled.png']).toEqual(manifest.resources[url + 'portrait-1152x2048.png']);
 		const $ = cheerio.load(readFileSync(join(dir, 'website/index.html'), 'utf8'));
 		for (const reference of [$('img').attr('src')!, ...srcsetReferences($('img').attr('srcset') ?? '')]) {
 			expect(reference).toMatch(/^\/media\//);
 			const file = join(dir, 'website', reference);
 			expect(existsSync(file)).toBe(true);
-			expect(readFileSync(file, 'utf8')).toContain('width="2048"');
+			expect(pngWidth(file)).toBe(2048);
 		}
 	});
 }, 30_000);
@@ -106,15 +113,18 @@ it.each([
 	['-scaled-1', '-2048x100'],
 	['-scaled-1', '-scaled-1-2048x100'],
 ])('exports over-limit %s social originals using retained %s, but never a stub', async (suffix, rendition) => {
-	await captureFixture(`<meta property="og:image" content="/photo${suffix}.svg"><meta name="twitter:image" content="/photo${suffix}.svg"><meta property="og:image:url" content="/alone${suffix}.svg"><meta name="twitter:image:src" content="/standalone-300x100.svg"><img src="/photo${rendition}.svg">`, (dir, url) => {
+	await captureFixture(`<meta property="og:image" content="/photo${suffix}.png"><meta name="twitter:image" content="/photo${suffix}.png"><meta property="og:image:url" content="/alone${suffix}.png"><meta name="twitter:image:src" content="/standalone-300x100.png"><img src="/photo${rendition}.png">`, (dir, url) => {
 		const $ = cheerio.load(readFileSync(join(dir, 'website/index.html'), 'utf8'));
 		for (const selector of ['meta[property="og:image"]', 'meta[name="twitter:image"]']) {
 			const reference = $(selector).attr('content')!;
 			expect(reference).toBe($('img').attr('src'));
 			expect(reference).toMatch(/^\/media\//);
-			expect(readFileSync(join(dir, 'website', reference), 'utf8')).toContain('width="2048"');
+			expect(pngWidth(join(dir, 'website', reference))).toBe(2048);
 		}
-		expect($('meta[property="og:image:url"]').attr('content')).toBe(url + `alone${suffix}.svg`);
+		// A head-only raster original with no rendition ships as itself.
+		const alone = $('meta[property="og:image:url"]').attr('content')!;
+		expect(alone).toMatch(new RegExp(`^/media/alone${suffix}\\.png$`));
+		expect(existsSync(join(dir, 'website', alone))).toBe(true);
 		const standalone = $('meta[name="twitter:image:src"]').attr('content')!;
 		expect(standalone).toMatch(/^\/media\//);
 		expect(existsSync(join(dir, 'website', standalone))).toBe(true);
