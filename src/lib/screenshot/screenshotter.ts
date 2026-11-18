@@ -1036,7 +1036,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	// A sampled route that resolves to a redirect alias hands its sample slot to
 	// the route holding its document (see `onRouteAlias`).
 	const referenceRoutes = opts.referenceSampleUrls ? new Set( opts.referenceSampleUrls ) : undefined;
-	const admission = createRouteAdmission( { memoryLimit, referenceRoutes, report: message => sendLog( server, message ) } );
+	const admission = createRouteAdmission( { memoryLimit, referenceRoutes } );
 	const memoryAdmission = admission.enabled;
 	const browserRestartEvery = opts.browserRestartEvery ?? 100;
 	const screenshotTimeoutMs = opts.screenshotTimeoutMs ?? 30_000;
@@ -2014,7 +2014,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				};
 				try {
 					while ( ( cursor < segEnd && budgetAdmits() ) || running.size ) {
-						while ( cursor < segEnd && budgetAdmits() && running.size < concurrency && admission.admit( admission.kind( urls[ cursor ]! ), runningKinds.values(), completed ) ) {
+						while ( cursor < segEnd && budgetAdmits() && running.size < concurrency && admission.admit( admission.kind( urls[ cursor ]! ), runningKinds.values() ) ) {
 							const url = urls[ cursor++ ];
 							const kind = admission.kind( url );
 							routeBudget?.start( url );
