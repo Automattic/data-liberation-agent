@@ -164,17 +164,20 @@ function selectMediaCandidates( candidates: PortableMediaCandidate[], allEligibl
 	// family has no bounded rendition and its verified bytes fit the byte cap:
 	// a placeholder would erase a picture the source shows, and WordPress scales
 	// oversized originals on upload. SVGs and non-images keep the dimension limit.
-	const oversizedOriginal = ! bounded.length && ! headOriginal
+	// Each referenced original stays: profiles can serialize different crops of
+	// one family, and a crop cannot stand in for another aspect ratio.
+	const oversizedOriginals = ! bounded.length && ! headOriginal
 		? candidates.filter( candidate =>
 			candidate.bytes <= familyByteCap( candidate ) &&
 			candidate.imageAsset?.original?.content_type.startsWith( 'image/' ) &&
 			candidate.imageAsset.original.content_type !== 'image/svg+xml'
 		).sort(
 			( a, b ) => b.dimension - a.dimension || a.bytes - b.bytes || a.sourceUrl.localeCompare( b.sourceUrl )
-		)[ 0 ]
-		: undefined;
-	const unboundedOriginal = headOriginal ?? oversizedOriginal;
-	const selected = allEligible && bounded.length > 0 ? bounded : exact.length > 0 ? exact : fallback ? [ fallback ] : unboundedOriginal ? [ unboundedOriginal ] : [];
+		)
+		: [];
+	const referencedOversized = oversizedOriginals.filter( candidate => candidate.exactReferences.length > 0 );
+	const unboundedOriginals = headOriginal ? [ headOriginal ] : referencedOversized.length > 0 ? referencedOversized : oversizedOriginals.slice( 0, 1 );
+	const selected = allEligible && bounded.length > 0 ? bounded : exact.length > 0 ? exact : fallback ? [ fallback ] : unboundedOriginals;
 	return [ ...selected ].sort(
 		( a, b ) =>
 			b.dimension - a.dimension || a.bytes - b.bytes || a.sourceUrl.localeCompare( b.sourceUrl )
