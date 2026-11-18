@@ -17,51 +17,65 @@ function observeRuntimeWidgets(): void {
 		return [...root.querySelectorAll('*')].some(child => getComputedStyle(child).position === 'fixed');
 	};
 	const roots = new Map<Element, string>();
-	const scriptUrl = (): string | undefined => {
+	// A page can wrap the hooked API with its own script. Its frame is named for
+	// the API (`HTMLDocument.value [as createElement] (...)`, `.createElement (`)
+	// or for the wrapper the receiver now resolves (`HTMLDocument.value (`), so
+	// skip those and attribute the next script frame, the actual caller.
+	const scriptUrl = (receiver: unknown, api: string): string | undefined => {
 		const current = document.currentScript;
 		if (current instanceof HTMLScriptElement) return current.src || document.URL;
-		const stack = new Error().stack ?? '';
-		return stack.match(/https?:\/\/[^\s)]+?(?=:\d+:\d+(?:\)|\s|$))/)?.[0];
+		const names = [api];
+		try {
+			const wrapper: unknown = (receiver as Record<string, unknown>)[api];
+			if (typeof wrapper === 'function' && /^[\w$]+$/.test(wrapper.name)) names.push(wrapper.name);
+		} catch { /* An exotic receiver contributes no wrapper name. */ }
+		const implementsApi = new RegExp(`(?:\\.|\\[as |at )(?:${names.join('|').replace(/\$/g, '\\$')})\\]? \\(`);
+		for (const frame of (new Error().stack ?? '').split('\n').slice(1)) {
+			if (implementsApi.test(frame)) continue;
+			const url = frame.match(/https?:\/\/[^\s)]+?(?=:\d+:\d+(?:\)|\s|$))/)?.[0];
+			if (url) return url;
+		}
+		return undefined;
 	};
 	const create = Document.prototype.createElement;
 	Document.prototype.createElement = function (...args: Parameters<typeof create>) {
 		const element = create.apply(this, args);
-		const source = scriptUrl();
+		const source = scriptUrl(this, 'createElement');
 		if (source) owners.set(element, source);
 		return element;
 	};
-	const remember = (node: Node): void => {
+	const remember = (receiver: Node, node: Node, api: string): void => {
 		if (!(node instanceof Element) || node.parentElement !== document.body) return;
 		const source = owners.get(node);
-		const inserter = scriptUrl();
+		const inserter = scriptUrl(receiver, api);
 		if (source && inserter && originOf(source) === originOf(inserter)) roots.set(node, source);
 	};
 	const appendChild = Node.prototype.appendChild;
 	Node.prototype.appendChild = function <T extends Node>(node: T): T {
 		const result = appendChild.call(this, node) as T;
-		remember(node);
+		remember(this, node, 'appendChild');
 		return result;
 	};
 	const insertBefore = Node.prototype.insertBefore;
 	Node.prototype.insertBefore = function <T extends Node>(node: T, child: Node | null): T {
 		const result = insertBefore.call(this, node, child) as T;
-		remember(node);
+		remember(this, node, 'insertBefore');
 		return result;
 	};
 	const append = Element.prototype.append;
 	Element.prototype.append = function (...nodes: (Node | string)[]): void {
 		append.apply(this, nodes);
-		for (const node of nodes) if (node instanceof Node) remember(node);
+		for (const node of nodes) if (node instanceof Node) remember(this, node, 'append');
 	};
 	const prepend = Element.prototype.prepend;
 	Element.prototype.prepend = function (...nodes: (Node | string)[]): void {
 		prepend.apply(this, nodes);
-		for (const node of nodes) if (node instanceof Node) remember(node);
+		for (const node of nodes) if (node instanceof Node) remember(this, node, 'prepend');
 	};
 	const insertAdjacentElement = Element.prototype.insertAdjacentElement;
 	Element.prototype.insertAdjacentElement = function (position: InsertPosition, element: Element): Element | null {
 		const result = insertAdjacentElement.call(this, position, element);
-		if (result) remember(result);
+		if (result) remember(this, result, 'insertAdjacentElement');
 		return result;
 	};
 	const insertAdjacentHTML = Element.prototype.insertAdjacentHTML;
@@ -72,7 +86,7 @@ function observeRuntimeWidgets(): void {
 		const parent = where === 'beforebegin' || where === 'afterend' ? this.parentElement : this;
 		const previous = where === 'beforebegin' ? this.previousSibling : where === 'afterend' ? this : where === 'afterbegin' ? null : this.lastChild;
 		const next = where === 'beforebegin' ? this : where === 'afterend' ? this.nextSibling : where === 'afterbegin' ? this.firstChild : null;
-		const source = scriptUrl();
+		const source = scriptUrl(this, 'insertAdjacentHTML');
 		insertAdjacentHTML.call(this, position, text);
 		if (parent !== document.body || !source) return;
 		for (let node = previous ? previous.nextSibling : parent.firstChild; node && node !== next; node = node.nextSibling) {
