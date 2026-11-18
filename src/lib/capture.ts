@@ -559,7 +559,7 @@ async function runCaptureWebsite(
 		: undefined;
 	const navigationTargets = new Set( extractNavigationLandmarkLinks( entryHtml, sourceUrl ).map( link => normalizedUrl( link.href ) ) );
 	// Shape sub-clusters (#1805) seed their own representative and verifier.
-	const clusterRankingGroups = templateGrouping?.report
+	let clusterRankingGroups = templateGrouping?.report
 		? ( await import( './template-groups.js' ) ).templateClusterRankingGroups( templateGrouping.report.groups, structuredMemberShape( contentSource, contentEntries ) )
 		: [];
 	// Explicit count budgets select before capture observes the entry DOM. Only
@@ -681,12 +681,14 @@ async function runCaptureWebsite(
 				frontierRemaining -= urls.length;
 				for ( const url of urls ) frontierOffered.add( url );
 				try {
-					const { extendTemplateGroups } = await import( './template-groups.js' );
+					const { extendTemplateGroups, templateClusterRankingGroups } = await import( './template-groups.js' );
 					await extendTemplateGroups( report, {
 						sourceUrl, urls, routeScope, governors: sourceGovernors,
 						styleNormalization: adapter.templateStyleNormalization, templateIdentity: adapter.templateIdentity,
 						limits: { ...frontierGroupingLimits, maxRoutes: urls.length, maxTotalBytes: Math.floor( frontierGroupingLimits.maxTotalBytes / 3 ), timeBudgetMs: Math.max( 1, frontierDeadline - Date.now() ) },
 					}, true );
+					// Rank pending work against the groups this frontier pass admitted.
+					clusterRankingGroups = templateClusterRankingGroups( report.groups, structuredMemberShape( contentSource, contentEntries ) );
 				} catch ( error ) {
 					process.stderr.write( `[template-groups] frontier grouping unavailable: ${ error instanceof Error ? error.message : String( error ) }\n` );
 				}
