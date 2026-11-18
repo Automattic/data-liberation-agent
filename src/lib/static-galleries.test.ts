@@ -24,3 +24,18 @@ describe('wireCapturedGalleries src-swap cycles', () => {
 		}
 	}, 30_000);
 });
+
+describe('wireCapturedGalleries frame stages', () => {
+	it('drops the source track translation from a frame-wired stage', () => {
+		const frames = [0, 1, 2].map(i => ({ key: `k${i}`, html: `<div class="slide">Quote ${i}</div>`, text: [] }));
+		const state: CapturedDialogInteraction = {
+			status: 'no-dialog', kind: 'gallery', trigger: { selector: '.slider', tag: 'div', ariaHaspopup: '', dataBindings: {} },
+			gallery: { inline: { selector: '.slider', stage: '.track', next: '.next', previous: '.prev', viewport: { width: 1440, height: 900 }, order: [], initial: 2, coverage: 'complete', restoration: 'verified', autoplay: 'unmeasured', frames } },
+		};
+		const html = wireCapturedGalleries(`<html><head></head><body><div class="slider"><div class="track" style="display:flex; transform: translate3d(-1200px,0px,0px); translate: -10px; gap:4px">${frames.map(f => f.html).join('')}</div><button class="prev">p</button><button class="next">n</button></div></body></html>`, [state]);
+		const stage = /<div class="track"[^>]*>/.exec(html)![0];
+		expect(stage).toContain('data-blocks-engine-capture-gallery-stage');
+		expect(stage).not.toMatch(/transform|translate/);
+		expect(stage).toContain('display:flex;gap:4px');
+	});
+});
