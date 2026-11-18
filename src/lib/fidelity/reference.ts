@@ -6,7 +6,7 @@ import { installProbeIntrinsics } from '../browser-kit/probe-intrinsics.js';
 import { PNG } from 'pngjs';
 import { observePage, routeSourceMap } from './check.js';
 import { spreadSample } from '../route-budget.js';
-import { cleanupPolicy, readSourceCleanup, type CleanupReport } from '../source-cleanup.js';
+import { cleanupPolicy, cleanupPolicyForResponse, readSourceCleanup, type CleanupReport } from '../source-cleanup.js';
 import type { LayoutObservation } from './score.js';
 import { isRouteDrift, navigationDocumentUrl, matchClientErrorShell } from '../screenshot/document-integrity.js';
 import { applyCaptureRemovals } from '../screenshot/apply-removals.js';
@@ -259,6 +259,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						referencePage.on( 'crash', rendererCrash );
 						await referencePage.addInitScript( observeViewportEntrances );
 						await referencePage.addInitScript( observeMotionHold );
+						let referencePolicy = options.cleanupPolicy ?? cleanupPolicy();
 						if ( url !== 'about:blank' ) {
 							const navigation = options.routeScope || options.initializePage ? await navigateSourceDocument( referencePage, url, { publicUrlsOnly: options.publicUrlsOnly, routeScope: options.routeScope } ) : undefined;
 							if ( navigation?.boundary || navigation?.redirectedTo ) throw new Error( 'Reference document changed its route ownership or identity' );
@@ -267,13 +268,17 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 							const response = navigation ? navigation.response : await referencePage.goto( url, { waitUntil: 'domcontentloaded', timeout: 60_000 } );
 							if ( response && ! response.ok() ) throw new Error( `Reference navigation HTTP ${ response.status() }` );
 							navigationUrl = navigationDocumentUrl( url, response?.url() ?? url, Boolean( response?.request().redirectedFrom() ) );
+							// Same host residue capture removed from this response, so the
+							// frozen screenshot and the captured DOM agree.
+							const served = await Promise.resolve().then( () => response?.text() ).catch( () => undefined );
+							referencePolicy = cleanupPolicyForResponse( referencePolicy, response, served ?? '' );
 						}
 						releaseNavigation = await lockMainFrameNavigation(referencePage, () => entry.readiness.reasons.push('source route drift'), true);
 						entry.userAgent = await referencePage.evaluate( () => navigator.userAgent );
 						entry.deviceScaleFactor = await referencePage.evaluate( () => window.devicePixelRatio );
 						entry.browserProfile = browserProfile;
 						if ( ! browserProfile ) entry.readiness.reasons.push( 'source browser profile unproven' );
-						const observation = await observePage( referencePage, url, viewport, 0, null, options.cleanupPolicy ?? cleanupPolicy(), async () => {
+						const observation = await observePage( referencePage, url, viewport, 0, null, referencePolicy, async () => {
 							await applyCaptureRemovals( referencePage!, { removeSelectors: options.removeSelectors, prepare: options.prepareCapture, ctx: { url, viewport: device } } );
 							// Scrolling and adapter preparation can swap a decoded image's
 							// rendition. Settle that request before measuring the baseline;

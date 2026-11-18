@@ -11,6 +11,8 @@ export interface CleanupRule {
    *  (a site-members login), so a copy can only ship it broken. */
   category: CleanupCategory;
   selector: string;
+  /** The match counts only when its open shadow root contains this selector. */
+  shadowSelector?: string;
   /** Detected deployment host and its residue attribution. */
   host?: string;
   evidence?: string;
@@ -156,7 +158,7 @@ export function validateCleanupPolicy(value: unknown): asserts value is CleanupP
     policy.builderChrome?.affordance !== BUILDER_CHROME_PATTERNS.affordance ||
     !Array.isArray(policy.rules) || policy.rules.length > 100 ||
     policy.rules.some((rule) => !rule || typeof rule.id !== 'string' || typeof rule.selector !== 'string' ||
-      rule.selector.length > 2000 || !(CLEANUP_CATEGORIES as readonly string[]).includes(rule.category) ||
+      rule.selector.length > 2000 || (rule.shadowSelector !== undefined && (typeof rule.shadowSelector !== 'string' || rule.shadowSelector.length > 2000)) || !(CLEANUP_CATEGORIES as readonly string[]).includes(rule.category) ||
       (rule.accessGate !== undefined && (typeof rule.accessGate?.provider !== 'string' || !rule.accessGate.provider || rule.accessGate.provider.length > 100)) ||
       (rule.creditText !== undefined && (typeof rule.creditText !== 'string' || rule.creditText.length > 100)) ||
       (rule.reclaimVariables !== undefined && (!Array.isArray(rule.reclaimVariables) || rule.reclaimVariables.length > 20 ||
@@ -353,6 +355,10 @@ export function installCleanupInPage(args: { policy: CleanupPolicy; recovered?: 
     return parts.join(' > ');
   };
   const eligible = (node: Element, rule: CleanupRule) => {
+    if (rule.shadowSelector) {
+      try { if (!node.shadowRoot?.querySelector(rule.shadowSelector)) return false; }
+      catch { if (!report.failures.includes(rule.id)) report.failures.push(rule.id); return false; }
+    }
     if (rule.trackingImage) {
       if (node.tagName !== 'IMG' || node.closest('a[href],[role="link"]') || node.getAttribute('alt')?.trim()) return false;
       // A tracking pixel is a loaded resource of a few pixels (Jetpack Stats

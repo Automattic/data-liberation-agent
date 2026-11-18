@@ -36,7 +36,7 @@ export const INSPECT_ASSET_MAX_BYTES = 2 * 1024 * 1024;
 const RENDERED_REQUESTS_PER_ORIGIN = 6;
 export type SourceCapability = (typeof SOURCE_CAPABILITIES)[number];
 /** One host-injected surface to attribute away from the source. */
-export interface HostResidue { host: string; selector: string; evidence: string }
+export interface HostResidue { host: string; selector: string; shadowSelector?: string; evidence: string }
 export interface CapabilityRule {
   capability: SourceCapability;
   selector: string;
@@ -199,7 +199,10 @@ export async function createRenderedInspector(signal: AbortSignal, requestTimeou
           // reported, so an exclusion is auditable rather than invisible.
           const injected = new Set<Element>();
           const excluded = residue.map((rule) => {
-            const roots = [...document.querySelectorAll(rule.selector)];
+            const roots = [...document.querySelectorAll(rule.selector)].filter((root) => {
+              if (!rule.shadowSelector) return true;
+              try { return Boolean(root.shadowRoot?.querySelector(rule.shadowSelector)); } catch { return false; }
+            });
             for (const root of roots) {
               injected.add(root);
               for (const node of root.querySelectorAll('*')) injected.add(node);
