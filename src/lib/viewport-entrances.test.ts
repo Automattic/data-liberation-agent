@@ -177,15 +177,17 @@ addEventListener('scroll', update, { passive: true }); update();
 		}
 	}, 30_000 );
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )( 'matches an entrance whose copy drops the whitespace between its elements', async ({ newPage }) => {
+	it.skipIf( process.env.SKIP_BROWSER_TESTS )( 'matches an entrance by its rendered text, not serialization or unrendered markup', async ({ newPage }) => {
 
-		{
-			const page = await newPage( { viewport: { width: 1024, height: 700 } } );
-			const formatted = fixture( false ).replace( 'Viewport entrance</section>', '\n  <h2>Viewport</h2>\n  <p>entrance</p>\n</section>' );
-			const source = await observePage( page, `data:text/html,${ encodeURIComponent( formatted ) }`, 1024, 300, null );
-			const copy = await observePage( page, `data:text/html,${ encodeURIComponent( formatted.replace( /\n\s*/g, '' ) ) }`, 1024, 300, null );
-			expect( source.entranceTransitions ).toHaveLength( 2 );
-			expect( checkMotion( source, copy ) ).toEqual( {} );
+		const page = await newPage( { viewport: { width: 1024, height: 700 } } );
+		const formatted = fixture( false ).replace( 'Viewport entrance</section>', '\n  <h2>Viewport</h2>\n  <p>entrance</p>\n</section>' );
+		const source = await observePage( page, `data:text/html,${ encodeURIComponent( formatted ) }`, 1024, 300, null );
+		expect( source.entranceTransitions ).toHaveLength( 2 );
+		for ( const copy of [
+			formatted.replace( /\n\s*/g, '' ),
+			formatted.replace( '<p>entrance</p>', '<p>entrance</p><div style="display:none">Thank you for your response.</div>' ),
+		] ) {
+			expect( checkMotion( source, await observePage( page, `data:text/html,${ encodeURIComponent( copy ) }`, 1024, 300, null ) ) ).toEqual( {} );
 		}
 	}, 30_000 );
 
