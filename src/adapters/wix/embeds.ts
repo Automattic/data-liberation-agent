@@ -39,6 +39,18 @@ const WIX_PINNED_CHAT_SELECTOR = `${ WIX_AI_ASSISTANT_LAYER }, ${ WIX_CHAT_LAUNC
 
 const MAP_LOCATION_WAIT_MILLISECONDS = 5_000;
 const MAP_EMBED_LOAD_MILLISECONDS = 5_000;
+const EVENT_MAP_MOUNT_MILLISECONDS = 8_000;
+
+/**
+ * Wix Events' venue map on an event details page. Its widget renders the host
+ * server-side but mounts the map itself in an effect after the widget's
+ * deferred hydration (about five seconds after `load` in Chromium, whatever
+ * the page does meanwhile): the desktop host `<div data-hook="map">` then
+ * gains an app map iframe, and the phone `<img data-hook="map">` (inside a
+ * Google Maps search link) gains a static-map `src` it fetches from the events
+ * server. Until then the host is an empty box or a source-less image.
+ */
+export const WIX_EVENT_MAP_SELECTOR = '#event-details-page-map[data-hook="map"]';
 
 export interface MapView {
 	lat: number;
@@ -126,6 +138,48 @@ function validMapView( view: Partial< MapView > | null | undefined ): MapView | 
 	if ( lat === 0 && lng === 0 ) return null;
 	const z = typeof zoom === 'number' && Number.isFinite( zoom ) ? Math.min( 21, Math.max( 1, Math.round( zoom ) ) ) : undefined;
 	return { lat, lng, ...( z ? { zoom: z } : {} ) };
+}
+
+/** Read a location from a Google Maps search link (`maps/search/?api=1&query=<lat>,<lng>`). */
+export function googleMapsViewFromSearchLink( href: string ): MapView | null {
+	const url = parseUrl( href );
+	if ( ! url || ! /(^|\.)google\.[a-z.]+$/.test( url.hostname ) || ! /^\/maps\/search\/?$/.test( url.pathname ) ) return null;
+	const match = /^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/.exec( url.searchParams.get( 'query' ) ?? '' );
+	return match ? validMapView( { lat: Number( match[ 1 ] ), lng: Number( match[ 2 ] ) } ) : null;
+}
+
+/**
+ * The venue of the one event a Wix page's warmup data describes: the
+ * `location.coordinates` of an event record. Null unless every event record
+ * in the payload names the same location, so a page listing several events
+ * never borrows another event's venue.
+ */
+export function wixEventVenueView( warmupData: string ): MapView | null {
+	let root: unknown;
+	try {
+		root = JSON.parse( warmupData );
+	} catch {
+		return null;
+	}
+	const found = new Map< string, MapView >();
+	const seen = new Set< object >();
+	const walk = ( node: unknown, depth: number ) => {
+		if ( ! node || typeof node !== 'object' || depth > 40 || seen.has( node ) ) return;
+		seen.add( node );
+		if ( Array.isArray( node ) ) {
+			for ( const item of node ) walk( item, depth + 1 );
+			return;
+		}
+		const record = node as { id?: unknown; location?: { coordinates?: { lat?: unknown; lng?: unknown } } };
+		const coordinates = record.location?.coordinates;
+		if ( typeof record.id === 'string' && coordinates && typeof coordinates.lat === 'number' && typeof coordinates.lng === 'number' ) {
+			const view = validMapView( { lat: coordinates.lat, lng: coordinates.lng } );
+			if ( view ) found.set( `${ view.lat },${ view.lng }`, view );
+		}
+		for ( const value of Object.values( node ) ) walk( value, depth + 1 );
+	};
+	walk( root, 0 );
+	return found.size === 1 ? [ ...found.values() ][ 0 ] : null;
 }
 
 /** A keyless Google Maps embed of one location, which loads in any page. */
@@ -250,6 +304,71 @@ async function pointAtGoogleMap( handle: ElementHandle< Element >, embed: string
 	await loaded;
 }
 
+/** Runs in the page: whether every Wix Events venue map has mounted its map. */
+function wixEventMapsMounted( selector: string ): boolean {
+	return [ ...document.querySelectorAll( selector ) ].every( ( host ) =>
+		host instanceof HTMLImageElement
+			? Boolean( host.getAttribute( 'src' )?.trim() || host.getAttribute( 'srcset' )?.trim() ) && host.complete
+			: Boolean( host.querySelector( 'iframe[src]' ) )
+	);
+}
+
+/**
+ * Runs in the page: put a Google Maps embed where a Wix Events venue map never
+ * mounted. The phone's static image link is replaced by the embed (an iframe
+ * cannot live inside a link); the desktop host receives the embed as the
+ * frame its widget would have mounted.
+ */
+function installWixEventMapEmbed( host: Element, args: { embed: string; attribute: string } ): void {
+	const bounds = host.getBoundingClientRect();
+	const frame = document.createElement( 'iframe' );
+	frame.setAttribute( 'src', args.embed );
+	frame.setAttribute( 'title', 'Map' );
+	frame.setAttribute( 'loading', 'lazy' );
+	frame.setAttribute( 'allowfullscreen', '' );
+	frame.setAttribute( args.attribute, 'wix-google-map' );
+	if ( host instanceof HTMLImageElement ) {
+		const height = Math.round( bounds.height ) || ( host.width > 0 && host.height > 0 ? Math.round( host.height * ( bounds.width || host.width ) / host.width ) : 0 );
+		frame.id = host.id;
+		if ( host.className ) frame.className = host.className;
+		frame.setAttribute( 'data-hook', 'map' );
+		frame.style.cssText = [ 'display:block', 'border:0', 'width:100%', ...( bounds.width > 0 ? [ `max-width:${ Math.round( bounds.width ) }px` ] : [] ), ...( height > 0 ? [ `height:${ height }px` ] : [] ) ].join( ';' );
+		const link = host.parentElement;
+		const onlyChild = link?.localName === 'a' && [ ...link.childNodes ].every( ( node ) => node === host || ( node.nodeType === Node.TEXT_NODE && ! node.textContent?.trim() ) );
+		( onlyChild ? link! : host ).replaceWith( frame );
+		return;
+	}
+	frame.style.cssText = 'display:block;border:0;width:100%;height:100%';
+	host.replaceChildren( frame );
+}
+
+/**
+ * Give every Wix Events venue map on the page its map. Wait (bounded) for the
+ * widget's deferred mount, so the copy keeps the source's own map; a map
+ * still unmounted at the bound is pointed at a Google Maps embed of the venue
+ * the page names (the phone image's search link, else the event's warmup
+ * data), or a visible note when it names none. The copy never depends on when
+ * hydration landed relative to serialization, and never ships an empty map
+ * box or a source-less map image.
+ */
+export async function portWixEventMaps( page: Page, mountMilliseconds = EVENT_MAP_MOUNT_MILLISECONDS ): Promise< void > {
+	if ( ( await page.locator( WIX_EVENT_MAP_SELECTOR ).count().catch( () => 0 ) ) === 0 ) return;
+	await page.waitForFunction( wixEventMapsMounted, WIX_EVENT_MAP_SELECTOR, { timeout: mountMilliseconds, polling: 100 } ).catch( () => undefined );
+	const warmup = await page.evaluate( () => document.getElementById( 'wix-warmup-data' )?.textContent ?? '' ).catch( () => '' );
+	for ( const handle of await page.$$( WIX_EVENT_MAP_SELECTOR ) ) {
+		const pending = await handle.evaluate( ( host ) => host instanceof HTMLImageElement
+			? ! ( host.getAttribute( 'src' )?.trim() || host.getAttribute( 'srcset' )?.trim() )
+			: ! host.querySelector( 'iframe[src]' ) ).catch( () => false );
+		if ( ! pending ) continue;
+		const href = await handle.evaluate( ( host ) => host.closest( 'a[href]' )?.getAttribute( 'href' ) ?? '' ).catch( () => '' );
+		const view = googleMapsViewFromSearchLink( href ) ?? ( warmup ? wixEventVenueView( warmup ) : null );
+		const language = await page.evaluate( () => document.documentElement.lang ).catch( () => '' );
+		const embed = view ? googleMapsEmbedUrl( view, language || undefined ) : null;
+		if ( embed ) await handle.evaluate( installWixEventMapEmbed, { embed, attribute: WIX_PORTED_MAP_ATTRIBUTE } );
+		else await handle.evaluate( installWixEmbedNote, { note: wixEmbedNote( 'Map' ), attribute: WIX_UNPORTED_EMBED_ATTRIBUTE } );
+	}
+}
+
 /**
  * Port Wix map wrappers to Google Maps embeds and replace App Market widgets
  * with a visible note. Runs on the live DOM right before it is frozen.
@@ -260,6 +379,8 @@ export async function portWixRuntimeEmbeds( page: Page ): Promise< void > {
 		const scope = globalThis as typeof globalThis & { __name?: ( fn: unknown ) => unknown };
 		if ( typeof scope.__name === 'undefined' ) scope.__name = ( fn ) => fn;
 	} );
+	// Mounted venue maps become ordinary app map iframes, ported below.
+	await portWixEventMaps( page );
 	// App Market custom elements are registered by vendor scripts rather than
 	// loaded in Wix app iframes. Require the identifying appId/appName URL pair.
 	const appName = await page.evaluate( () => {

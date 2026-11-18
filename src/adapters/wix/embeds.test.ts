@@ -9,6 +9,9 @@ import { wixAdapter } from './index.js';
 import {
 	googleMapsEmbedUrl,
 	googleMapsViewFromLink,
+	googleMapsViewFromSearchLink,
+	portWixEventMaps,
+	wixEventVenueView,
 	isWixGoogleMapFrame,
 	wixAppInstance,
 	wixAppMapView,
@@ -87,6 +90,23 @@ describe( 'Google Maps embed URL', () => {
 		expect( googleMapsEmbedUrl( { lat: 0, lng: 0 } ) ).toBeNull();
 		expect( googleMapsEmbedUrl( { lat: 91, lng: 10 } ) ).toBeNull();
 		expect( googleMapsEmbedUrl( { lat: Number.NaN, lng: 10 } ) ).toBeNull();
+	} );
+} );
+
+describe( 'Wix Events venue location', () => {
+	it( 'reads the venue from the phone map image\'s Google Maps search link', () => {
+		expect( googleMapsViewFromSearchLink( 'https://www.google.com/maps/search/?api=1&query=48.8566,2.3522' ) ).toEqual( { lat: 48.8566, lng: 2.3522 } );
+		expect( googleMapsViewFromSearchLink( 'https://www.google.com/maps/search/?api=1&query=Some+Street' ) ).toBeNull();
+		expect( googleMapsViewFromSearchLink( 'https://maps.example.test/maps/search/?query=48.8566,2.3522' ) ).toBeNull();
+	} );
+
+	it( 'reads the venue of the one event the warmup data describes', () => {
+		const event = ( id: string, lat: number, lng: number ) => ( { id, location: { name: 'Venue', coordinates: { lat, lng } } } );
+		expect( wixEventVenueView( JSON.stringify( { appsWarmupData: { events: { event: { event: event( 'e1', 48.8566, 2.3522 ) } } } } ) ) ).toEqual( { lat: 48.8566, lng: 2.3522 } );
+		// Several events at different venues: none of them is the page's.
+		expect( wixEventVenueView( JSON.stringify( { list: [ event( 'e1', 48.8566, 2.3522 ), event( 'e2', 40.7128, -74.006 ) ] } ) ) ).toBeNull();
+		expect( wixEventVenueView( '{"event":{}}' ) ).toBeNull();
+		expect( wixEventVenueView( 'not json' ) ).toBeNull();
 	} );
 } );
 
@@ -251,5 +271,50 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime embed
 				wixEmbedNote( 'Google Maps' )
 			);
 		}
+	}, 30_000 );
+
+	const EVENT_EMBED = 'https://maps.google.com/maps?q=48.8566%2C2.3522&z=15&hl=fr&output=embed';
+	const phoneEventMap = ( mountAfterMs?: number ) => `<!doctype html><html lang="fr"><style>body{margin:0}.map{width:320px}.map img{display:block;width:100%;height:auto}</style>
+		<div class="map"><a href="https://www.google.com/maps/search/?api=1&amp;query=48.8566,2.3522" target="_blank"><img id="event-details-page-map" data-hook="map" class="venue" alt="Venue map" width="640" height="360"></a></div>
+		${ mountAfterMs === undefined ? '' : `<script>setTimeout(() => { document.querySelector('#event-details-page-map').src = 'https://maps.example.test/static.png'; }, ${ mountAfterMs });</script>` }</html>`;
+
+	it( 'waits for a Wix Events venue map that mounts after hydration', async ({ newPage }) => {
+		const page = await newPage();
+		await page.route( 'https://maps.example.test/**', ( route ) => route.fulfill( { contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360"/>' } ) );
+		await page.setContent( phoneEventMap( 1_500 ) );
+		await portWixRuntimeEmbeds( page );
+		expect( await page.locator( 'a > img#event-details-page-map' ).getAttribute( 'src' ) ).toBe( 'https://maps.example.test/static.png' );
+		expect( await page.locator( '[data-blocks-engine-capture-ported-embed], [data-blocks-engine-capture-unported-embed]' ).count() ).toBe( 0 );
+	}, 30_000 );
+
+	it( 'points a phone venue map that never mounts at a Google Maps embed of its link\'s location', async ({ newPage }) => {
+		const page = await newPage();
+		await page.route( /maps\.google\.com/, ( route ) => route.fulfill( { contentType: 'text/html', body: '<p>map</p>' } ) );
+		await page.setContent( phoneEventMap() );
+		await portWixEventMaps( page, 500 );
+		expect( await page.locator( 'img#event-details-page-map, .map a' ).count() ).toBe( 0 );
+		const map = page.locator( '.map > iframe#event-details-page-map' );
+		expect( await map.getAttribute( 'src' ) ).toBe( EVENT_EMBED );
+		expect( await map.getAttribute( 'data-blocks-engine-capture-ported-embed' ) ).toBe( 'wix-google-map' );
+		// The image's 640x360 box at the column's width.
+		expect( await map.evaluate( ( frame ) => [ frame.getBoundingClientRect().width, frame.getBoundingClientRect().height ] ) ).toEqual( [ 320, 180 ] );
+	}, 30_000 );
+
+	it( 'fills a desktop venue map that never mounts from the event\'s warmup data, or leaves a note', async ({ newPage }) => {
+		const page = await newPage();
+		await page.route( /maps\.google\.com/, ( route ) => route.fulfill( { contentType: 'text/html', body: '<p>map</p>' } ) );
+		const desktop = ( warmup: unknown ) => `<!doctype html><html lang="fr"><style>body{margin:0}#event-details-page-map{width:600px;height:300px}</style>
+			<script type="application/json" id="wix-warmup-data">${ JSON.stringify( warmup ) }</script>
+			<div id="event-details-page-map" data-hook="map"></div></html>`;
+		await page.setContent( desktop( { appsWarmupData: { events: { event: { event: { id: 'e1', location: { coordinates: { lat: 48.8566, lng: 2.3522 } } } } } } } ) );
+		await portWixEventMaps( page, 500 );
+		const map = page.locator( '#event-details-page-map > iframe' );
+		expect( await map.getAttribute( 'src' ) ).toBe( EVENT_EMBED );
+		expect( await map.evaluate( ( frame ) => [ frame.getBoundingClientRect().width, frame.getBoundingClientRect().height ] ) ).toEqual( [ 600, 300 ] );
+
+		await page.setContent( desktop( {} ) );
+		await portWixEventMaps( page, 500 );
+		expect( await page.locator( '#event-details-page-map iframe' ).count() ).toBe( 0 );
+		expect( await page.locator( '[data-blocks-engine-capture-unported-embed="wix"]' ).textContent() ).toBe( wixEmbedNote( 'Map' ) );
 	}, 30_000 );
 } );
