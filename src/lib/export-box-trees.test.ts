@@ -37,6 +37,9 @@ it('exports hash-bound evidence after script removal and export wrapping', () =>
 	expect(tree.nodes.text.viewports).toEqual(source.nodes.text.viewports);
 	// Sidecars are website files; listing them as reports too delivers them twice.
 	expect(receipt.reports.filter((path: string) => path.startsWith('website/'))).toEqual([]);
+	// Importers receive website/ and the reports, never html/: a raw sidecar bound to an
+	// html/ capture document would always be rejected as stale.
+	expect(receipt.reports.filter((path: string) => /(?:^|\/)box-tree\//.test(path))).toEqual([]);
 	expect(receipt.exportBudget.files).toBeGreaterThanOrEqual(2);
 });
 
