@@ -18,7 +18,7 @@ import {
 	matchClientErrorShell
 } from './document-integrity.js';
 import { withDocumentTitle } from './document-title.js';
-import { learnAndApplyFluidGeometry, type FluidSeriesMemo } from './fluid-capture.js';
+import { fluidSweepLogLine, learnAndApplyFluidGeometry, type FluidSeriesMemo, type FluidSweepStats } from './fluid-capture.js';
 import { sanitizeFrozenHtml } from './freeze.js';
 import { markGalleryRoots } from './gallery-capture.js';
 import { GlyphColorCache, recordGlyphColors } from './glyph-color.js';
@@ -545,15 +545,19 @@ export function baselineSteps(
 					...( args.classBreakpoints ? { breakpoints: args.classBreakpoints } : {} ),
 					...( args.classMemo ? { memo: args.classMemo } : {} ),
 				} ).catch ( orElse( undefined ) ) : undefined;
+				const documentId = isDesktop ? 'desktop' : viewport.id === MIDDLE_PROFILE_ID ? 'middle' : 'mobile';
+				let sweep: FluidSweepStats | undefined;
 				try {
 					await args.beforeFluid?.( page, { url, viewport: viewport.id, serverHtml } ).catch ( orElse( undefined ) );
 					const learned = await learnAndApplyFluidGeometry( page, {
 						// The middle layout's learned rules name its own geometry ids, never the phone document's.
-						document: isDesktop ? 'desktop' : viewport.id === MIDDLE_PROFILE_ID ? 'middle' : 'mobile',
+						document: documentId,
 						...( args.fluidWidths ? { widths: args.fluidWidths } : {} ),
 						settleMs: Math.max( args.settleMs, 800 ),
 						...( args.fluidMemo ? { memo: args.fluidMemo } : {} ),
+						onSweep: stats => { sweep = stats; },
 					} );
+					sweep ??= { sampled: learned.sampledWidths.length, reused: 0, waitedMs: 0 };
 					entry[isDesktop ? 'fluid' : 'fluidMobile'] = {
 						applied: learned.applied,
 						unmodelled: learned.unmodelled,
@@ -571,6 +575,8 @@ export function baselineSteps(
 						diagnostic: `fluid learning failed: ${ error instanceof Error ? error.message : String( error ) }`,
 					};
 				}
+				// Whether this document shared another route's sweep (see FluidSeriesMemo).
+				process.stderr.write( `${ fluidSweepLogLine( url, documentId, sweep ) }\n` );
 				if ( classes && classes.aliased > 0 && entry.fluid ) entry.fluid.byKind['viewport-class'] = classes.aliased;
 			}
 		},

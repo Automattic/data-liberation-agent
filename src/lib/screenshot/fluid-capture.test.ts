@@ -3,7 +3,7 @@ import { it } from '../../../test/browser.js';
 import { mkdirSync, writeFileSync } from 'node:fs';
 
 import { markInitialDocument, projectInitialDocument } from './initial-document.js';
-import { DEFAULT_SWEEP_WIDTHS, type FluidSeriesMemo, learnAndApplyFluidGeometry, refinementSeries, refinementWidths } from './fluid-capture.js';
+import { DEFAULT_SWEEP_WIDTHS, type FluidSeriesMemo, type FluidSweepStats, fluidSweepLogLine, learnAndApplyFluidGeometry, refinementSeries, refinementWidths } from './fluid-capture.js';
 
 describe( 'learnAndApplyFluidGeometry', () => {
 
@@ -815,6 +815,28 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await page.close();
 	} );
 
+	// Three local routes (~5s): overlap two sweeps, then check serial equivalence.
+	it( 'shares an in-flight sweep through the public memo interface', async ({ newPage }) => {
+		const memo: FluidSeriesMemo = new Map();
+		const pages = await Promise.all( Array.from( { length: 3 }, () => newPage( { viewport: { width: 1440, height: 900 } } ) ) );
+		try {
+			await Promise.all( pages.map( page => page.setContent( `
+				<section id="banner" style="font-size:10px">Banner</section>
+				<script>
+					const update = () => document.querySelector('#banner').style.fontSize = innerWidth * 0.02 + 'px';
+					addEventListener('resize', update); update();
+				</script>` ) ) );
+			const results = await Promise.all( pages.slice( 0, 2 ).map( page => learnAndApplyFluidGeometry( page, { memo } ) ) );
+			const serial = await learnAndApplyFluidGeometry( pages[ 2 ]!, { memo } );
+			expect( results.map( result => result.sampledWidths.length ).sort( ( a, b ) => a - b )[ 0 ] ).toBe( 3 );
+			expect( results.filter( result => result.sampledWidths.length > 3 ) ).toHaveLength( 1 );
+			for ( const result of results ) expect( { ...result, sampledWidths: serial.sampledWidths } ).toEqual( serial );
+			const html = await Promise.all( pages.map( page => page.content() ) );
+			expect( html[ 0 ] ).toBe( html[ 2 ] );
+			expect( html[ 1 ] ).toBe( html[ 2 ] );
+		} finally { await Promise.all( pages.map( page => page.close() ) ); }
+	}, 60_000 );
+
 	it( 'reuses a swept series on a later route only when its element answers the probe widths identically', async ({ newPage }) => {
 		// A script-sized banner repeats on every route; the article beside it differs.
 		const route = ( ratio: number, article: string ) => `
@@ -891,6 +913,47 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		expect( second!.result.byKind ).toEqual( first!.result.byKind );
 		expect( second!.rules ).toEqual( first!.rules );
 		expect( second!.header ).toEqual( first!.header );
+	}, 60_000 );
+
+	// Two local routes (~8s): a real-capture-shaped template whose collection item
+	// id, title and body text differ per route still shares one sweep.
+	it( 'shares a sweep across sibling template routes with route-specific ids and text', async ({ newPage }) => {
+		const route = ( item: string, title: string, text: string ) => `
+			<div id="SITE_CONTAINER"><header id="SITE_HEADER"><nav style="height:64px">Menu</nav></header>
+			<main id="PAGES_CONTAINER">
+				<div id="comp-lzgyw5od_r_comp-l55eyukw" class="AWXfZq comp-lzgyw5od_r_comp-l55eyukw wixui-rich-text"><h2 class="font_2 wixui-rich-text__text" style="font-size:24px">${ title }</h2></div>
+				<div id="gallery-horizontal-scroll-comp-lzgyw5od_r_comp-lebal6le" class="gallery-column"><div class="gallery-horizontal-scroll-inner">
+					<div id="pgi${ item }_0_0" class="gallery-item-container visible" style="height:10px"></div>
+				</div></div>
+				<div class="copy"><div class="rule" style="height:40px"></div><p>${ text }</p></div>
+			</main></div>
+			<script>
+				const update = () => document.querySelector('.gallery-item-container').style.height = (innerWidth * 0.3) + 'px';
+				addEventListener('resize', update); update();
+			</script>`;
+		const memo: FluidSeriesMemo = new Map();
+		const learned = [];
+		for ( const html of [
+			route( '42c9b63de23047d8b796680df5fccf4c', 'Project Title 5', 'Short.' ),
+			route( '84e257f9b6c24dd8a0b7b96cbf6f8f34', 'Project Title 4', 'A much longer description of this project. '.repeat( 40 ) ),
+		] ) {
+			const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+			try {
+				await page.setContent( html );
+				let stats: FluidSweepStats | undefined;
+				const result = await learnAndApplyFluidGeometry( page, { document: 'desktop', settleMs: 10, memo, onSweep: value => { stats = value; } } );
+				learned.push( { result, stats: stats!, item: await page.locator( '.gallery-item-container' ).getAttribute( 'style' ) } );
+			} finally { await page.close(); }
+		}
+		const [ first, second ] = learned;
+		expect( first!.result.sampledWidths.length ).toBeGreaterThan( 3 );
+		expect( first!.stats.reused ).toBe( 0 );
+		// Every tagged element (nav, title, gallery item, rule) comes from the first sweep.
+		expect( second!.stats ).toMatchObject( { sampled: 3, reused: 4 } );
+		expect( second!.result.sampledWidths ).toEqual( [ 390, 768, 1920 ] );
+		expect( second!.result.byKind ).toEqual( first!.result.byKind );
+		expect( second!.item ).toBe( first!.item );
+		expect( fluidSweepLogLine( 'https://example.com/a', 'desktop', second!.stats ) ).toMatch( /^\[fluid\] https:\/\/example\.com\/a sampled=3 reused=4 waited=\d+$/ );
 	}, 60_000 );
 
 	it( 'learns the ceiling when the widest sample is capped', async ({ newPage }) => {
