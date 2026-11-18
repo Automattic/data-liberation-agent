@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import * as cheerio from 'cheerio';
+import type { AnyNode, Element as TagElement } from 'domhandler';
 import type { Page } from 'playwright';
 
 export const BOX_TREE_SCHEMA = 'blocks-engine/box-tree/v2';
@@ -42,23 +43,52 @@ export type BoxTree = {
 	nodes: Record<string, { children: string[]; viewports: Record<string, Observation> }>;
 };
 
+/** The first node at which saved bytes and observed topology disagree. */
+export type BoxTreeMismatch = {
+	/** missing: saved node absent from the live tree; extra: bound bytes hold a node the tree never observed; moved: an observed node sits under another parent or position. */
+	kind: 'missing' | 'extra' | 'moved' | 'duplicate' | 'unstamped' | 'unobservable' | 'oversized';
+	id?: string;
+	parent?: string;
+	path: string;
+	detail?: string;
+};
+export type BoxTreeObservation = { nodes: BoxTree['nodes'] } | { mismatch: BoxTreeMismatch };
+
+export function describeBoxTreeMismatch(mismatch: BoxTreeMismatch): string {
+	const node = mismatch.id ? ` ${mismatch.id}` : '';
+	const parent = mismatch.parent ? ` under ${mismatch.parent}` : '';
+	return `${mismatch.kind} node${node}${parent} at ${mismatch.path}${mismatch.detail ? ` (${mismatch.detail})` : ''}`;
+}
+
 /** Runs in the serializer's synchronous browser task, against its cleaned snapshot. */
-export function observeBoxTree(snapshot: Element, properties: readonly string[], attribute: string): BoxTree['nodes'] | undefined {
+export function observeBoxTree(snapshot: Element, properties: readonly string[], attribute: string): BoxTreeObservation {
+	const path = (element: Element) => {
+		const parts: string[] = [];
+		for (let node: Element | null = element; node && parts.length < 8; node = node.parentElement) {
+			const id = node.getAttribute(attribute);
+			parts.unshift(`${node.localName}${node.id ? `#${node.id}` : ''}${id ? `[${id}]` : ''}`);
+		}
+		return parts.join('>');
+	};
 	const retained = [snapshot, ...snapshot.querySelectorAll('*')];
 	const live = new Map(Array.from(document.querySelectorAll('*'), element => [element.getAttribute(attribute), element]));
 	const nodes: BoxTree['nodes'] = {};
-	if (retained.length > 100_000) return;
+	if (retained.length > 100_000) return { mismatch: { kind: 'oversized', path: snapshot.localName, detail: `${retained.length} elements` } };
 	for (const saved of retained) {
 		const id = saved.getAttribute(attribute);
 		const element = id && live.get(id);
-		if (!id || !element || nodes[id]) return;
+		if (!id) return { mismatch: { kind: 'unstamped', path: path(saved) } };
+		if (nodes[id]) return { mismatch: { kind: 'duplicate', id, path: path(saved) } };
+		if (!element) return { mismatch: { kind: 'missing', id, path: path(saved), detail: 'saved node has no live element' } };
 		const children = Array.from(saved.children, child => child.getAttribute(attribute)!);
 		const rect = element.getBoundingClientRect();
 		const style = getComputedStyle(element);
 		const used_styles = Object.fromEntries(properties.map(property => [property, style.getPropertyValue(property)]));
-		if (Object.values(used_styles).some(value => !value || new TextEncoder().encode(value).length > 4096)) return;
+		const unobservable = (detail: string): BoxTreeObservation => ({ mismatch: { kind: 'unobservable', id, path: path(saved), detail } });
+		const badStyle = Object.keys(used_styles).find(property => !used_styles[property] || new TextEncoder().encode(used_styles[property]).length > 4096);
+		if (badStyle) return unobservable(`used style ${badStyle}`);
 		const border_box = { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
-		if (Object.values(border_box).some(value => !Number.isFinite(value) || Math.abs(value) > 100_000_000)) return;
+		if (Object.values(border_box).some(value => !Number.isFinite(value) || Math.abs(value) > 100_000_000)) return unobservable('border box');
 		const observation: Observation = { border_box, used_styles };
 		for (const name of ['before', 'after'] as const) {
 			const pseudoStyle = getComputedStyle(element, `::${name}`);
@@ -66,7 +96,7 @@ export function observeBoxTree(snapshot: Element, properties: readonly string[],
 			if (content === 'none' || content === 'normal' || pseudoStyle.display === 'none') continue;
 			const pseudoStyles = Object.fromEntries(properties.map(property => [property, pseudoStyle.getPropertyValue(property)]));
 			if (Object.values(pseudoStyles).some(value => !value || new TextEncoder().encode(value).length > 4096)
-				|| new TextEncoder().encode(content).length > 4096) return;
+				|| new TextEncoder().encode(content).length > 4096) return unobservable(`::${name} style`);
 			// Pseudos have no DOM rect API. Record their computed border-box geometry,
 			// with computed left/top offsets, not host viewport coordinates. Unresolved
 			// auto dimensions/offsets use zero; the original keywords stay in used_styles.
@@ -74,51 +104,82 @@ export function observeBoxTree(snapshot: Element, properties: readonly string[],
 			const width = px('width') + (pseudoStyle.boxSizing === 'border-box' ? 0 : px('padding-left') + px('padding-right') + px('border-left-width') + px('border-right-width'));
 			const height = px('height') + (pseudoStyle.boxSizing === 'border-box' ? 0 : px('padding-top') + px('padding-bottom') + px('border-top-width') + px('border-bottom-width'));
 			const pseudoBox = { x: px('left'), y: px('top'), width, height };
-			if (Object.values(pseudoBox).some(value => !Number.isFinite(value) || Math.abs(value) > 100_000_000)) return;
+			if (Object.values(pseudoBox).some(value => !Number.isFinite(value) || Math.abs(value) > 100_000_000)) return unobservable(`::${name} border box`);
 			(observation.pseudo ??= {})[name] = { content, used_styles: pseudoStyles, border_box: pseudoBox };
 		}
 		nodes[id] = { children, viewports: { capture: observation } };
 	}
-	return nodes;
+	return { nodes };
+}
+
+type BoundTree = Omit<BoxTree, 'source_path' | 'source_hash'>;
+
+function savedPath(element: AnyNode): string {
+	const parts: string[] = [];
+	for (let node: AnyNode | null = element; node && node.type === 'tag' && parts.length < 8; node = node.parent) {
+		const tag = node as TagElement;
+		const id = tag.attribs[NODE_ID_ATTRIBUTE];
+		parts.unshift(`${tag.name}${tag.attribs.id ? `#${tag.attribs.id}` : ''}${id ? `[${id}]` : ''}`);
+	}
+	return parts.join('>');
+}
+
+/** Bind with the first disagreement named, so an unproven sidecar says why. */
+export function bindBoxTreeEvidence<T extends BoundTree>(html: string, tree: T | undefined): { tree: T } | { mismatch?: BoxTreeMismatch } {
+	if (!tree) return {};
+	const $ = cheerio.load(html);
+	const nodes: BoxTree['nodes'] = {};
+	const elements = new Map<string, AnyNode>();
+	let mismatch: BoxTreeMismatch | undefined;
+	$('*').each((_index, element) => {
+		const id = $(element).attr(NODE_ID_ATTRIBUTE);
+		if (!id) mismatch = { kind: 'unstamped', path: savedPath(element) };
+		else if (nodes[id]) mismatch = { kind: 'duplicate', id, path: savedPath(element) };
+		else if (!tree.nodes[id]) mismatch = { kind: 'extra', id, parent: $(element).parent().attr(NODE_ID_ATTRIBUTE), path: savedPath(element) };
+		if (mismatch) return false;
+		const children = $(element).children().toArray().map(child => $(child).attr(NODE_ID_ATTRIBUTE)!);
+		nodes[id!] = { children, viewports: tree.nodes[id!].viewports };
+		elements.set(id!, element);
+	});
+	if (mismatch) return { mismatch };
+	for (const [id, node] of Object.entries(nodes)) {
+		const expected = tree.nodes[id].children.filter(child => nodes[child]);
+		const index = expected.findIndex((child, position) => node.children[position] !== child);
+		const at = index === -1 && node.children.length !== expected.length ? expected.length : index;
+		if (at === -1) continue;
+		const moved = node.children[at] ?? expected[at];
+		return { mismatch: { kind: 'moved', id: moved, parent: id, path: savedPath(elements.get(moved)!), detail: `expected [${expected.slice(at, at + 3).join(',')}] at child ${at}, saved [${node.children.slice(at, at + 3).join(',')}]` } };
+	}
+	return { tree: { ...tree, nodes } };
 }
 
 /** Rebind by identity after projection; added nodes cannot borrow another node's evidence. */
-export function bindBoxTree(html: string, tree: Omit<BoxTree, 'source_path' | 'source_hash'> | undefined): typeof tree {
-	if (!tree) return;
-	const $ = cheerio.load(html);
-	const nodes: BoxTree['nodes'] = {};
-	let valid = true;
-	$('*').each((_index, element) => {
-		const id = $(element).attr(NODE_ID_ATTRIBUTE);
-		if (!id || nodes[id] || !tree.nodes[id]) { valid = false; return; }
-		const children = $(element).children().toArray().map(child => $(child).attr(NODE_ID_ATTRIBUTE)!);
-		nodes[id] = { children, viewports: tree.nodes[id].viewports };
-	});
-	for (const [id, node] of Object.entries(nodes)) {
-		if (JSON.stringify(tree.nodes[id].children.filter(child => nodes[child])) !== JSON.stringify(node.children)) valid = false;
-	}
-	return valid ? { ...tree, nodes } : undefined;
+export function bindBoxTree<T extends BoundTree>(html: string, tree: T | undefined): T | undefined {
+	const bound = bindBoxTreeEvidence(html, tree);
+	return 'tree' in bound ? bound.tree : undefined;
 }
 
 /** Observe extra widths immediately after serialization, keeping only stable ones. */
-export async function captureBoxTree(page: Page, html: string, viewports: BoxTree['viewports'], initial?: { name: string; nodes: BoxTree['nodes'] }): Promise<Omit<BoxTree, 'source_path' | 'source_hash'> | undefined> {
+export async function captureBoxTree(page: Page, html: string, viewports: BoxTree['viewports'], initial?: { name: string; nodes: BoxTree['nodes'] }, onUnproven?: (mismatch: BoxTreeMismatch) => void): Promise<Omit<BoxTree, 'source_path' | 'source_hash'> | undefined> {
 	const $ = cheerio.load(html);
 	const nodes: BoxTree['nodes'] = {};
-	let valid = true;
+	let mismatch: BoxTreeMismatch | undefined;
 	$('*').each((_index, element) => {
 		const id = $(element).attr(NODE_ID_ATTRIBUTE);
-		if (!id || nodes[id]) { valid = false; return; }
+		if (!id || nodes[id]) { mismatch = { kind: id ? 'duplicate' : 'unstamped', id, path: savedPath(element) }; return false; }
 		const children = $(element).children().toArray().map(child => $(child).attr(NODE_ID_ATTRIBUTE)!);
 		nodes[id] = { children, viewports: {} };
 	});
-	if (!valid || Object.keys(nodes).length > 100_000) return;
+	if (!mismatch && Object.keys(nodes).length > 100_000) mismatch = { kind: 'oversized', path: 'html', detail: `${Object.keys(nodes).length} elements` };
+	if (mismatch) { onUnproven?.(mismatch); return; }
 	const original = page.viewportSize();
 	const stable: BoxTree['viewports'] = {};
 	if (initial) {
-		const bound = bindBoxTree(html, { schema: BOX_TREE_SCHEMA, viewports: {}, nodes: initial.nodes });
-		if (!bound || !original) return;
+		const bound = bindBoxTreeEvidence(html, { schema: BOX_TREE_SCHEMA, viewports: {}, nodes: initial.nodes });
+		if (!('tree' in bound)) { onUnproven?.(bound.mismatch ?? { kind: 'missing', path: 'html' }); return; }
+		if (!original) return;
 		stable[initial.name] = original;
-		for (const [id, node] of Object.entries(nodes)) node.viewports[initial.name] = bound.nodes[id].viewports.capture;
+		for (const [id, node] of Object.entries(nodes)) node.viewports[initial.name] = bound.tree.nodes[id].viewports.capture;
 	}
 	try {
 		for (const [name, size] of Object.entries(viewports)) {
@@ -138,7 +199,7 @@ export async function captureBoxTree(page: Page, html: string, viewports: BoxTre
 				// would resolve built-ins from the source page's mutable globals.
 				const observe = new Function(`return (${observerSource})`)() as typeof observeBoxTree;
 				const observed = observe(new DOMParser().parseFromString(html, 'text/html').documentElement, properties, attribute);
-				return observed && Object.fromEntries(Object.entries(observed).map(([id, node]) => [id, node.viewports.capture]));
+				return 'nodes' in observed ? Object.fromEntries(Object.entries(observed.nodes).map(([id, node]) => [id, node.viewports.capture])) : undefined;
 			}, { attribute: NODE_ID_ATTRIBUTE, properties: BOX_TREE_STYLES, topology: nodes, html, observerSource: observeBoxTree.toString() });
 			if (!observations) {
 				if (!initial && size.width === original?.width && size.height === original?.height) return;
@@ -185,21 +246,28 @@ export function finalizeBoxTreeHashes(outputDir: string): void {
 	}
 }
 
+/**
+ * Route-local identity is assigned in document order and kept across later
+ * serializations and width changes; newly inserted or cloned nodes get fresh
+ * IDs. The serializer reruns this in its own synchronous task, immediately
+ * before the snapshot, so a node the source runtime inserts after an earlier
+ * stamp is never saved without an identity.
+ */
+export function assignNodeIds(root: Document, attribute: string): void {
+	const elements = Array.from(root.querySelectorAll('*'));
+	const used = new Set<string>();
+	let next = 0;
+	for (const element of elements) {
+		const id = element.getAttribute(attribute);
+		if (id && /^n\d+$/.test(id) && !used.has(id)) { used.add(id); next = Math.max(next, Number(id.slice(1)) + 1); }
+		else element.removeAttribute(attribute);
+	}
+	for (const element of elements) if (!element.hasAttribute(attribute)) element.setAttribute(attribute, `n${next++}`);
+}
+
 /** Stamp before the initial document is serialized, not during interaction probes. */
 export async function stampNodeIds(page: Page): Promise<void> {
-	await page.evaluate(() => {
-				// Route-local identity is assigned once, in document order. Keep it across
-				// later serializations and width changes; newly inserted nodes get fresh IDs.
-				const attribute = 'data-blocks-engine-node-id';
-				const elements = Array.from( document.querySelectorAll( '*' ) );
-				const used = new Set<string>();
-				let next = 0;
-				for ( const element of elements ) {
-					const id = element.getAttribute( attribute );
-					if ( id && /^n\d+$/.test( id ) && ! used.has( id ) ) { used.add( id ); next = Math.max( next, Number( id.slice( 1 ) ) + 1 ); }
-					else element.removeAttribute( attribute );
-				}
-				for ( const element of elements ) if ( ! element.hasAttribute( attribute ) ) element.setAttribute( attribute, `n${ next++ }` );
-
-	});
+	await page.evaluate(({ source, attribute }) => {
+		(new Function(`return (${source})`)() as typeof assignNodeIds)(document, attribute);
+	}, { source: assignNodeIds.toString(), attribute: NODE_ID_ATTRIBUTE });
 }
