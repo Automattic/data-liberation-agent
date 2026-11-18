@@ -48,6 +48,12 @@ export interface HostDetection {
 export interface HostResidueRule {
 	/** CSS selector for the injected element. */
 	selector: string;
+	/**
+	 * For a surface rendered inside an open shadow root, whose host element
+	 * carries no stable selector of its own: the element `selector` matched
+	 * counts only when this selector matches inside its shadow root.
+	 */
+	shadowSelector?: string;
 	/** Why this element belongs to the host, recorded on every exclusion. */
 	evidence: string;
 }
@@ -92,6 +98,9 @@ function validateHost( host: Host ): void {
 	for ( const rule of host.residue ) {
 		if ( typeof rule?.selector !== 'string' || rule.selector.trim() === '' || rule.selector.length > 512 ) {
 			throw new HostRegistrationError( `Host '${ host.id }' residue selectors must be bounded CSS selectors` );
+		}
+		if ( rule.shadowSelector !== undefined && ( typeof rule.shadowSelector !== 'string' || rule.shadowSelector.trim() === '' || rule.shadowSelector.length > 512 ) ) {
+			throw new HostRegistrationError( `Host '${ host.id }' residue shadow selectors must be bounded CSS selectors` );
 		}
 		if ( typeof rule.evidence !== 'string' || rule.evidence.trim() === '' ) {
 			throw new HostRegistrationError( `Host '${ host.id }' residue rules must carry evidence` );

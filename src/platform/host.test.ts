@@ -20,6 +20,7 @@ describe( 'deployment hosts', () => {
 		expect( () => registerHost( { ...fixture, residue: [] } ) ).toThrow( /surfaces it injects/ );
 		expect( () => registerHost( { ...fixture, residue: [ { selector: '   ', evidence: 'x' } ] } ) ).toThrow( /bounded CSS selectors/ );
 		expect( () => registerHost( { ...fixture, residue: [ { selector: 'iframe', evidence: '' } ] } ) ).toThrow( /carry evidence/ );
+		expect( () => registerHost( { ...fixture, residue: [ { selector: 'body > div', shadowSelector: ' ', evidence: 'x' } ] } ) ).toThrow( /shadow selectors/ );
 		registerHost( fixture );
 		expect( () => registerHost( fixture ) ).toThrow( /already registered/ );
 	} );

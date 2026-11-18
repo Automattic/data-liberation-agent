@@ -13,6 +13,7 @@ import type { Platform } from './types.js';
 import { registerPlatform } from './registry.js';
 import { registerHost } from './host.js';
 import { netlifyHost } from '../hosts/netlify.js';
+import { boltHost } from '../hosts/bolt.js';
 import { nextjsAdapter } from '../adapters/nextjs/index.js';
 import { atombioAdapter } from '../adapters/atombio/index.js';
 import { carrdAdapter } from '../adapters/carrd/index.js';
@@ -82,6 +83,6 @@ for ( const platform of builtins ) {
 // Deployment hosts register through the same public API, and are deliberately
 // a separate list: a host is not a platform, and detecting one says nothing
 // about what built the site.
-for ( const host of [ netlifyHost ] ) {
+for ( const host of [ netlifyHost, boltHost ] ) {
 	registerHost( host );
 }
