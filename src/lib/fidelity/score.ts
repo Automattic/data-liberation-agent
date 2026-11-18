@@ -137,6 +137,9 @@ export interface HashTarget {
 	 *  picks the first, which is how a per-device copy sends a mobile anchor to
 	 *  the hidden desktop section. */
 	targets: number;
+	/** Whether any link to this fragment is rendered (has a box, not hidden).
+	 *  Missing on older stored observations, which count as rendered. */
+	rendered?: boolean;
 }
 
 export interface ViewportScore {
@@ -436,27 +439,32 @@ export function scoreViewport(
 		);
 	}
 
-	const copyUnresolved = liberated.hashTargets
-		.filter( ( target ) => ! target.resolved )
+	// An unresolved copy anchor fails only when the copy does worse than the
+	// source: a fragment the source resolves is lost, or the copy renders a
+	// dead link the source does not also carry unresolved.
+	const copyResolved = new Set(
+		liberated.hashTargets.filter( ( target ) => target.resolved ).map( ( target ) => target.fragment )
+	);
+	const sourceUnresolved = new Set(
+		source.hashTargets.filter( ( target ) => ! target.resolved ).map( ( target ) => target.fragment )
+	);
+	const lost = source.hashTargets
+		.filter( ( target ) => target.resolved && ! copyResolved.has( target.fragment ) )
 		.map( ( target ) => target.fragment );
-	if ( copyUnresolved.length > 0 ) {
+	const introduced = liberated.hashTargets
+		.filter(
+			( target ) =>
+				! target.resolved &&
+				target.rendered !== false &&
+				! sourceUnresolved.has( target.fragment ) &&
+				! lost.includes( target.fragment )
+		)
+		.map( ( target ) => target.fragment );
+	const missing = [ ...lost, ...introduced ];
+	if ( missing.length > 0 ) {
 		failures.push(
-			`nav ${ copyUnresolved.length } same-page anchor(s) missing: #${ copyUnresolved
-				.slice( 0, 3 )
-				.join( ' #' ) }`
+			`nav ${ missing.length } same-page anchor(s) missing: #${ missing.slice( 0, 3 ).join( ' #' ) }`
 		);
-	} else {
-		const copyResolved = new Set(
-			liberated.hashTargets.filter( ( target ) => target.resolved ).map( ( target ) => target.fragment )
-		);
-		const lost = source.hashTargets
-			.filter( ( target ) => target.resolved && ! copyResolved.has( target.fragment ) )
-			.map( ( target ) => target.fragment );
-		if ( lost.length > 0 ) {
-			failures.push(
-				`nav ${ lost.length } same-page anchor(s) missing: #${ lost.slice( 0, 3 ).join( ' #' ) }`
-			);
-		}
 	}
 
 	// Resolving is not the same as resolving correctly. A fragment that matches
