@@ -1,5 +1,5 @@
 import { load } from 'cheerio';
-import { bindBoxTree, captureBoxTree, stampNodeIds, writeBoxTree, type BoxTree } from './box-tree.js';
+import { bindBoxTreeEvidence, captureBoxTree, describeBoxTreeMismatch, stampNodeIds, writeBoxTree, type BoxTree, type BoxTreeMismatch, type BoxTreeObservation } from './box-tree.js';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { CHROME_AUDIT_PROPERTIES } from '../replicate/chrome-audit-types.js';
@@ -27,7 +27,7 @@ import { loadSourceBaseline } from './load-baseline.js';
 import { type FailureEntry, type ManifestEntry, type ProfileDiagnostic } from './manifest-queue.js';
 import { captureNativeViewTimelines } from './native-view-timelines.js';
 import { type ArtifactPlan } from './output-layout.js';
-import { pageResponds, withEvaluateTimeout } from './page-helpers.js';
+import { dismissOverlays, pageResponds, withEvaluateTimeout } from './page-helpers.js';
 import { type PhaseLedger } from './phase-ledger.js';
 import { CapturedResourceStore } from './resource-capture.js';
 import { projectRootClassContracts, rootClassContracts, RootClassEvidence, sampleRootClassLadder, type RootClassContract } from './root-class-contracts.js';
@@ -315,6 +315,8 @@ export interface BaselineState {
 	componentBaseline: ComponentBaseline;
 	initialDocument: string;
 	boxTree?: Awaited<ReturnType<typeof captureBoxTree>>;
+	/** Why the baseline observation produced no tree, when it did not. */
+	boxTreeMismatch?: BoxTreeMismatch;
 	initialTitle?: string;
 	rootClassWidths: RootClassContract[];
 	rawDocument?: string;
@@ -332,7 +334,7 @@ export function baselineSteps(
 	state: BaselineState,
 	fail: ( stage: FailureEntry['stage'], error: unknown, attempt?: number ) => void,
 	sourceErrors: () => string[],
-	capturePageHtml: ( page: Page, diagnostics?: ProfileDiagnostic[], serverHtml?: string, onBoxTree?: (nodes: BoxTree['nodes'] | undefined) => void ) => Promise<string>,
+	capturePageHtml: ( page: Page, diagnostics?: ProfileDiagnostic[], serverHtml?: string, onBoxTree?: (observation: BoxTreeObservation | undefined) => void ) => Promise<string>,
 ): CaptureStep<{ page: Page }>[] {
 	const { page, viewport, plan, url, slug, evaluateTimeoutMs, screenshotTimeoutMs, outputDir, entry, responsiveImages, resourceStore, mobileHeights, shouldAnalyze, aggregator } = args;
 	const { serverHtml, navigationUrl, sourcePolicy } = sourceLoad;
@@ -349,15 +351,23 @@ export function baselineSteps(
 		if ( outcome?.swept ) process.stderr.write( `[timing] script-motion ${JSON.stringify( { url, viewport: viewport.id, ...outcome } )}\n` );
 	};
 
+	const recordLateConsent = async () => {
+		const consent = await dismissOverlays( page, { kinds: [ 'consent' ] } );
+		if ( consent.length ) args.entry.dismissed = [ ...( args.entry.dismissed ?? [] ), ...consent ];
+	};
+
 	const serializeDocument = async ( frozen: boolean ): Promise<{ html: string; documentUrl: { url: string; baseUrl: string } }> => {
 		args.diagnostics?.push( ...await removeRuntimeWidgets( page ) );
 		await sweepSourceCleanup( page, sourcePolicy );
 		await preserveStreamedVideoPosters( page, resourceStore, url ).catch ( orElse( undefined ) );
 		// Source width changes can rerender emoji replacement images (#954).
 		args.diagnostics?.push( ...await restoreRuntimeEmoji( page ) );
+		// Consent managers can mount (or remount) after the load-time checks.
+		// Keep route-local facts even when their copy differs from the entrypoint.
+		await recordLateConsent();
 		await stampNodeIds( page );
 		let laterNodes: BoxTree['nodes'] | undefined;
-		const learned = await capturePageHtml( page, args.diagnostics, undefined, nodes => { laterNodes = nodes; } );
+		const learned = await capturePageHtml( page, args.diagnostics, undefined, observation => { laterNodes = observation && 'nodes' in observation ? observation.nodes : undefined; } );
 		if (state.boxTree && laterNodes) {
 			// Learning adds inert evidence sheets after the initial snapshot. Observe
 			// those new nodes synchronously too, without replacing baseline geometry.
@@ -385,6 +395,14 @@ export function baselineSteps(
 		const documentUrl = await page.evaluate( () => ( { url: document.URL, baseUrl: document.baseURI } ) );
 		await resourceStore.captureDomDependencies( html, documentUrl.baseUrl );
 		return { html, documentUrl };
+	};
+	const bindSavedBoxTree = ( html: string, document: string, report: boolean ) => {
+		const bound = bindBoxTreeEvidence( html, state.boxTree );
+		if ( 'tree' in bound ) return bound.tree;
+		const mismatch = bound.mismatch ?? state.boxTreeMismatch;
+		const stage = bound.mismatch ? 'saved bytes' : 'capture observation';
+		if ( report ) args.diagnostics?.push( { code: 'box_tree_unproven', reason: `${ document } could not be bound to a stable live tree at its capture viewport${ mismatch ? `: ${ stage }: ${ describeBoxTreeMismatch( mismatch ) }` : '.' }` } );
+		return undefined;
 	};
 	return [
 		{
@@ -448,6 +466,7 @@ export function baselineSteps(
 				args.diagnostics?.push( ...await removeRuntimeWidgets( page ) );
 				args.diagnostics?.push( ...await restoreRuntimeEmoji( page ) );
 				if ( args.beforeSerialize ) await args.beforeSerialize( page, { url, viewport: viewport.id, serverHtml } ).catch ( orElse( undefined ) );
+				await recordLateConsent();
 				const snapshot = await snapshotComponents( page ).catch ( orElse( undefined ) );
 				state.componentBaseline = snapshot && Array.isArray( snapshot.components ) ? snapshot : { components: [], controls: [] };
 				await markGalleryRoots( page ).catch ( orElse( undefined ) );
@@ -458,10 +477,12 @@ export function baselineSteps(
 				// Probes above resized the page; serialize source sheets as loaded at this width.
 				await restoreLoadTimeSheets( page ).catch ( orElse( 0 ) );
 				await stampNodeIds( page );
-				let boxNodes: BoxTree['nodes'] | undefined;
+				let boxNodes: BoxTreeObservation | undefined;
 				state.initialDocument = await capturePageHtml( page, args.diagnostics, serverHtml,
-					(isDesktop || isMobile) && (plan.captureHtml || plan.captureMobileHtml) ? nodes => { boxNodes = nodes; } : undefined );
-				if (boxNodes) state.boxTree = await captureBoxTree(page, state.initialDocument, boxViewports(), { name: viewport.id, nodes: boxNodes });
+					(isDesktop || isMobile) && (plan.captureHtml || plan.captureMobileHtml) ? observation => { boxNodes = observation; } : undefined );
+				const observed: BoxTreeObservation | undefined = boxNodes;
+				if (observed && 'mismatch' in observed) state.boxTreeMismatch = observed.mismatch;
+				else if (observed) state.boxTree = await captureBoxTree(page, state.initialDocument, boxViewports(), { name: viewport.id, nodes: observed.nodes }, mismatch => { state.boxTreeMismatch = mismatch; });
 				if ( await args.absentDocument?.( state.initialDocument ) ) {
 					fail( 'goto', 'HTTP 404 (render matches absent nonce sibling)' );
 					state.stopped = true;
@@ -630,8 +651,7 @@ export function baselineSteps(
 					fail( 'content', `${ CLIENT_ERROR_SHELL_FAILURE }: the page's client runtime replaced the document with its framework error shell (matched ${ shellSelector }); HTML not persisted` );
 				} else {
 					mkdirSync( dirname( plan.paths.html ), { recursive: true } );
-					const tree = bindBoxTree(html, state.boxTree);
-					if ( ( isDesktop || isMobile ) && ! tree ) args.diagnostics?.push( { code: 'box_tree_unproven', reason: 'Saved document could not be bound to a stable live tree at its capture viewport.' } );
+					const tree = bindSavedBoxTree( html, 'Saved document', isDesktop || isMobile );
 					writeFileSync( plan.paths.html, html );
 					writeBoxTree( outputDir, plan.paths.html, tree );
 					args.glyphColors?.defer( plan.paths.html, html );
@@ -649,8 +669,7 @@ export function baselineSteps(
 				// recording a failure of its own.
 				if ( !sourceLoad.externalNavigation && !isRouteDrift( page.url(), navigationUrl ) && !isStackingArtifact( mhtml ) && matchClientErrorShell( mhtml, args.clientErrorShellSelectors ) === undefined ) {
 					mkdirSync( dirname( plan.paths.htmlMobile ), { recursive: true } );
-					const tree = bindBoxTree(mhtml, state.boxTree);
-					if ( ! tree ) args.diagnostics?.push( { code: 'box_tree_unproven', reason: 'Saved mobile document could not be bound to a stable live tree at its capture viewport.' } );
+					const tree = bindSavedBoxTree( mhtml, 'Saved mobile document', true );
 					writeFileSync( plan.paths.htmlMobile, mhtml );
 					writeBoxTree( outputDir, plan.paths.htmlMobile, tree );
 					args.glyphColors?.defer( plan.paths.htmlMobile, mhtml );

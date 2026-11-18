@@ -15,6 +15,7 @@ import { observePage } from './fidelity/check.js';
 import { normalizeImageKey } from './fidelity/score.js';
 import { CapturedResourceStore } from './screenshot/resource-capture.js';
 import { capture as adapterCapture } from '../adapters/wix/capture.js';
+import { withEvaluateTimeout } from './screenshot/page-helpers.js';
 
 // Export consumes verified inventory records, not unchecked resource-manifest bytes.
 function verifiedRendition( source: string, path: string, bytes: Buffer ) {
@@ -252,15 +253,13 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				const page = await context.newPage();
 				store.observe( page );
 				await page.goto( url );
-				// Lazy images do not delay navigation's load event. Wait for the
-				// selected candidate before decode(), which can reject while srcset
-				// selection is still changing even though the PNG bytes are valid.
+				// Lazy images do not delay navigation's load event. Poll the
+				// selected candidate without depending on rendering frames.
 				const waitForImage = async ( target: Page ) => {
 					await target.waitForFunction( () => {
 						const image = document.querySelector( 'img' );
 						return image?.complete && image.naturalWidth > 0;
-					}, {}, { timeout: 5000 } );
-					await target.locator( 'img' ).evaluate( image => ( image as HTMLImageElement ).decode() );
+					}, {}, { timeout: 5000, polling: 50 } );
 				};
 				await waitForImage( page );
 				await store.captureSelectedSrcsets( page );
@@ -384,10 +383,8 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			media.markSuccess( `${ source }photo.png`, file ); media.flush();
 			const requests: string[] = [];
 			const sample = async ( page: Page ) => {
-				await page.waitForFunction( () => document.images.length === 6 && Array.from( document.images ).every( image => image.complete && image.naturalWidth > 0 ), {}, { timeout: 5000 } );
-				return page.evaluate( async () => {
-					await Promise.all( Array.from( document.images, image => image.decode() ) );
-					await new Promise<void>( resolve => requestAnimationFrame( () => requestAnimationFrame( () => resolve() ) ) );
+				await page.waitForFunction( () => document.images.length === 6 && Array.from( document.images ).every( image => image.complete && image.naturalWidth > 0 ), {}, { timeout: 5000, polling: 50 } );
+				return withEvaluateTimeout( page.evaluate( async () => {
 					return Promise.all( Array.from( document.images, async image => {
 						const bitmap = await createImageBitmap( image );
 						const canvas = new OffscreenCanvas( bitmap.width, bitmap.height );
@@ -398,7 +395,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 						const rect = image.getBoundingClientRect();
 						return { currentSrc: image.currentSrc, hash, natural: [ image.naturalWidth, image.naturalHeight ], rect: [ rect.x, rect.y, rect.width, rect.height ] };
 					} ) );
-				} );
+				} ), 5000 );
 			};
 			for ( const width of [ 390, 768, 1440 ] ) {
 				const context = await newContext( { viewport: { width, height: 900 }, deviceScaleFactor: 1 } );
@@ -466,10 +463,8 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			}
 			media.flush();
 			const sample = async ( page: Page ) => {
-				await page.waitForFunction( () => document.images.length === 5 && Array.from( document.images ).every( image => image.complete && image.naturalWidth > 0 ), {}, { timeout: 5000 } );
-				return page.evaluate( async () => {
-					await Promise.all( Array.from( document.images, image => image.decode() ) );
-					await new Promise<void>( resolve => requestAnimationFrame( () => requestAnimationFrame( () => resolve() ) ) );
+				await page.waitForFunction( () => document.images.length === 5 && Array.from( document.images ).every( image => image.complete && image.naturalWidth > 0 ), {}, { timeout: 5000, polling: 50 } );
+				return withEvaluateTimeout( page.evaluate( async () => {
 					return Promise.all( Array.from( document.images, async image => {
 						const bitmap = await createImageBitmap( image );
 						const canvas = new OffscreenCanvas( bitmap.width, bitmap.height );
@@ -480,7 +475,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 						const rect = image.getBoundingClientRect();
 						return { src: image.getAttribute( 'src' ), currentSrc: image.currentSrc, hash, natural: [ image.naturalWidth, image.naturalHeight ], rect: [ rect.x, rect.y, rect.width, rect.height ] };
 					} ) );
-				} );
+				} ), 5000 );
 			};
 			const failures: string[] = [];
 			// Chromium may satisfy srcset selection from an image it already holds,

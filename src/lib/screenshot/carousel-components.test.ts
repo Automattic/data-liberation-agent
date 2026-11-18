@@ -10,7 +10,10 @@ const directory = resolve('.tmp-test/carousel-components');
 beforeAll(async () => { mkdirSync(directory, { recursive: true });  });
 afterAll(async () => {  rmSync(directory, { recursive: true, force: true }); });
 
-// One browser pass per mechanism, approximately 15 seconds together.
+// One browser pass per frame count, approximately 11 seconds each when idle:
+// the 3s autoplay watch plus a settled observation per arrow step. Under the
+// full suite's parallel browsers that exceeds the 15s default, so each pass
+// declares its own bound.
 for (const count of [14, 20]) it(`captures ${count} logical frames from the initial route without promoting a carousel to a dialog`, async ({ newPage }) => {
 	const image = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="blue"/></svg>');
 	const frame = (index: number, clone = false) => `<div class="slide" ${clone ? 'data-clone' : ''}><img data-src="${image}" src="${index === 0 ? image : 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'}"><span>Frame ${index}</span></div>`;
@@ -36,4 +39,4 @@ for (const count of [14, 20]) it(`captures ${count} logical frames from the init
 		expect(await page.locator('#section > #carousel').count()).toBe(1);
 		expect(await page.locator('#counter').textContent()).toBe(`1 / ${count}`);
 	} finally { await page.close(); }
-});
+}, 45_000);

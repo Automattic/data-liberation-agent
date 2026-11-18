@@ -262,7 +262,7 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('bisects the breakpoint where a fixed-
 });
 
 // One real capture/export pass (~15 seconds), no mocked browser or export seams.
-it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports consent intent before a click removes the banner, but never banner DOM', async ({ serve }) => {
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports consent facts but removes late, differing consent regions and their backdrops', async ({ serve }) => {
   const fixture = readFileSync(new URL('./fixtures/consent-banner.html', import.meta.url), 'utf8');
   const { server } = await serve((req, res) => {
     if (req.url?.includes('liberation-absent-')) { res.writeHead(404); res.end(); return; }
@@ -274,7 +274,19 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports consent intent before a click
   mkdirSync('.tmp-test', { recursive: true });
   const outputDir = mkdtempSync(join(process.cwd(), '.tmp-test/consent-'));
   try {
-    const result = await captureScreenshots({ urls: [url, `${url}other`, `${url}privacy`], primaryUrl: url, outputDir, concurrency: 1, deviceMode: 'dual', viewports: [
+    const result = await captureScreenshots({ urls: [url, `${url}other`, `${url}privacy`], primaryUrl: url, outputDir, concurrency: 1, deviceMode: 'dual',
+      // Mount after load-time dismissal, immediately before serialization. The
+      // accept handler hides the region without removing its authored DOM.
+      beforeSerialize: async (page, ctx) => {
+        if (ctx.url !== `${url}other`) return;
+        await page.evaluate(() => {
+          document.body.insertAdjacentHTML('beforeend', `<div id="late-backdrop" class="overlay-mask" style="position:fixed;inset:0;background:#0004"></div>
+            <section id="late-notice" role="region" style="position:fixed;bottom:0;left:0;right:0;background:white;padding:12px">
+              <p>This page uses cookies for preferences.</p><a href="/privacy">Privacy policy</a>
+              <button onclick="this.parentElement.style.display='none';document.getElementById('late-backdrop').style.display='none'">Accept</button>
+            </section>`);
+        });
+      }, viewports: [
       { id: 'desktop', width: 1440, height: 900 }, { id: 'mobile', width: 390, height: 844 },
     ] });
     expect(result.failed).toBe(0);
@@ -300,7 +312,11 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports consent intent before a click
       source_selector: 'div.cc-window.cc-banner',
     });
     for (const route of ['index.html', 'other/index.html', 'privacy/index.html']) {
-      expect(readFileSync(join(outputDir, 'website', route), 'utf8')).not.toContain('This website uses cookies');
+      const html = readFileSync(join(outputDir, 'website', route), 'utf8');
+      expect(html).not.toContain('This website uses cookies');
+      expect(html).not.toContain('This page uses cookies');
+      expect(html).not.toContain('id="late-backdrop"');
+      expect(html).toContain('Community garden');
     }
     const receipt = JSON.parse(readFileSync(join(outputDir, 'capture-receipt.json'), 'utf8'));
     expect(receipt.discoveryDiagnostics).toContainEqual(expect.objectContaining({ code: 'consent_banner_differs', url: `${url}other` }));
@@ -308,6 +324,13 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports consent intent before a click
     const manifestPath = join(outputDir, 'screenshots/manifest.json');
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
     expect(manifest.entries[url].dismissed[0].kind).toBe('consent');
+    expect(manifest.entries[`${url}other`].dismissed).toContainEqual(expect.objectContaining({
+      selector: 'section#late-notice', kind: 'consent',
+      consentBanner: expect.objectContaining({ text: expect.stringContaining('This page uses cookies for preferences.'), accept_label: 'Accept' }),
+    }));
+    const evidence = JSON.stringify(manifest.entries[`${url}other`]);
+    expect(evidence).toContain('dismissed_overlay_removed');
+    expect(evidence).toContain('consent dismissed by close-click (section#late-notice)');
     // The same export keeps an uncaptured policy URL absolute.
     const uncapturedPolicyUrl = `${url}uncaptured-policy`;
     for (const entry of Object.values(manifest.entries) as Array<{ dismissed: Array<{ consentBanner?: { policy_link?: { href: string } } }> }>) {

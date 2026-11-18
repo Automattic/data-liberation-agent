@@ -10,6 +10,26 @@ import { includeReferences, parseLocatedStructure, sourceRange, type HtmlRange }
  * different routes, not variants of it. */
 const ROUTE_LOCAL_ATTRIBUTES = /\s(?:data-blocks-engine-node-id|aria-current|aria-selected)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?/gi;
 
+/** Class tokens that mark the served item (Blocks Engine's
+ * `SourceClassIdentity::CURRENT_STATE_CLASSES`). A class naming one of them by
+ * any token (`header-nav-item--active`, `is-current`, `current-menu-item`) is
+ * the class-marked counterpart of `aria-current`. */
+const CURRENT_STATE_CLASSES = new Set( [ 'current', 'active', 'selected' ] );
+const CLASS_ATTRIBUTE = /(\sclass\s*=\s*)(?:"([^"]*)"|'([^']*)'|([^\s>"']+))/gi;
+
+function containsCurrentStateToken( value: string ): boolean {
+	return value.toLowerCase().split( /[^a-z0-9]+/ ).some( token => CURRENT_STATE_CLASSES.has( token ) );
+}
+
+/** Grouping key bytes only: route-local attributes and current-state classes
+ * removed. Emitted parts and route documents keep their authored bytes. */
+export function routeNeutralFragment( fragment: string ): string {
+	return fragment.replace( ROUTE_LOCAL_ATTRIBUTES, '' ).replace( CLASS_ATTRIBUTE, ( _match, prefix: string, double?: string, single?: string, bare?: string ) => {
+		const value = double ?? single ?? bare ?? '';
+		return `${ prefix }"${ value.split( /\s+/ ).filter( token => token && ! containsCurrentStateToken( token ) ).join( ' ' ) }"`;
+	} );
+}
+
 /** Only exact, site-level semantic landmarks are shared; authored bytes survive. */
 export function extractSharedChrome( root: string, routePaths: string[], inventory?: WebsiteInventory ): void {
 	const sources = new Set( [ ...routePaths, ...shareChrome( root, routePaths, false, inventory ) ] );
@@ -71,7 +91,7 @@ function shareChrome( root: string, paths: string[], descendants: boolean, inven
 			if ( ! range || !( node as Element & { sourceCodeLocation?: { endTag?: unknown } } ).sourceCodeLocation?.endTag ) return;
 			const fragment = html.slice( range.start, range.end );
 			const id = `${ role }-${ createHash( 'sha256' ).update( fragment ).digest( 'hex' ) }`;
-			const key = `${ role }-${ createHash( 'sha256' ).update( fragment.replace( ROUTE_LOCAL_ATTRIBUTES, '' ) ).digest( 'hex' ) }`;
+			const key = `${ role }-${ createHash( 'sha256' ).update( routeNeutralFragment( fragment ) ).digest( 'hex' ) }`;
 			const group = groups.get( key ) ?? { id, length: range.end - range.start, exact: new Set(), occurrences: [] };
 			group.exact.add( id );
 			group.occurrences.push( { ...range, path } );
