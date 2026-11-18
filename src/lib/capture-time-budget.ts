@@ -149,21 +149,7 @@ export class RouteTimeBudget {
 		if ( url === this.entrypoint ) return true;
 		if ( this.abandoning || this.now() >= this.admitDeadline() ) return false;
 		if ( ! this.window.projectAdmission ) return true;
-		// 127 seconds was the worst observed per-route duration behind the
-		// former count cap. Until a non-entrypoint route finishes, a faster
-		// entrypoint may lower it, but a slower one never raises it: the
-		// entrypoint pays one-time work (shared chrome, dialog and interaction
-		// probing) that the routes after it reuse.
-		const duration = this.finishedCount ? this.elapsedTotal / this.finishedCount : Math.min( 127_000, this.entrypointElapsed ?? 127_000 );
-		const now = this.now();
-		let work = duration;
-		for ( const startedAt of this.startTimes.values() ) work += Math.max( 0, duration - ( now - startedAt ) );
-		const projected = Math.max( duration, work / Math.max( 1, admittedConcurrency ) );
-		// What is queued, and the assets of routes running now (they finish
-		// first), download while the candidate runs; its own assets follow it.
-		const assets = this.window.assetBacklog?.();
-		const assetTail = assets ? Math.max( 0, assets.queuedMs + this.running.size * assets.perRouteMs - projected ) + assets.perRouteMs : 0;
-		if ( now + projected <= this.admitDeadline() && now + projected + assetTail <= this.window.abandonAt ) return true;
+		if ( this.projectedFit( 1, admittedConcurrency ) ) return true;
 		// Running routes can still revise the estimate; only close permanently
 		// when the pool is idle, avoiding both premature truncation and a spin.
 		if ( ! this.running.size ) this.admissionClosed = true;
@@ -171,17 +157,45 @@ export class RouteTimeBudget {
 	}
 
 	/**
-	 * Admission deadline for one more route: `admitUntil` less each started
-	 * route's downstream reserve, counting the candidate (`routeReserveMs`).
+	 * Whether `routes` more routes, run `concurrency` at a time alongside the
+	 * routes running now, are projected to finish inside the admission window:
+	 * the same projection `admits` applies to one candidate.
+	 */
+	fits( routes: number, concurrency: number ): boolean {
+		if ( this.abandoning || this.now() >= this.admitDeadline( routes ) ) return false;
+		return ! this.window.projectAdmission || this.projectedFit( routes, concurrency );
+	}
+
+	private projectedFit( routes: number, concurrency: number ): boolean {
+		// 127 seconds was the worst observed per-route duration behind the
+		// former count cap. Until a non-entrypoint route finishes, a faster
+		// entrypoint may lower it, but a slower one never raises it: the
+		// entrypoint pays one-time work (shared chrome, dialog and interaction
+		// probing) that the routes after it reuse.
+		const duration = this.finishedCount ? this.elapsedTotal / this.finishedCount : Math.min( 127_000, this.entrypointElapsed ?? 127_000 );
+		const now = this.now();
+		let work = duration * routes;
+		for ( const startedAt of this.startTimes.values() ) work += Math.max( 0, duration - ( now - startedAt ) );
+		const projected = Math.max( duration, work / Math.max( 1, concurrency ) );
+		// What is queued, and the assets of routes running now (they finish
+		// first), download while the candidates run; the last one's assets follow it.
+		const assets = this.window.assetBacklog?.();
+		const assetTail = assets ? Math.max( 0, assets.queuedMs + ( this.running.size + routes - 1 ) * assets.perRouteMs - projected ) + assets.perRouteMs : 0;
+		return now + projected <= this.admitDeadline( routes ) && now + projected + assetTail <= this.window.abandonAt;
+	}
+
+	/**
+	 * Admission deadline for `candidates` more routes: `admitUntil` less each
+	 * started route's downstream reserve, counting the candidates (`routeReserveMs`).
 	 * The entrypoint holds its reserve too, so capture hands the next stage no
 	 * more routes than the reserved budget covers. Without a reserve this is
 	 * `admitUntil`.
 	 */
-	private admitDeadline(): number {
+	private admitDeadline( candidates = 1 ): number {
 		const reserve = this.window.routeReserveMs;
 		// Checkpoint export admission happens after capture, never at the last route.
 		const reused = this.window.checkpoint ? this.reused.size : 0;
-		return reserve === undefined ? this.window.admitUntil : this.window.admitUntil - reserve * ( this.started.size - reused + 1 );
+		return reserve === undefined ? this.window.admitUntil : this.window.admitUntil - reserve * ( this.started.size - reused + candidates );
 	}
 
 	/** Admission has closed and the entrypoint has started: start no more work. */
