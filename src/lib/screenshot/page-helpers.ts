@@ -74,14 +74,14 @@ export function observePageTraffic( page: Page, telemetry?: TelemetryRequest ): 
 export async function settleDocument(
   page: Page,
   wait: string,
-  { quietMs, timeoutMs, animations = false, selector, media = false }: { quietMs: number; timeoutMs: number; animations?: boolean; selector?: string; media?: boolean },
+  { quietMs, timeoutMs, animations = false, selector, media = false, timerOnly = false }: { quietMs: number; timeoutMs: number; animations?: boolean; selector?: string; media?: boolean; timerOnly?: boolean },
 ): Promise<SettleOutcome> {
   const started = Date.now();
   let result: Pick<SettleOutcome, 'reason' | 'excludedMotion' | 'pendingMedia'> = { reason: 'deadline' };
   try {
     result = await withEvaluateTimeout(
       page.evaluate(
-        ({ quietMs, timeoutMs, animations, selector, media }) =>
+        ({ quietMs, timeoutMs, animations, selector, media, timerOnly }) =>
           new Promise<Pick<SettleOutcome, 'reason' | 'excludedMotion' | 'pendingMedia'>>((resolve) => {
             const started = performance.now();
             const deadline = started + timeoutMs;
@@ -200,6 +200,7 @@ export async function settleDocument(
               }
               if (performance.now() >= deadline) return finish('deadline');
               if (!settled()) return void setTimeout(check, 25);
+              if (timerOnly) return finish('quiet');
               requestAnimationFrame(() => requestAnimationFrame(() => {
                 if (finished) return;
                 if (settled()) finish('quiet');
@@ -213,7 +214,7 @@ export async function settleDocument(
             deadlineTimer = setTimeout(() => finish('deadline'), timeoutMs);
             check();
           }),
-        { quietMs, timeoutMs, animations, selector, ...(media ? { media } : {}) },
+        { quietMs, timeoutMs, animations, selector, ...(media ? { media } : {}), timerOnly },
       ),
       timeoutMs + 1_000,
     );
