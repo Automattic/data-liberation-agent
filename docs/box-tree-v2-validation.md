@@ -73,4 +73,8 @@ every node it keeps has an observation for each declared viewport.
 - Assembled pages (`mobile:`/`middle:` identities in width-selected wrappers) declare
   `mobile` too, but no node there has a phone observation of that page, so they are
   left unobserved.
+- Phone-only fragments grafted into a single served document
+  (`data-blocks-engine-capture-mobile-only` outside any width-selected wrapper) carry
+  the phone capture's IDs, so they are namespaced `mobile:` too. That keeps every ID
+  unique, and the page still merges phone observations onto its desktop nodes.
 - Routes without a phone capture keep their declared viewports.

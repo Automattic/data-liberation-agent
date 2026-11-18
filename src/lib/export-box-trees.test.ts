@@ -108,6 +108,28 @@ it('keeps phone identities distinct in assembled documents, leaving width-select
 	expect(tree.nodes).toEqual({});
 });
 
+it('namespaces grafted phone-only fragments so desktop nodes keep evidence at both widths (#1994)', () => {
+	// The phone capture numbers its picture n3/n4, IDs the desktop capture gave its wrapper and text.
+	const desktopHtml = '<html data-blocks-engine-node-id="n0"><body data-blocks-engine-node-id="n1"><main data-blocks-engine-node-id="n2"><div data-blocks-engine-node-id="n3"><p data-blocks-engine-node-id="n4">Hi</p></div></main></body></html>';
+	const mobileHtml = '<html data-blocks-engine-node-id="n0"><body data-blocks-engine-node-id="n1"><main data-blocks-engine-node-id="n2"><picture data-blocks-engine-node-id="n3"><img data-blocks-engine-node-id="n4"></picture><div data-blocks-engine-node-id="n5"><p data-blocks-engine-node-id="n6">Hi</p></div></main></body></html>';
+	const assembled = namespaceExportBoxTreeIds(desktopHtml.replace('<div ', '<picture class="data-blocks-engine-capture-mobile-only" data-blocks-engine-node-id="n3"><img data-blocks-engine-node-id="n4"></picture><div '));
+	const ids = [...assembled.matchAll(/data-blocks-engine-node-id="([^"]+)"/g)].map(match => match[1]);
+	expect(new Set(ids).size).toBe(ids.length);
+	expect(ids).toEqual(expect.arrayContaining(['mobile:n3', 'mobile:n4']));
+	const fixture = exportFixture();
+	const root = fixture.build();
+	fixture.file('html/home.html', desktopHtml);
+	fixture.file('html-mobile/home.html', mobileHtml);
+	fixture.file('website/index.html', assembled);
+	fixture.json('box-tree/home.json', captured('html/home.html', 'desktop', { width: 1440, height: 900 }, { n0: ['n1'], n1: ['n2'], n2: ['n3'], n3: ['n4'], n4: [] }, 100));
+	fixture.json('box-tree/home.mobile.json', captured('html-mobile/home.html', 'mobile', { width: 390, height: 844 }, { n0: ['n1'], n1: ['n2'], n2: ['n3', 'n5'], n3: ['n4'], n4: [], n5: ['n6'], n6: [] }, 40));
+	writeExportBoxTrees(root, join(root, 'website'), [{ sourcePath: 'html/home.html', path: 'index.html' }], new WebsiteInventory(join(root, 'website')));
+	const tree = JSON.parse(readFileSync(join(root, 'website/box-tree/index.json'), 'utf8'));
+	expect(Object.keys(tree.nodes).sort()).toEqual(['n0', 'n1', 'n2', 'n3', 'n4']);
+	for (const id of ['n3', 'n4']) expect(Object.keys(tree.nodes[id].viewports).sort()).toEqual(['desktop', 'mobile']);
+	expect(tree.nodes.n2.children).toEqual(['n3']);
+});
+
 it('uses nearest observed descendants through new wrappers without inventing observations', () => {
 	const html = '<html data-blocks-engine-node-id="root"><body><section><p data-blocks-engine-node-id="text">Hello</p></section></body></html>';
 	const result = projectExportBoxTree(html, source, 'about/index.html', Buffer.from(html));

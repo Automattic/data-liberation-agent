@@ -6,19 +6,40 @@ import { BOX_TREE_SCHEMA, NODE_ID_ATTRIBUTE, type BoxTree } from './screenshot/b
 import { resolvePage } from './site-includes.js';
 import type { WebsiteInventory } from './website-inventory.js';
 
-/** Device captures stamp route-local IDs independently; keep their evidence distinct. */
+const DEVICE_DOCUMENT_WRAPPERS = '.data-blocks-engine-capture-mobile-document, .data-blocks-engine-capture-middle-document';
+const MOBILE_ONLY_FRAGMENT = '.data-blocks-engine-capture-mobile-only';
+
+/**
+ * Device captures stamp route-local IDs independently; keep their evidence distinct.
+ * Phone and middle documents namespace their whole subtree. A phone-only fragment
+ * grafted into the desktop document (#1994) carries the phone capture's IDs, which
+ * collide with unrelated desktop nodes, so it takes the same `mobile:` namespace.
+ */
 export function namespaceExportBoxTreeIds(html: string): string {
 	if (!html.includes(NODE_ID_ATTRIBUTE)) return html;
-	if (!html.includes('data-blocks-engine-capture-mobile-document') && !html.includes('data-blocks-engine-capture-middle-document')) return html;
+	if (!html.includes('data-blocks-engine-capture-mobile-document') && !html.includes('data-blocks-engine-capture-middle-document')
+		&& !html.includes('data-blocks-engine-capture-mobile-only')) return html;
 	const $ = cheerio.load(html);
-	$('.data-blocks-engine-capture-mobile-document, .data-blocks-engine-capture-middle-document').each((_index, wrapper) => {
+	$(DEVICE_DOCUMENT_WRAPPERS).each((_index, wrapper) => {
 		const prefix = $(wrapper).hasClass('data-blocks-engine-capture-mobile-document') ? 'mobile:' : 'middle:';
 		$(wrapper).find(`[${NODE_ID_ATTRIBUTE}]`).addBack(`[${NODE_ID_ATTRIBUTE}]`).each((_i, element) => {
 			$(element).attr(NODE_ID_ATTRIBUTE, prefix + $(element).attr(NODE_ID_ATTRIBUTE));
 		});
 	});
+	$(MOBILE_ONLY_FRAGMENT).filter((_index, fragment) => $(fragment).closest(DEVICE_DOCUMENT_WRAPPERS).length === 0).each((_index, fragment) => {
+		$(fragment).find(`[${NODE_ID_ATTRIBUTE}]`).addBack(`[${NODE_ID_ATTRIBUTE}]`).each((_i, element) => {
+			const id = $(element).attr(NODE_ID_ATTRIBUTE)!;
+			// Nested fragments are visited once per enclosing fragment.
+			if (!id.startsWith('mobile:')) $(element).attr(NODE_ID_ATTRIBUTE, `mobile:${id}`);
+		});
+	});
 	return $.html();
 }
+
+/** Whether the page serves separate width-selected phone or middle documents. */
+const hasDeviceDocuments = (html: string): boolean =>
+	(html.includes('data-blocks-engine-capture-mobile-document') || html.includes('data-blocks-engine-capture-middle-document'))
+	&& cheerio.load(html)(DEVICE_DOCUMENT_WRAPPERS).length > 0;
 
 /** Box-tree sidecar bound to a final page plus the shared parts it includes. */
 export type ExportBoxTree = BoxTree & { includes?: Record<string, string> };
@@ -158,7 +179,7 @@ export function writeExportBoxTrees(captureRoot: string, websiteDir: string, pag
 		}
 		const mobileSource = sources.get(page.mobileSourcePath ?? page.sourcePath.replace(/^html\//, 'html-mobile/'));
 		const mobile = mobileSource ? JSON.parse(readFileSync(mobileSource, 'utf8')) as BoxTree : undefined;
-		if (resolved.html.includes(`${NODE_ID_ATTRIBUTE}="mobile:`) || resolved.html.includes(`${NODE_ID_ATTRIBUTE}="middle:`)) {
+		if (hasDeviceDocuments(resolved.html)) {
 			// An assembled page namespaces its phone and middle documents' identities.
 			// At phone width its desktop wrapper is not what renders, so no node has a
 			// phone observation of this page: declaring the width leaves them unobserved
