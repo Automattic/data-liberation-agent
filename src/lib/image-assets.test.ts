@@ -97,6 +97,43 @@ it('encodes an over-limit alpha original as a bounded transparent rendition (~1s
  } finally { rmSync(root, { recursive: true, force: true }); }
 }, 30000);
 
+it('decodes an over-bound (>40 MP) JPEG original directly at a bounded rendition size (~3s)', async ({ newPage }) => {
+ mkdirSync('.tmp-test', { recursive: true });
+ const root = mkdtempSync('.tmp-test/image-decode-bound-');
+ try {
+  const page = await newPage();
+  const encoded = await page.evaluate(() => {
+   const canvas = document.createElement('canvas');
+   canvas.width = 8200;
+   canvas.height = 5500;
+   const ctx = canvas.getContext('2d')!;
+   ctx.fillStyle = 'navy';
+   ctx.fillRect(0, 0, 8200, 5500);
+   ctx.fillStyle = 'orange';
+   ctx.fillRect(0, 0, 4100, 2750);
+   return canvas.toDataURL('image/jpeg', 0.9).split(',')[1];
+  });
+  const bytes = Buffer.concat([Buffer.from(encoded, 'base64'), Buffer.alloc(5 * 1024 * 1024)]);
+  mkdirSync(join(root, 'resources'));
+  writeFileSync(join(root, 'resources/huge.jpg'), bytes);
+  writeFileSync(join(root, 'resources/manifest.json'), JSON.stringify({ resources: {
+   'https://example.com/huge.jpg': { path: 'resources/huge.jpg', contentType: 'image/jpeg' },
+  } }));
+  const [record] = await captureAssets(root, [{ url: 'https://example.com/', html: '<img src="/huge.jpg">' }], Date.now() - 1);
+  expect(record.error).toBeUndefined();
+  expect(record.original).toMatchObject({ content_type: 'image/jpeg', width: 8200, height: 5500, alpha: false });
+  const rendition = record.renditions![0];
+  expect(rendition.original).toMatchObject({ content_type: 'image/jpeg', alpha: false });
+  const { width, height } = rendition.original!;
+  expect(Math.max(width!, height!)).toBeLessThanOrEqual(2048);
+  expect(Math.abs(height! - width! * 5500 / 8200)).toBeLessThanOrEqual(1);
+  const portable = readFileSync(rendition.local_path!);
+  expect(portable.length).toBeLessThanOrEqual(5 * 1024 * 1024);
+  expect(imageContentType(portable)).toBe('image/jpeg');
+  expect(rendition.original!.sha256).toBe(createHash('sha256').update(portable).digest('hex'));
+ } finally { rmSync(root, { recursive: true, force: true }); }
+}, 60000);
+
 it('chooses the largest srcset candidate and delegates optimizer resolution to the adapter', () => {
  const records = collectImageAssets([{ url: 'https://example.com/', html: '<img src="small.webp" srcset="large.webp 900w, small.webp 100w"><div style="background:url(small.webp)"></div>' }]);
  expect(records).toHaveLength(1);
