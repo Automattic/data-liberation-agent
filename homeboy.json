@@ -7,7 +7,8 @@
     "nodejs": {}
   },
   "release": {
-    "publish": false
+    "publish": false,
+    "github_release": { "owner": "ci" }
   },
   "version_targets": [
     { "file": "package.json", "pattern": "\"version\": \"([0-9.]+)\"" },

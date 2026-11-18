@@ -39,34 +39,38 @@ jobs:
         id: bundles
         run: |
           source_sha="$(git rev-parse HEAD)"
+          echo "source-sha=${source_sha}" >> "$GITHUB_OUTPUT"
           git add -- dist
           if ! git diff --cached --quiet; then
             git -c user.name='github-actions[bot]' \
               -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
               commit -m "build: regenerate plugin bundles"
           fi
-          # Generated output is never rebased or forced. If a newer merge moved
-          # main past the source this run built, that merge's queued run
-          # rebuilds and releases both, so this run stands down successfully.
+          # Generated output is never rebased or forced.
           if git push origin HEAD:main; then
+            echo "lane=main" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # A newer merge moved main past the commit this run verified. Handing
+          # off to the next queued run starved releases whenever merges landed
+          # faster than one run (#1399), so this run releases the verified
+          # commit itself and merges that release into main.
           git fetch origin main
           if [ "$(git rev-parse origin/main)" != "$source_sha" ] && git merge-base --is-ancestor "$source_sha" origin/main; then
-            echo "::notice::main moved past ${source_sha}; the queued release run for $(git rev-parse --short origin/main) releases this change."
-            echo "superseded=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::main moved past ${source_sha}; releasing the verified commit and merging the release into main at $(git rev-parse --short origin/main)."
+            echo "lane=merge" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           exit 1
       - name: Verify committed bundle reproducibility
-        if: steps.bundles.outputs.superseded != 'true'
         run: |
           npm run build:mcp-bundle
           test -z "$(git status --porcelain -- dist)"
 
+      # main still is the verified commit: release it in place.
       - uses: Extra-Chill/homeboy-action@v2
         id: release
-        if: steps.bundles.outputs.superseded != 'true'
+        if: steps.bundles.outputs.lane == 'main'
         with:
           extension: nodejs
           component: data-liberation-agent
@@ -74,4 +78,41 @@ jobs:
           # The GitHub Release carries the `npm pack` tarball as its asset
           # (homeboy.json binds the nodejs packager). This package is not
           # published to the npm registry; homeboy.json also disables it.
+          release-skip-publish: 'true'
+
+      # main moved: version and tag the verified commit against a local stage
+      # whose main is that commit, so Homeboy cannot fast-forward onto merges
+      # this run never tested. Nothing reaches GitHub until the merge step.
+      - name: Stage the verified commit as the release base
+        id: stage
+        if: steps.bundles.outputs.lane == 'merge'
+        run: bash .github/scripts/release-verified-source.sh stage
+      - uses: Extra-Chill/homeboy-action@v2
+        id: stage-release
+        if: steps.bundles.outputs.lane == 'merge'
+        with:
+          extension: nodejs
+          component: data-liberation-agent
+          commands: release
+          release-skip-publish: 'true'
+          # The GitHub Release is published from the merged tag below.
+          release-skip-github-release: 'true'
+          release-verify-github-release: 'false'
+      - name: Merge the verified release into main
+        if: steps.bundles.outputs.lane == 'merge' && steps.stage-release.outputs.released == 'true'
+        env:
+          ORIGIN_URL: ${{ steps.stage.outputs.origin-url }}
+          SOURCE_SHA: ${{ steps.bundles.outputs.source-sha }}
+          RELEASE_TAG: ${{ steps.stage-release.outputs.release-tag }}
+        run: bash .github/scripts/release-verified-source.sh merge
+      # HEAD is the tagged release commit, now reachable from main: package it
+      # and publish its GitHub Release without recomputing version or changelog.
+      - uses: Extra-Chill/homeboy-action@v2
+        id: release-merged
+        if: steps.bundles.outputs.lane == 'merge' && steps.stage-release.outputs.released == 'true'
+        with:
+          extension: nodejs
+          component: data-liberation-agent
+          commands: release
+          release-head: 'true'
           release-skip-publish: 'true'
