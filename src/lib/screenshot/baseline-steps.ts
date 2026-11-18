@@ -27,7 +27,7 @@ import { loadSourceBaseline } from './load-baseline.js';
 import { type FailureEntry, type ManifestEntry, type ProfileDiagnostic } from './manifest-queue.js';
 import { captureNativeViewTimelines } from './native-view-timelines.js';
 import { type ArtifactPlan } from './output-layout.js';
-import { dismissOverlays, pageResponds, withEvaluateTimeout } from './page-helpers.js';
+import { dismissOverlays, pageResponds, settleDocument, withEvaluateTimeout } from './page-helpers.js';
 import { type PhaseLedger } from './phase-ledger.js';
 import { CapturedResourceStore } from './resource-capture.js';
 import { projectRootClassContracts, rootClassContracts, RootClassEvidence, sampleRootClassLadder, type RootClassContract } from './root-class-contracts.js';
@@ -356,6 +356,16 @@ export function baselineSteps(
 		if ( consent.length ) args.entry.dismissed = [ ...( args.entry.dismissed ?? [] ), ...consent ];
 	};
 
+	const waitForMountedMedia = async () => {
+		// Resizes and scroll probes can unmount an already-ready component.
+		// No animation frames: occluded browser pages must finish at the bound.
+		const outcome = await settleDocument( page, 'serialize-media', { quietMs: 0, timeoutMs: 1_000, media: true, timerOnly: true } );
+		for ( const selector of outcome.pendingMedia ?? [] ) {
+			const reason = `${ url } (${ viewport.id }): media component ${ selector } remained unmounted at serialization`;
+			if ( !args.diagnostics?.some( diagnostic => diagnostic.reason === reason ) ) args.diagnostics?.push( { code: 'media_mount_pending', reason } );
+		}
+	};
+
 	const serializeDocument = async ( frozen: boolean ): Promise<{ html: string; documentUrl: { url: string; baseUrl: string } }> => {
 		args.diagnostics?.push( ...await removeRuntimeWidgets( page ) );
 		await sweepSourceCleanup( page, sourcePolicy );
@@ -365,6 +375,7 @@ export function baselineSteps(
 		// Consent managers can mount (or remount) after the load-time checks.
 		// Keep route-local facts even when their copy differs from the entrypoint.
 		await recordLateConsent();
+		await waitForMountedMedia();
 		await stampNodeIds( page );
 		let laterNodes: BoxTree['nodes'] | undefined;
 		const learned = await capturePageHtml( page, args.diagnostics, undefined, observation => { laterNodes = observation && 'nodes' in observation ? observation.nodes : undefined; } );
@@ -476,6 +487,7 @@ export function baselineSteps(
 				await markInitialDocument( page );
 				// Probes above resized the page; serialize source sheets as loaded at this width.
 				await restoreLoadTimeSheets( page ).catch ( orElse( 0 ) );
+				await waitForMountedMedia();
 				await stampNodeIds( page );
 				let boxNodes: BoxTreeObservation | undefined;
 				state.initialDocument = await capturePageHtml( page, args.diagnostics, serverHtml,

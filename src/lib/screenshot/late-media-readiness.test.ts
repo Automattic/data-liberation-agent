@@ -1,4 +1,8 @@
 import { expect } from 'vitest';
+import { load as parseHtml } from 'cheerio';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { captureScreenshots } from './screenshotter.js';
 import { it } from '../../../test/browser.js';
 import { settleDocument, triggerLazyLoad, waitForStable } from './page-helpers.js';
 import { loadSourceBaseline } from './load-baseline.js';
@@ -113,9 +117,60 @@ it('accepts authored picture sources and bounds readiness without animation fram
 	expect(bounded.reason).toBe('deadline');
 	expect(bounded.ms).toBeLessThan(1_000);
 	expect(bounded.pendingMedia).toBeUndefined();
+	const timerOnly = await settleDocument(page, 'timer-only-media', { quietMs: 0, timeoutMs: 100, media: true, timerOnly: true });
+	expect(timerOnly.reason).toBe('quiet');
 
 	await page.setContent(`<picture><img id="pending" width="24" height="24"><img hidden src="${pixel}"></picture>`);
 	const pending = await settleDocument(page, 'pending-media', { quietMs: 0, timeoutMs: 100, media: true });
 	expect(pending.reason).toBe('deadline');
 	expect(pending.pendingMedia).toEqual(['#pending']);
 });
+
+// One capture, roughly 10 s: exercise both the immutable snapshot and final read.
+it('remounts iframe hosts after capture resizes before serializing', async ({ serve }) => {
+	const { origin } = await serve((_request, response) => {
+		response.setHeader('content-type', 'text/html');
+		response.end(`<!doctype html><title>Resizable embed</title>
+		<sample-iframe id="map"><iframe title="Map" src="about:blank"></iframe></sample-iframe>
+		<script>
+		let remount;
+		addEventListener('resize', () => {
+			const host = document.querySelector('#map');
+			host.replaceChildren();
+			clearTimeout(remount);
+			remount = setTimeout(() => { host.innerHTML = '<iframe title="Map" src="about:blank"></iframe>'; }, 300);
+		});
+		</script>`);
+	});
+	mkdirSync('.tmp-test', { recursive: true });
+	const outputDir = mkdtempSync(join(process.cwd(), '.tmp-test/resize-media-'));
+	const url = `${origin}/resizable`;
+	let snapshots = 0;
+	try {
+		const result = await captureScreenshots({
+			urls: [url], outputDir, concurrency: 1, settleMs: 0,
+			viewports: [{ id: 'desktop', width: 800, height: 600 }],
+			learnFluid: true, fluidWidths: [800],
+			beforeSerialize: async page => {
+				expect(await page.locator('#map iframe').count()).toBe(1);
+				await page.setViewportSize({ width: 801, height: 600 });
+				await page.evaluate(() => dispatchEvent(new Event('resize')));
+			},
+			beforeFluid: async page => {
+				await page.evaluate(() => {
+					const pending = document.createElement('sample-iframe');
+					pending.id = 'never-remounted';
+					document.body.append(pending);
+				});
+			},
+			observeSource: async () => { snapshots++; },
+		});
+		const entry = JSON.parse(readFileSync(result.manifestPath, 'utf8')).entries[url];
+		expect(snapshots).toBe(1);
+		const $ = parseHtml(readFileSync(join(outputDir, entry.html), 'utf8'));
+		expect($('#map iframe').attr('title')).toBe('Map');
+		expect(JSON.stringify(entry)).toContain(`${url} (desktop): media component #never-remounted remained unmounted at serialization`);
+	} finally {
+		rmSync(outputDir, { recursive: true, force: true });
+	}
+}, 60_000);
