@@ -88,6 +88,43 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('non-image public captu
    rmSync(root,{recursive:true,force:true});
   }
  }, 120_000);
+ it('resolves relative font urls against each owning stylesheet (~15s)', async () => {
+  const fonts: Record<string, Buffer> = {
+   '/fonts/A/regular.woff2': readFileSync('test/fixtures/resource-assets/roboto-latin-400-normal.woff2'),
+   '/fonts/B/regular.woff2': readFileSync('test/fixtures/resource-assets/roboto-greek-400-normal.woff2'),
+  };
+  const server = createServer((req, res) => {
+   const path = new URL(req.url!, 'http://example.com').pathname;
+   const family = /^\/fonts\/([AB])\/font\.css$/.exec(path)?.[1];
+   if (family) { res.setHeader('content-type', 'text/css'); res.end(`@font-face{font-family:Face${family};src:url('./regular.woff2') format('woff2')}`); }
+   else if (fonts[path]) { res.setHeader('content-type', 'font/woff2'); res.end(fonts[path]); }
+   else { res.setHeader('content-type', 'text/html'); res.end('<!doctype html><title>Two faces</title><link rel="stylesheet" href="/fonts/A/font.css"><link rel="stylesheet" href="/fonts/B/font.css"><p style="font-family:FaceA">Hello</p><p style="font-family:FaceB">Γειά</p>'); }
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const url = `http://127.0.0.1:${(server.address() as {port:number}).port}/`;
+  mkdirSync('.tmp-test', {recursive:true});
+  const root = mkdtempSync(join(process.cwd(), '.tmp-test/font-relative-'));
+  try {
+   const result = await captureWebsite({url, outputDir:root, trustedOrigins:[url], learnFluid:false, routeLimit:1}, {findAdapter:()=>({id:'fixture', detect:()=>true, discover:async()=>({urls:[]})})});
+   const receipt = JSON.parse(readFileSync(result.captureReceiptPath, 'utf8'));
+   const stylesheets = receipt.assets.filter((asset:any)=>asset.path.endsWith('.css')).map((asset:any)=>readFileSync(join(root, asset.path), 'utf8'));
+   const sources = new Map<string, string>();
+   for (const css of stylesheets) for (const [, family, src] of css.matchAll(/font-family:\s*Face([AB]);\s*src:\s*url\(["']?([^"')]+)["']?\)/g)) sources.set(family, src);
+   console.info(`relative font sources: ${JSON.stringify(Object.fromEntries(sources))}`);
+   expect([...sources.keys()].sort()).toEqual(['A', 'B']);
+   expect(sources.get('A')).not.toBe(sources.get('B'));
+   for (const family of ['A', 'B']) {
+    const path = join(root, 'website', new URL(sources.get(family)!, 'http://portable.test/').pathname);
+    expect(readFileSync(path)).toEqual(fonts[`/fonts/${family}/regular.woff2`]);
+   }
+   const evidence = JSON.parse(readFileSync(join(root, 'asset-evidence.json'), 'utf8')).assets.filter((asset:any)=>asset.sourceUrl.endsWith('/regular.woff2'));
+   expect(evidence.map((asset:any)=>[new URL(asset.sourceUrl).pathname, asset.portable, `/${asset.path?.replace(/^website\//, '')}`]).sort()).toEqual(
+    ['A', 'B'].map(family=>[`/fonts/${family}/regular.woff2`, 'included', sources.get(family)]));
+  } finally {
+   server.closeAllConnections(); await new Promise<void>(resolve=>server.close(()=>resolve()));
+   rmSync(root,{recursive:true,force:true});
+  }
+ }, 120_000);
  it('captures real fonts behind a same-origin stylesheet proxy, PDF aliases, video and poster', async () => {
   const files = new Map<string, Buffer>();
   for (const subset of ['latin', 'greek']) for (const format of ['woff', 'woff2']) {

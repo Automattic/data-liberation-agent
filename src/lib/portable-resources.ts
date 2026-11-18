@@ -244,30 +244,39 @@ export function materializePortableResources( options: PortableResourceOptions )
 					content = JSON.stringify( manifest );
 				} catch { /* Preserve invalid optional metadata for diagnostics. */ }
 			}
-			if ( /text\/css/i.test( resource.contentType ) ) {
+			const isStylesheet = /text\/css/i.test( resource.contentType );
+			if ( isStylesheet ) {
 				if ( options.excludedRenditions?.size )
 					content = stripImageSetCandidates( content, isExcludedRendition( options.excludedRenditions, dependency.url ) );
+				// A stylesheet's references are relative to the stylesheet itself:
+				// two sheets can both say `./regular.woff2` and mean different files.
+				// Identity is the URL resolved against this sheet. This map is the
+				// sheet's only rewrite: a site-wide pass keyed by authored spellings
+				// would remap one sheet's relative URL to another sheet's file.
+				const stylesheetReplacements = new Map< string, string >();
 				for ( const nested of dependencyReferences( content, dependency.url, true ) ) {
-					const mediaReplacement =
-						mediaReplacements.get( nested.reference ) ?? mediaReplacements.get( nested.url );
+					const mediaReplacement = mediaReplacements.get( nested.url );
 					if (
 						mediaReplacement &&
 						mediaReplacement !== TRANSPARENT_IMAGE_DATA_URL &&
 						! /^(?:https?:)?\/\//i.test( mediaReplacement )
 					) {
-						mediaReplacements.set( nested.reference, mediaReplacement );
+						stylesheetReplacements.set( nested.reference, mediaReplacement );
 						continue;
 					}
 					if ( copyResource( nested, dependency.url ) ) {
 						if ( mediaReplacement === TRANSPARENT_IMAGE_DATA_URL ) {
 							promoteCapturedMediaReplacement( nested.url, dependency.url );
 						}
+						stylesheetReplacements.set( nested.reference, resourceReplacements.get( nested.url )! );
 					} else {
 						content = replaceDanglingCssUrl( content, nested.reference, rejectedReplacementKeys );
 					}
 				}
+				content = preparePortableReplacements( stylesheetReplacements, rejectedReplacementKeys )( content );
+			} else {
+				content = preparePortableReplacements( mediaReplacements, rejectedReplacementKeys )( content );
 			}
-			content = preparePortableReplacements( mediaReplacements, rejectedReplacementKeys )( content );
 			if ( /^text\/html(?:;|$)/i.test( resource.contentType ) && embeddedSources.has( dependency.url ) ) {
 				const $ = cheerio.load( content );
 				const base = new URL( $( 'base[href]' ).first().attr( 'href' ) ?? dependency.url, dependency.url ).href;
@@ -276,7 +285,7 @@ export function materializePortableResources( options: PortableResourceOptions )
 			}
 			writeFileSync(
 				destination,
-				preparePortableReplacements( resourceReplacements, rejectedReplacementKeys )( content, dependency.url )
+				isStylesheet ? content : preparePortableReplacements( resourceReplacements, rejectedReplacementKeys )( content, dependency.url )
 			);
 		} else {
 			copyFileSync( source, destination );
