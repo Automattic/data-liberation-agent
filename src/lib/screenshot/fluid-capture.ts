@@ -196,13 +196,16 @@ export async function reserveSweep(
 	let pending = pendingSweeps.get( memo );
 	if ( ! pending ) pendingSweeps.set( memo, pending = new Map() );
 	const started = Date.now();
-	const waited = () => Date.now() - started;
+	// Only time actually spent waiting counts; a route that never waits reports 0.
+	let didWait = false;
+	const waited = () => didWait ? Date.now() - started : 0;
 	for ( ;; ) {
 		const elements = needed();
 		if ( elements.length === 0 ) return { release: () => {}, waitedMs: waited() };
 		const covering = elements.map( keys => keys.map( key => pending.get( key ) ).find( Boolean ) );
-		const remaining = waitMs - waited();
+		const remaining = waitMs - ( Date.now() - started );
 		if ( remaining > 0 && covering.every( Boolean ) ) {
+			didWait = true;
 			let timer: NodeJS.Timeout | undefined;
 			const expired = await Promise.race( [
 				Promise.all( new Set( covering ) ).then( () => false ),

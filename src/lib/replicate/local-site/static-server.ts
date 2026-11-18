@@ -128,7 +128,9 @@ export function startStaticServer(root: string): Promise<StaticServer> {
       resolvePromise({
         url,
         port,
-        close: () => new Promise<void>((r) => server.close(() => r())),
+        // Browser contexts that outlive the server hold keep-alive sockets open;
+        // closing must not wait for them to time out.
+        close: () => new Promise<void>((r) => { server.close(() => r()); server.closeAllConnections(); }),
         pageUrl: (slug: string) => (slug === 'home' ? `${url}/` : `${url}/${slug}/`),
         urlForPage: (relPath: string) => {
           const noExt = relPath.replace(/\.html?$/i, '');
