@@ -41,7 +41,7 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('publishes complete source-bound box t
 			expect(tree.schema).toBe(BOX_TREE_SCHEMA);
 			expect(tree.source_path).toBe(entry.html);
 			expect(tree.source_hash).toBe(createHash('sha256').update(html).digest('hex'));
-			expect(receipt.reports).toContain(sidecar);
+			expect(receipt.reports).not.toContain(sidecar);
 			const $ = load(html);
 			const ids = $('*').toArray().map(element => $(element).attr(NODE_ID_ATTRIBUTE));
 			expect(new Set(ids).size).toBe(ids.length);

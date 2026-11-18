@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { mergeConsentLayouts } from './consent-banner-layout.js';
 import { normalizedUrl } from './url/route-key.js';
 import { ROUTE_OMITTED_BY_BUDGET } from './route-budget.js';
@@ -385,16 +385,16 @@ function assetEvidence(
  * Derived from the publication-owned files (required ones are always written
  * into this generation; optional ones only when staged) and the site analysis
  * files capture serialized into the capture root. Directories are excluded.
+ * Raw `box-tree/` sidecars are not listed: they bind `html/` capture documents,
+ * which an importer never receives, so each would be rejected as stale. The
+ * importer's box-tree evidence is `website/box-tree/`, bound to the delivered pages.
  */
 export function importerReports( stageDir: string, captureRoot: string ): string[] {
 	const owned = EXPORT_PUBLICATION_OWNED
 		.filter( item => item.kind === 'file' && ( item.required || existsSync( join( stageDir, item.path ) ) ) )
 		.map( item => item.path as string );
 	const analysis = SITE_ANALYSIS_FILES.filter( file => existsSync( join( captureRoot, file ) ) );
-	const boxes = existsSync( join( captureRoot, 'box-tree' ) )
-		? readdirSync( join( captureRoot, 'box-tree' ), { recursive: true, encoding: 'utf8' } ).filter( path => path.endsWith( '.json' ) ).map( path => `box-tree/${ path.split( '\\' ).join( '/' ) }` )
-		: [];
-	return [ ...owned, ...analysis, ...boxes ].sort();
+	return [ ...owned, ...analysis ].sort();
 }
 
 export const UNCAPTURED_ROUTE_REASON = 'target route was not captured';
