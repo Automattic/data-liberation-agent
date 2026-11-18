@@ -60,6 +60,25 @@ describe( 'checkSelfConsistency', () => {
 		] );
 	} );
 
+	it( 'exempts only source-dead same-document fragments and still catches lost targets', () => {
+		const root = site( {
+			'website/index.html': '<a href="#nav">Menu</a><a href="/index.html#nav">Menu</a><a href="#about">About</a><section id="about"></section>',
+			'website/other/index.html': '<a href="#nav">Other menu</a><a href="/index.html#nav">Home menu</a>',
+			'source-profile.json': JSON.stringify( {
+				schema: 'blocks-engine-capture/source-profile/v1',
+				sourceDeadFragments: [ { path: 'index.html', fragments: [ 'nav' ] } ],
+			} ),
+		} );
+		const dir = join( root, 'website' );
+		const routes = files( [ '/', 'index.html' ] );
+		expect( checkSelfConsistency( dir, routes ).pass ).toBe( true );
+		writeFileSync( join( dir, 'index.html' ), '<a href="#nav">Menu</a><a href="#about">About</a><section id="elsewhere"></section>' );
+		expect( checkSelfConsistency( dir, routes ).findings ).toEqual( [ { route: '/', kind: 'anchor-missing', detail: '#about' } ] );
+		expect( checkSelfConsistency( dir, files( [ '/other/', 'other/index.html' ] ) ).findings ).toHaveLength( 2 );
+		writeFileSync( join( root, 'source-profile.json' ), '{invalid' );
+		expect( checkSelfConsistency( dir, routes ).findings ).toHaveLength( 2 );
+	} );
+
 	it( 'catches an anchor that matches more than one target', () => {
 		// The desktop/mobile collision: the browser picks the first silently.
 		const dir = site( {

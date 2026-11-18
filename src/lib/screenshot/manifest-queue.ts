@@ -5,6 +5,8 @@ import type { InteractionStatesReport } from './interaction-capture.js';
 import type { ScrollStatesReport } from './scroll-state-capture.js';
 
 export interface ManifestEntry {
+	/** Decoded same-document fragments with no live DOM target, by capture profile. */
+	sourceDeadFragments?: Record< string, string[] >;
   cleanup?: { policy: import('../source-cleanup.js').CleanupPolicy; reports: import('../source-cleanup.js').CleanupReport[] };
   /** The provider withheld this route behind its login; it was captured as a placeholder (see access-gate.ts). */
   accessGate?: import('../access-gate.js').AccessGateEvidence;

@@ -56,7 +56,7 @@ export interface CaptureEvidenceInput {
 		discoveryDiagnostics?: ReadonlyArray< RouteDiagnostic >;
 	};
 	capture: {
-		entries: Readonly< Record< string, Pick< ManifestEntry, 'cleanup' | 'redirectedTo' | 'externalRedirect' | 'sourceOutcomes' | 'nativeViewTimelines' | 'dismissed' | 'scriptedLinks' > > >;
+		entries: Readonly< Record< string, Pick< ManifestEntry, 'cleanup' | 'redirectedTo' | 'externalRedirect' | 'sourceOutcomes' | 'nativeViewTimelines' | 'dismissed' | 'scriptedLinks' | 'sourceDeadFragments' > > >;
 		absentRoutes: ReadonlySet< string >;
 		interactivity: ReadonlyArray< SourceInteractivityPage >;
 		http?: { acquisition: unknown; diagnostics: ReadonlyArray< { code: string; url: string; reason: string } > };
@@ -600,6 +600,11 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 		switchWidthSource: deviceSelections.length && ! switchWidths.length ? 'not-applicable' : widthSelections.length === switchWidths.length && widthSelections.length > 0 ? 'observed' : switchWidths.length > 0 ? 'detected' : 'default',
 		breakpoints: observedBreakpoints,
 		learned: { applied: learnedApplied, frozen: learnedFrozen, routes: routes.filter( entry => entry.fluidGeometry ).length, documents: fluidReports.length },
+		// Keyed by exported file, so offline callers need no source URL mapping.
+		sourceDeadFragments: routes.map( route => ( {
+			path: route.path.replace( /^website\//, '' ),
+			fragments: [ ...new Set( Object.values( capture.entries[ route.url ]?.sourceDeadFragments ?? {} ).flat() ) ],
+		} ) ),
 	};
 	writeFileSync(
 		join( stageDir, 'source-profile.json' ),
