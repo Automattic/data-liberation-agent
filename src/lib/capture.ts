@@ -559,7 +559,7 @@ async function runCaptureWebsite(
 		: undefined;
 	const navigationTargets = new Set( extractNavigationLandmarkLinks( entryHtml, sourceUrl ).map( link => normalizedUrl( link.href ) ) );
 	// Shape sub-clusters (#1805) seed their own representative and verifier.
-	const clusterRankingGroups = templateGrouping?.report
+	let clusterRankingGroups = templateGrouping?.report
 		? ( await import( './template-groups.js' ) ).templateClusterRankingGroups( templateGrouping.report.groups, structuredMemberShape( contentSource, contentEntries ) )
 		: [];
 	// Explicit count budgets select before capture observes the entry DOM. Only
@@ -618,6 +618,16 @@ async function runCaptureWebsite(
 		clientErrorShellSelectors: adapter.liberation?.clientErrorShellSelectors,
 		referenceSample,
 	} );
+	// Frontier grouping shares the bounded HTTP fingerprint implementation and
+	// source governors with inventory grouping. Never use whole-inventory limits.
+	const frontierGroupingLimits = templateClusters ? {
+		...( await import( './template-groups.js' ) ).TEMPLATE_GROUPING_LIMITS,
+		...await templateGroupingLimits( { timeBudgetMs, wholeInventory: false } ),
+	} : undefined;
+	const frontierOffered = new Set< string >();
+	let frontierRounds = 0;
+	let frontierRemaining = frontierGroupingLimits?.maxRoutes === 'all' ? 1000 : frontierGroupingLimits?.maxRoutes ?? 0;
+	let frontierDeadline: number | undefined;
 	const assetQueue = new AssetAcquisitionQueue( outputDir, timeBudget?.abandonAt, adapter.resolveImageOriginal?.bind( adapter ), undefined, timeBudget?.admitUntil );
 	const screenshotResult = await captureScreenshots( {
 		governors: sourceGovernors,
@@ -660,7 +670,31 @@ async function runCaptureWebsite(
 		},
 		// Source evidence already renders the entrypoint. Promote its client-only
 		// menu before subsequent admissions, without opening another browser page.
-		...( timeBudget?.projectAdmission ? {
+		...( templateClusters && templateGrouping?.report && frontierGroupingLimits ? {
+			groupLinkedRoutes: async ( candidates: string[] ) => {
+				const report = templateGrouping.report!;
+				const grouped = new Set( report.groups.flatMap( group => group.members ) );
+				const urls = candidates.filter( url => ! grouped.has( url ) && ! frontierOffered.has( url ) && ! actionUrlExclusion( url ) && ! platformRuntimeExclusion( url, sourceUrl, adapter.runtimePaths ) ).slice( 0, frontierRemaining );
+				frontierDeadline ??= Date.now() + frontierGroupingLimits.timeBudgetMs;
+				if ( ! urls.length || frontierRounds >= 3 || Date.now() >= frontierDeadline ) return;
+				frontierRounds++;
+				frontierRemaining -= urls.length;
+				for ( const url of urls ) frontierOffered.add( url );
+				try {
+					const { extendTemplateGroups, templateClusterRankingGroups } = await import( './template-groups.js' );
+					await extendTemplateGroups( report, {
+						sourceUrl, urls, routeScope, governors: sourceGovernors,
+						styleNormalization: adapter.templateStyleNormalization, templateIdentity: adapter.templateIdentity,
+						limits: { ...frontierGroupingLimits, maxRoutes: urls.length, maxTotalBytes: Math.floor( frontierGroupingLimits.maxTotalBytes / 3 ), timeBudgetMs: Math.max( 1, frontierDeadline - Date.now() ) },
+					}, true );
+					// Rank pending work against the groups this frontier pass admitted.
+					clusterRankingGroups = templateClusterRankingGroups( report.groups, structuredMemberShape( contentSource, contentEntries ) );
+				} catch ( error ) {
+					process.stderr.write( `[template-groups] frontier grouping unavailable: ${ error instanceof Error ? error.message : String( error ) }\n` );
+				}
+			},
+		} : {} ),
+		...( timeBudget?.projectAdmission || templateClusters ? {
 			prioritizePendingRoutes: ( pending: string[] ) => {
 				if ( templateClusters ) return rankTemplateClusterRoutes( pending, sourceUrl, clusterRankingGroups, navigationTargets, contentSource?.termName.bind( contentSource ) );
 				const pendingRoutes = new Set( pending );
