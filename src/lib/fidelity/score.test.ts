@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { createServer } from 'node:http';
-import { chromium } from 'playwright';
+import { describe, expect } from 'vitest';
+import { it } from '../../../test/browser.js';
+
 import { PNG } from 'pngjs';
 import { observePage } from './check.js';
 import { checkImageGeometry } from './rendered-contract-checks.js';
@@ -79,13 +79,41 @@ describe( 'scoreViewport', () => {
 		expect( score.pass ).toBe( true );
 	} );
 
-	it( 'fails when a same-page hash has no target in the copy', () => {
-		const score = scoreViewport(
-			at( 1440, { hashTargets: [ { fragment: 'team', resolved: true, targets: 1 } ] } ),
-			at( 1440, { hashTargets: [ { fragment: 'team', resolved: false, targets: 0 } ] } )
-		);
-		expect( score.pass ).toBe( false );
-		expect( score.failures[ 0 ] ).toMatch( /#team/ );
+	it.each( [
+		{
+			name: 'a fragment the source resolves is lost on the copy',
+			source: [ { fragment: 'team', resolved: true, targets: 1, rendered: true } ],
+			copy: [ { fragment: 'team', resolved: false, targets: 0, rendered: true } ],
+			fails: true,
+		},
+		{
+			name: 'the copy renders a dead link the source lacks',
+			source: [],
+			copy: [ { fragment: 'team', resolved: false, targets: 0, rendered: true } ],
+			fails: true,
+		},
+		{
+			name: 'an older observation without rendered counts as rendered',
+			source: [],
+			copy: [ { fragment: 'team', resolved: false, targets: 0 } ],
+			fails: true,
+		},
+		{
+			name: 'the source carries the same dead link',
+			source: [ { fragment: 'team', resolved: false, targets: 0, rendered: true } ],
+			copy: [ { fragment: 'team', resolved: false, targets: 0, rendered: true } ],
+			fails: false,
+		},
+		{
+			name: 'the dead copy link is not rendered',
+			source: [],
+			copy: [ { fragment: 'team', resolved: false, targets: 0, rendered: false } ],
+			fails: false,
+		},
+	] )( 'scores unresolved same-page anchors against the source: $name', ( { source, copy, fails } ) => {
+		const score = scoreViewport( at( 1440, { hashTargets: source } ), at( 1440, { hashTargets: copy } ) );
+		expect( score.pass ).toBe( ! fails );
+		if ( fails ) expect( score.failures[ 0 ] ).toMatch( /same-page anchor\(s\) missing: #team/ );
 	} );
 
 	it( 'fails when a hash resolves in the copy but to more places than the source', () => {
@@ -263,13 +291,13 @@ describe( 'scoreViewport', () => {
 		expect( matchRenderedImages( source, candidate ) ).toHaveLength( 2 );
 	} );
 
-	it.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) )( 'observes stable resource digests and detects relocated colliding images in a browser', async () => {
+	it.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) )( 'observes stable resource digests and detects relocated colliding images in a browser', async ({ serve, newPage }) => {
 		const black = new PNG( { width: 1, height: 1 } );
 		black.data.set( [ 0, 0, 0, 255 ] );
 		const white = new PNG( { width: 1, height: 1 } );
 		white.data.set( [ 255, 255, 255, 255 ] );
 		const images = [ PNG.sync.write( black ), PNG.sync.write( white ) ];
-		const server = createServer( ( request, response ) => {
+		const { server } = await serve(( request, response ) => {
 			if ( request.url?.startsWith( '/image-' ) ) {
 				response.writeHead( 200, { 'content-type': 'image/png' } );
 				response.end( images[ request.url === '/image-1.png' ? 1 : 0 ] );
@@ -278,12 +306,12 @@ describe( 'scoreViewport', () => {
 				response.writeHead( 200, { 'content-type': 'text/html' } );
 				response.end( `<style>img{display:block;width:100px;height:100px;margin-bottom:100px}</style>${ order.map( index => `<img src="/image-${ index }.png">` ).join( '' ) }` );
 			}
-		} );
-		await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+		});
+
 		const origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
-		const browser = await chromium.launch();
-		try {
-			const page = await browser.newPage( { viewport: { width: 768, height: 900 } } );
+
+		{
+			const page = await newPage( { viewport: { width: 768, height: 900 } } );
 			const source = await observePage( page, origin, 768, 0, null );
 			expect( source.images[ 0 ].contentHash ).toBe( source.images[ 1 ].contentHash );
 			expect( source.images[ 0 ].assetHash ).toMatch( /^[a-f0-9]{64}$/ );
@@ -291,9 +319,6 @@ describe( 'scoreViewport', () => {
 			const candidate = await observePage( page, `${ origin }/swapped`, 768, 0, origin );
 			expect( matchRenderedImages( source.images, candidate.images ) ).toHaveLength( 2 );
 			expect( checkImageGeometry( source, candidate ).failures?.[ 0 ] ).toContain( 'geometry differs' );
-		} finally {
-			await browser.close();
-			await new Promise<void>( resolve => server.close( () => resolve() ) );
 		}
 	}, 30_000 );
 

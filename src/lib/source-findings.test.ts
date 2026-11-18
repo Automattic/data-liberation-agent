@@ -41,6 +41,7 @@ describe( 'source findings (static-site-importer/source-findings/v1)', () => {
 			route_capture_failed: { loss_class: 'omitted_unit', unit: 'route' },
 			route_export_failed: { loss_class: 'omitted_unit', unit: 'route' },
 			route_path_collision: { loss_class: 'omitted_unit', unit: 'route' },
+			route_path_unsafe: { loss_class: 'omitted_unit', unit: 'route' },
 			route_off_origin: { loss_class: 'omitted_unit', unit: 'route' },
 			route_profile_uncaptured: { loss_class: 'omitted_unit', unit: 'profile' },
 			route_capture_skipped_budget: { loss_class: 'omitted_unit', unit: 'route' },

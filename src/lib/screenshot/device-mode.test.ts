@@ -1,4 +1,5 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, vi } from 'vitest';
+import { it } from '../../../test/browser.js';
 import { createServer, type Server } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -412,6 +413,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 	let transientPhoneServed = false;
 	beforeAll( async () => {
 		server = createServer( ( request, response ) => {
+			if ( request.url?.includes( 'liberation-absent-' ) ) { response.writeHead( 404 ); response.end(); return; }
 			if ( ( request.url ?? '' ).endsWith( '.svg' ) ) {
 				response.setHeader( 'content-type', 'image/svg+xml' );
 				response.end( '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><rect width="120" height="80" fill="#36c"/></svg>' );
@@ -449,7 +451,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 		return { outputDir, result, entries: manifest.entries };
 	};
 
-	it( 'probes where a runtime-revealed phone document starts and guards the export at that width', async () => {
+	it( 'probes where a runtime-revealed phone document starts and guards the export at that width', async ({ newPage }) => {
 		const run = await capture( 'switch' );
 		const entry = run.entries[ `${ origin }/switch/` ]!;
 		expect( entry.deviceMode ).toMatchObject( { mode: 'dual', reason: expect.stringContaining( '+phone' ), switchWidth: 767 } );
@@ -457,23 +459,21 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 		exportWebsiteCapture( { outputDir: run.outputDir, sourceUrl: `${ origin }/switch/`, platform: 'generic', summary: {}, failures: [] } );
 		const html = readFileSync( join( run.outputDir, 'website', 'index.html' ), 'utf8' );
 		expect( html ).not.toContain( '(min-width:1280px)' );
-		const browser = await chromium.launch();
-		try {
-			const tab = await browser.newPage();
+
+		{
+			const tab = await newPage();
 			for ( const [ width, items ] of [ [ 390, 0 ], [ 767, 0 ], [ 768, 4 ], [ 900, 4 ], [ 1024, 4 ], [ 1440, 4 ] ] ) {
 				await tab.setViewportSize( { width, height: 900 } );
 				await tab.setContent( html );
 				const visible = await tab.evaluate( () => [ ...document.querySelectorAll( '.item' ) ].filter( item => item.getClientRects().length > 0 && getComputedStyle( item ).visibility === 'visible' ).length );
 				expect( { width, visible } ).toEqual( { width, visible: items } );
 			}
-		} finally {
-			await browser.close();
 		}
 	}, 120_000 );
 
 	// #1379: three structurally different layouts selected at min-width 1/800/1280.
 	// Expected wall time: ~20s (one capture with frozen references, one compare).
-	it( 'captures a middle width-range layout and selects every layout at the source\'s own boundaries', async () => {
+	it( 'captures a middle width-range layout and selects every layout at the source\'s own boundaries', async ({ newPage }) => {
 		mkdirSync( parent, { recursive: true } );
 		const outputDir = mkdtempSync( join( parent, 'device-mode-layouts-' ) );
 		directories.push( outputDir );
@@ -496,17 +496,15 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 		} );
 		expect( receipt.document_scope_classes ).toContain( 'data-blocks-engine-capture-middle-document' );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
-		const browser = await chromium.launch();
-		try {
-			const tab = await browser.newPage();
+
+		{
+			const tab = await newPage();
 			for ( const [ width, layout ] of [ [ 390, 'phone' ], [ 768, 'phone' ], [ 799, 'phone' ], [ 800, 'middle' ], [ 1024, 'middle' ], [ 1279, 'middle' ], [ 1280, 'desktop' ], [ 1440, 'desktop' ] ] as const ) {
 				await tab.setViewportSize( { width, height: 900 } );
 				await tab.setContent( html );
 				const visible = await tab.evaluate( () => [ ...document.querySelectorAll( '[data-layout]' ) ].filter( node => node.getClientRects().length > 0 ).map( node => node.getAttribute( 'data-layout' ) ) );
 				expect( { width, visible } ).toEqual( { width, visible: [ layout ] } );
 			}
-		} finally {
-			await browser.close();
 		}
 		// The gate: the copy against frozen source evidence at every width.
 		const report = await checkFidelity( { directory: outputDir, widths: [ 390, 768, 1024, 1440 ], settleMs: 50 } );
@@ -563,17 +561,17 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 			expect( run.result.sharedChrome?.routes ).toMatchObject( { checked: 2, reused: 2, probedInPlace: [] } );
 		} );
 
-		it( 'exports a single document that reflows at 390 px and opens the captured menu', async () => {
+		it( 'exports a single document that reflows at 390 px and opens the captured menu', async ({ newPage }) => {
 			const receiptPath = exportWebsiteCapture( { outputDir: run.outputDir, sourceUrl: `${ origin }/responsive/`, platform: 'neutral', summary: {}, failures: [], deviceMode: 'reflow-only' } );
 			const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
 			expect( receipt.routes ).toHaveLength( 2 );
 			expect( receipt.sourceProfile ).toMatchObject( { variants: 'single', documentsPerRoute: 1 } );
 			expect( receipt.discoveryDiagnostics.filter( ( row: { code: string } ) => row.code === 'route_profile_uncaptured' ) ).toEqual( [] );
 			const site = await startStaticServer( join( run.outputDir, 'website' ) );
-			const browser = await chromium.launch();
+
 			try {
 				const { defaultBrowserType: _type, ...iphone } = devices[ 'iPhone 17' ];
-				const phone = await browser.newPage( { ...iphone, viewport: { width: 390, height: 844 } } );
+				const phone = await newPage( { ...iphone, viewport: { width: 390, height: 844 } } );
 				await phone.goto( site.url );
 				expect( await phone.evaluate( () => [ ...document.querySelectorAll( '.col' ) ].map( col => col.getBoundingClientRect().width ) ) ).toEqual( [ 390, 390 ] );
 				expect( await phone.locator( '.links' ).isVisible() ).toBe( false );
@@ -583,18 +581,18 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 				await phone.goto( new URL( 'about/', site.url ).href );
 				await phone.getByRole( 'button', { name: 'Menu' } ).click();
 				await expect.poll( () => phone.getByRole( 'dialog', { name: 'Site menu' } ).getByText( 'About' ).isVisible() ).toBe( true );
-				const desktop = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+				const desktop = await newPage( { viewport: { width: 1440, height: 900 } } );
 				await desktop.goto( site.url );
 				expect( await desktop.evaluate( () => [ ...document.querySelectorAll( '.col' ) ].map( col => col.getBoundingClientRect().width ) ) ).toEqual( [ 720, 720 ] );
 				expect( await desktop.getByRole( 'button', { name: 'Menu' } ).isVisible() ).toBe( false );
 			} finally {
-				await browser.close();
+
 				await site.close();
 			}
 		}, 60_000 );
 	} );
 
-	it( 'carries a builder navbar\'s phone-only menu control to every route and opens and closes its drawer there', async () => {
+	it( 'carries a builder navbar\'s phone-only menu control to every route and opens and closes its drawer there', async ({ newPage }) => {
 		const run = await capture( 'builder', { routes: [ 'about', 'contact' ] } );
 		expect( run.result.deviceMode ).toMatchObject( { mode: 'reflow-only', phoneProbe: { status: 'captured', triggers: 1, captured: 1 } } );
 		const menu = ( route: string ) => run.entries[ `${ origin }/builder/${ route }` ]!.interactions?.states.find( state => state.trigger.label === 'Menu' );
@@ -607,9 +605,9 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 		expect( menu( 'contact' )!.reusedFrom ).toBeUndefined();
 		exportWebsiteCapture( { outputDir: run.outputDir, sourceUrl: `${ origin }/builder/`, platform: 'neutral', summary: {}, failures: [], deviceMode: 'reflow-only' } );
 		const site = await startStaticServer( join( run.outputDir, 'website' ) );
-		const browser = await chromium.launch();
+
 		try {
-			const phone = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+			const phone = await newPage( { viewport: { width: 390, height: 844 } } );
 			for ( const route of [ '', 'about/', 'contact/' ] ) {
 				await phone.goto( new URL( route, site.url ).href );
 				await phone.getByText( 'Menu', { exact: true } ).click();
@@ -620,12 +618,12 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 				await expect.poll( () => phone.getByRole( 'dialog' ).getByText( 'About' ).isVisible() ).toBe( false );
 			}
 		} finally {
-			await browser.close();
+
 			await site.close();
 		}
 	}, 120_000 );
 
-	it( 'records the phone-only menu under the desktop document\'s identity when a runtime numbers controls per rendering', async () => {
+	it( 'records the phone-only menu under the desktop document\'s identity when a runtime numbers controls per rendering', async ({ newPage }) => {
 		const run = await capture( 'counter' );
 		expect( run.result.deviceMode ).toMatchObject( { mode: 'reflow-only', phoneProbe: { status: 'captured', triggers: 1, captured: 1 } } );
 		const home = run.entries[ `${ origin }/counter/` ]!;
@@ -637,25 +635,25 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 		expect( state( 'More' ) ).toMatchObject( { status: 'captured', trigger: { id: '1' }, dialog: { id: 'more-list' } } );
 		exportWebsiteCapture( { outputDir: run.outputDir, sourceUrl: `${ origin }/counter/`, platform: 'neutral', summary: {}, failures: [], deviceMode: 'reflow-only' } );
 		const site = await startStaticServer( join( run.outputDir, 'website' ) );
-		const browser = await chromium.launch();
+
 		try {
-			const phone = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+			const phone = await newPage( { viewport: { width: 390, height: 844 } } );
 			await phone.goto( site.url );
 			await phone.getByRole( 'button', { name: 'Menu' } ).click();
 			await expect.poll( () => phone.getByRole( 'menu', { name: 'Site menu' } ).getByText( 'About' ).isVisible() ).toBe( true );
 			await phone.keyboard.press( 'Escape' );
 			await expect.poll( () => phone.getByRole( 'menu', { name: 'Site menu' } ).getByText( 'About' ).isVisible() ).toBe( false );
-			const desktop = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			const desktop = await newPage( { viewport: { width: 1440, height: 900 } } );
 			await desktop.goto( site.url );
 			await desktop.getByRole( 'button', { name: 'More' } ).click();
 			await expect.poll( () => desktop.getByRole( 'menu', { name: 'More pages' } ).getByText( 'Extra' ).isVisible() ).toBe( true );
 		} finally {
-			await browser.close();
+
 			await site.close();
 		}
 	}, 120_000 );
 
-	it( 'keeps the desktop More menu when a dual route\'s phone document numbers another control with its id', async () => {
+	it( 'keeps the desktop More menu when a dual route\'s phone document numbers another control with its id', async ({ newPage }) => {
 		const run = await capture( 'counter-dual' );
 		expect( run.result.deviceMode ).toMatchObject( { mode: 'dual', serverHtml: 'different' } );
 		const home = run.entries[ `${ origin }/counter-dual/` ]!;
@@ -667,19 +665,19 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 		expect( numbered[ 0 ]!.states.map( state => state.evidence?.dialog?.id ) ).toEqual( [ undefined, 'more-list' ] );
 		exportWebsiteCapture( { outputDir: run.outputDir, sourceUrl: `${ origin }/counter-dual/`, platform: 'neutral', summary: {}, failures: [], deviceMode: 'dual' } );
 		const site = await startStaticServer( join( run.outputDir, 'website' ) );
-		const browser = await chromium.launch();
+
 		try {
 			// The phone pass's menu evidence is kept beside it, not dropped.
-			const phone = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+			const phone = await newPage( { viewport: { width: 390, height: 844 } } );
 			await phone.goto( site.url );
 			await phone.getByRole( 'button', { name: 'Menu' } ).click();
 			await expect.poll( () => phone.getByRole( 'menu', { name: 'Site menu' } ).getByText( 'About' ).isVisible() ).toBe( true );
-			const desktop = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			const desktop = await newPage( { viewport: { width: 1440, height: 900 } } );
 			await desktop.goto( site.url );
 			await desktop.getByRole( 'button', { name: 'More' } ).click();
 			await expect.poll( () => desktop.getByRole( 'menu', { name: 'More pages' } ).getByText( 'Extra' ).isVisible() ).toBe( true );
 		} finally {
-			await browser.close();
+
 			await site.close();
 		}
 	}, 120_000 );

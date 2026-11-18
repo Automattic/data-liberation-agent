@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 import * as cheerio from 'cheerio';
 import type { AnyNode, Element } from 'domhandler';
 import { srcsetCandidates } from './srcset.js';
-import { elementDescriptor, templateFingerprint, TEMPLATE_FINGERPRINT_VERSION, type TemplateStyleNormalization } from './template-groups.js';
+import { elementDescriptor, styleBlocks, templateFingerprint, TEMPLATE_FINGERPRINT_VERSION, type TemplateStyleBlock, type TemplateStyleNormalization } from './template-groups.js';
 
 /**
  * Template-clustered capture, phase 1 (#784).
@@ -40,7 +40,8 @@ export const TEMPLATE_CLUSTER_LIMITS = {
 export type GateCode =
 	| 'cluster_key_mismatch' /** H_M's fingerprint is not the cluster's key. */
 	| 'slot_anchor_unmapped' /** a slot has no matching anchor in `D_R`. */
-	| 'runtime_slot_content' /** a slot carries scripts, handlers or embeds capture never observed. */;
+	| 'runtime_slot_content' /** a slot carries scripts, handlers or embeds capture never observed. */
+	| 'runtime_mount_member_keyed' /** a runtime-filled mount has different member attributes. */;
 
 export interface SlotStats {
 	/** Total mapped slots (subtree + text + attribute + head). */
@@ -52,6 +53,8 @@ export interface SlotStats {
 export interface MemberGate {
 	code: GateCode;
 	reason: string;
+	/** The runtime region that a bounded member render must observe. */
+	runtimeAnchor?: SlotAnchor;
 }
 
 export type MemberDerivation =
@@ -60,7 +63,8 @@ export type MemberDerivation =
 
 const isElement = ( node: AnyNode ): node is Element => node.type === 'tag' || node.type === 'script' || node.type === 'style';
 
-const SKIPPED_ELEMENTS = new Set( [ 'script', 'style', 'noscript', 'template', 'br', 'wbr', 'link', 'meta', 'base' ] );
+// Body styles carry member content too (for example selectors for a block id).
+const SKIPPED_ELEMENTS = new Set( [ 'script', 'noscript', 'template', 'br', 'wbr', 'link', 'meta', 'base' ] );
 
 /** Inline (phrasing) elements: presence follows the text, so they never split slots by themselves. */
 const INLINE_ELEMENTS = new Set( [ 'a', 'abbr', 'b', 'bdi', 'bdo', 'br', 'cite', 'code', 'data', 'del', 'dfn', 'em', 'font', 'i', 'img', 'ins', 'kbd', 'label', 'mark', 'picture', 'q', 's', 'samp', 'small', 'source', 'span', 'strike', 'strong', 'sub', 'sup', 'time', 'u', 'var', 'wbr' ] );
@@ -136,7 +140,7 @@ interface Slot {
  * captured document; the identity does. A slot with no identified ancestor is
  * anchored on `<body>` itself.
  */
-interface SlotAnchor {
+export interface SlotAnchor {
 	attribute: 'id' | 'data-testid' | 'body';
 	value: string;
 	/** Element path below the anchor, over slot-eligible children. */
@@ -147,6 +151,49 @@ interface SlotAnchor {
 
 /** Anchor attributes, most stable first. */
 const ANCHOR_ATTRIBUTES = [ 'id', 'data-testid' ] as const;
+
+/** Resolve the gate's anchor with the same mapping used by derivation. */
+export function runtimeMountSelector( html: string, anchor: SlotAnchor ): string | undefined {
+	const $ = cheerio.load( html );
+	const body = $( 'body' )[ 0 ];
+	if ( ! body ) return undefined;
+	let node = resolveAnchor( body, anchor, () => true );
+	if ( ! node ) return undefined;
+	const path: string[] = [];
+	while ( node !== body ) {
+		path.unshift( `:nth-child(${ $( node ).index() + 1 })` );
+		node = node.parent && isElement( node.parent ) ? node.parent : undefined;
+		if ( ! node ) return undefined;
+	}
+	return [ 'body', ...path ].join( ' > ' );
+}
+
+/**
+ * Splice the live mount's children into the server document's mount, resolved
+ * through the same anchor. Every byte outside the mount's element content is
+ * the server document's own, so preparation and identity stay intact.
+ */
+export function transplantRuntimeMount( serverHtml: string, liveHtml: string, anchor: SlotAnchor ): string | undefined {
+	const live = cheerio.load( liveHtml );
+	const liveBody = live( 'body' )[ 0 ];
+	const liveMount = liveBody && resolveAnchor( liveBody, anchor, () => true );
+	const server = cheerio.load( serverHtml, { sourceCodeLocationInfo: true } );
+	const serverBody = server( 'body' )[ 0 ];
+	const serverMount = serverBody && resolveAnchor( serverBody, anchor, () => true );
+	const location = serverMount?.sourceCodeLocation;
+	if ( ! liveMount || ! location?.startTag || ! location.endTag ) return undefined;
+	return serverHtml.slice( 0, location.startTag.endOffset ) + ( live( liveMount ).html() ?? '' ) + serverHtml.slice( location.endTag.startOffset );
+}
+
+/** A script tag alone is not a filled mount; text, images and other markup are. */
+export function runtimeMountObserved( html: string, anchor: SlotAnchor ): boolean {
+	const selector = runtimeMountSelector( html, anchor );
+	if ( ! selector ) return false;
+	const $ = cheerio.load( html );
+	const mount = $( selector ).clone();
+	mount.find( 'script, style, template' ).remove();
+	return normalizedWhitespace( mount.text() ) !== '' || mount.children().length > 0;
+}
 
 const describeAnchor = ( anchor: SlotAnchor ): string =>
 	`${ anchor.attribute === 'body' ? 'body' : `[${ anchor.attribute }="${ anchor.value }"]` }${ anchor.path.map( index => `/${ index }` ).join( '' ) }`;
@@ -234,7 +281,7 @@ function resolveAnchor( body: Element, anchor: SlotAnchor, matches: ( node: Elem
 const html$ = ( html: string ) => cheerio.load( html );
 const serializeNode = ( node: AnyNode ): string => html$( '<w></w>' ).html( node as never ) ?? '';
 
-/** Every child node, text included, as HTML; skipped elements (scripts, styles) stay out. */
+/** Every child node, text and styles included, as HTML; skipped elements stay out. */
 function serializeChildNodes( element: Element ): string {
 	return element.children
 		.filter( node => node.type === 'text' || ( isElement( node ) && ! SKIPPED_ELEMENTS.has( node.name ) ) )
@@ -249,7 +296,8 @@ const ownTextNodes = ( element: Element ): Array< { data: string } > =>
 /**
  * Walk `H_R` and `H_M` together over element children and record every
  * divergence as a slot at an element path. The walk is between the two server
- * documents, so script/style/template children are skipped on both sides.
+ * documents, so script/noscript/template children are skipped on both sides.
+ * Body style text is walked like any other text, including member selectors.
  */
 function findServerSlots( repElement: Element, memberElement: Element, slots: Slot[] ): void {
 	const at = { repNode: repElement, memberNode: memberElement };
@@ -269,6 +317,15 @@ function findServerSlots( repElement: Element, memberElement: Element, slots: Sl
 			attributeBytes += memberValue.length;
 		}
 	}
+	// Per-member images a server paints into inline style (a pagination
+	// thumbnail's background) are slots too; the rest of the style is
+	// capture-owned and stays.
+	const repStyleUrls = styleUrls( repElement.attribs.style );
+	const memberStyleUrls = styleUrls( memberElement.attribs.style );
+	if ( repStyleUrls.join( '\n' ) !== memberStyleUrls.join( '\n' ) ) {
+		attributeDiffs.push( { attribute: 'style', value: memberElement.attribs.style ?? '' } );
+		attributeBytes += memberStyleUrls.join( '' ).length;
+	}
 	if ( attributeDiffs.length ) slots.push( { ...at, kind: 'attribute', replacement: attributeDiffs, bytes: attributeBytes } );
 	const repChildren = slotChildren( repElement );
 	const memberChildren = slotChildren( memberElement );
@@ -287,13 +344,22 @@ function findServerSlots( repElement: Element, memberElement: Element, slots: Sl
 }
 
 /** Does the member's slot subtree hold behaviour capture never observed in the browser? */
-function slotRuntimeObservation( element: Element ): { runtime: boolean; unobserved: boolean } {
+function slotRuntimeObservation( element: Element, representative: Element ): { runtime: boolean; unobserved: boolean } {
+	// Exact server elements share capture's observation. Changed handlers and
+	// embeds still need a browser pass; lazy media and hydration stay guarded.
+	const observed = new Set< string >();
+	const collect = ( node: Element ): void => {
+		observed.add( serializeNode( node ) );
+		for ( const child of node.children ) if ( isElement( child ) ) collect( child );
+	};
+	collect( representative );
 	let runtime = false;
 	let unobserved = false;
 	const walk = ( node: Element ): void => {
-		if ( [ 'iframe', 'video', 'canvas', 'object', 'embed' ].includes( node.name ) ) runtime = true;
+		const shared = observed.has( serializeNode( node ) );
+		if ( ! shared && [ 'iframe', 'video', 'canvas', 'object', 'embed' ].includes( node.name ) ) runtime = true;
 		for ( const attribute of Object.keys( node.attribs ) ) {
-			if ( /^on[a-z]+$/i.test( attribute ) ) runtime = true;
+			if ( ! shared && /^on[a-z]+$/i.test( attribute ) ) runtime = true;
 			// Media swapped by a runtime (lazy loaders, background rotators): the
 			// rendered URL was never observed for this member, so the transplant
 			// would ship the placeholder instead of the asset.
@@ -311,9 +377,10 @@ function slotRuntimeObservation( element: Element ): { runtime: boolean; unobser
  * outside skipped and capture-owned elements, whitespace removed so that
  * serialization differences between server and captured HTML do not count.
  */
-function anchorText( element: Element ): string {
+function anchorText( element: Element, ignored: ReadonlySet< Element > = new Set() ): string {
 	const parts: string[] = [];
 	const walk = ( node: Element ): void => {
+		if ( ignored.has( node ) ) return;
 		for ( const child of node.children ) {
 			if ( child.type === 'text' ) parts.push( ( child as unknown as { data: string } ).data );
 			else if ( isElement( child ) && slotChildren( node ).includes( child ) ) walk( child );
@@ -321,6 +388,67 @@ function anchorText( element: Element ): string {
 	};
 	walk( element );
 	return parts.join( '' ).replace( /\s+/g, '' );
+}
+
+/**
+ * Map server-empty subtrees to their captured counterparts. Only their text is
+ * ignored by the anchor gate: the hydrated DOM stays intact for verification.
+ * Use the same identity/descriptor resolution as slots, not a text-prefix test
+ * that could hide a rewrite of authored content elsewhere in the anchor.
+ */
+function hydratedMounts( serverBody: Element, processedBody: Element, counts: Map< string, number > ): Set< Element > {
+	const mounts = new Set< Element >();
+	const walk = ( node: Element ): void => {
+		if ( anchorText( node ) === '' ) {
+			const matches = ( candidate: Element ) => describes( candidate, node.name, classTokens( node ) );
+			const counterpart = resolveAnchor( processedBody, slotAnchor( node, serverBody, counts ), matches );
+			if ( counterpart && matches( counterpart ) ) mounts.add( counterpart );
+		}
+		// Descendants are mapped too: a slot nested inside a mount needs its
+		// own counterpart ignored.
+		for ( const child of slotChildren( node ) ) walk( child );
+	};
+	walk( serverBody );
+	return mounts;
+}
+
+/**
+ * Empty server mounts filled in capture cannot be reused with a different key
+ * or replaced by a member's pre-hydration content. Check even when the slot
+ * walk sees no differences: runtime keys can live in any attribute.
+ */
+function runtimeMountGate( serverBody: Element, memberBody: Element, processedBody: Element, counts: Map< string, number > ): MemberGate | undefined {
+	const hasContent = ( node: Element ): boolean => node.children.some( child => isElement( child ) || ( child.type === 'text' && normalizedWhitespace( child.data ) !== '' ) );
+	const walk = ( representative: Element, member: Element ): MemberGate | undefined => {
+		if ( ! hasContent( representative ) ) {
+			const anchor = slotAnchor( representative, serverBody, counts );
+			const matches = ( candidate: Element ) => describes( candidate, representative.name, classTokens( representative ) );
+			const captured = resolveAnchor( processedBody, anchor, matches );
+			if ( captured && matches( captured ) && hasContent( captured ) ) {
+				const attributes = new Set( [ ...Object.keys( representative.attribs ), ...Object.keys( member.attribs ) ] );
+				if ( [ ...attributes ].some( attribute => representative.attribs[ attribute ] !== member.attribs[ attribute ] ) ) {
+					return { code: 'runtime_mount_member_keyed', runtimeAnchor: anchor, reason: `runtime-filled mount at ${ describeAnchor( anchor ) } has different member attributes` };
+				}
+				if ( hasContent( member ) ) {
+					return { code: 'runtime_slot_content', runtimeAnchor: anchor, reason: `member content at ${ describeAnchor( anchor ) } replaces a runtime-filled mount capture never observed for this member` };
+				}
+			}
+		}
+		// Follow the server slot walk only while children still correspond.
+		if ( elementDescriptor( representative ) !== elementDescriptor( member ) ) return;
+		const repChildren = slotChildren( representative ), memberChildren = slotChildren( member );
+		if ( repChildren.length !== memberChildren.length ) return;
+		for ( let index = 0; index < repChildren.length; index++ ) {
+			const gate = walk( repChildren[ index ]!, memberChildren[ index ]! );
+			if ( gate ) return gate;
+		}
+	};
+	return walk( serverBody, memberBody );
+}
+
+/** The `url()` values of an inline style, in order. */
+function styleUrls( style: string | undefined ): string[] {
+	return [ ...( style ?? '' ).matchAll( /url\(\s*["']?([^"')]+)/g ) ].map( match => match[ 1 ]!.trim() );
 }
 
 /** Apply one slot to its anchor in the processed document; false when the anchor cannot take it. */
@@ -344,6 +472,16 @@ function applySlot( $: cheerio.CheerioAPI, node: Element, slot: Slot ): boolean 
 				const merged = [ ...kept, ...memberTokens.filter( token => ! kept.includes( token ) ) ];
 				if ( merged.length ) node.attribs.class = merged.join( ' ' );
 				else delete node.attribs.class;
+				continue;
+			}
+			if ( attribute === 'style' ) {
+				// Swap the representative's style URLs for the member's, in place.
+				const from = styleUrls( slot.repNode.attribs.style );
+				const to = styleUrls( value );
+				let style = node.attribs.style ?? '';
+				if ( from.length !== to.length || from.some( url => ! style.includes( url ) ) ) return false;
+				from.forEach( ( url, index ) => { style = style.split( url ).join( to[ index ]! ); } );
+				node.attribs.style = style;
 				continue;
 			}
 			if ( value === '' ) delete node.attribs[ attribute ];
@@ -410,6 +548,12 @@ export function deriveMemberDocument( input: {
 	/** The adapter's template normalization, the same one that grouped the cluster. */
 	styleNormalization?: TemplateStyleNormalization;
 	templateIdentity?: import('./template-groups.js').TemplateIdentity;
+	/**
+	 * The two documents' featured images from structured content. A runtime
+	 * paints the representative's (a hero background, say) from per-item data
+	 * the server diff never sees; the member shows its own there (#1813).
+	 */
+	featuredImages?: { representative?: string; member?: string };
 } ): MemberDerivation {
 	const keyOf = ( html: string ): string => {
 		let normalized = input.contentSlotSelector ? withEmptySlot( html, input.contentSlotSelector ) : html;
@@ -442,14 +586,17 @@ export function deriveMemberDocument( input: {
 	if ( ! repBody || ! memberBody || ! processedBody ) {
 		return { ok: false, gate: { code: 'slot_anchor_unmapped', reason: 'the representative or member document has no body element' } };
 	}
+	const anchorCounts = anchorValueCounts( repBody );
+	const mountGate = runtimeMountGate( repBody, memberBody, processedBody, anchorCounts );
+	if ( mountGate ) return { ok: false, gate: mountGate };
 	const slots: Slot[] = [];
 	findServerSlots( repBody, memberBody, slots );
 	if ( ! slots.length ) {
 		// Nothing to transplant: the member is the representative byte for byte
 		// in content. That is a legitimate derived member with zero slots.
-		return { ok: true, html: input.repProcessedHtml, stats: { slots: 0, subtreeSlots: 0 }, unobservedSlots: 0 };
+		return { ok: true, html: withMemberFeaturedImage( input.repProcessedHtml, input.featuredImages ), stats: { slots: 0, subtreeSlots: 0 }, unobservedSlots: 0 };
 	}
-	const anchorCounts = anchorValueCounts( repBody );
+	const mounts = hydratedMounts( repBody, processedBody, anchorCounts );
 	const located = slots.map( slot => ( { slot, anchor: slotAnchor( slot.repNode, repBody, anchorCounts ) } ) );
 	// Content gate before any mapping: one runtime-only slot escalates the member.
 	for ( const { slot, anchor } of located ) {
@@ -457,36 +604,37 @@ export function deriveMemberDocument( input: {
 		const parsed = html$( `<body>${ slot.replacement as string }</body>` )( 'body' ).children().toArray() as Element[];
 		for ( const element of parsed ) {
 			if ( element.name === 'script' ) {
-				return { ok: false, gate: { code: 'runtime_slot_content', reason: `member slot at ${ describeAnchor( anchor ) } carries a script element capture never observed` } };
+				return { ok: false, gate: { code: 'runtime_slot_content', runtimeAnchor: anchor, reason: `member slot at ${ describeAnchor( anchor ) } carries a script element capture never observed` } };
 			}
-			const runtime = slotRuntimeObservation( element );
+			const runtime = slotRuntimeObservation( element, slot.repNode );
 			if ( runtime.runtime ) {
-				return { ok: false, gate: { code: 'runtime_slot_content', reason: `member slot at ${ describeAnchor( anchor ) } carries an embed, handler or hydration marker capture never observed` } };
+				return { ok: false, gate: { code: 'runtime_slot_content', runtimeAnchor: anchor, reason: `member slot at ${ describeAnchor( anchor ) } carries an embed, handler or hydration marker capture never observed` } };
 			}
 		}
 	}
 	// Resolve every anchor in the processed document before any slot applies:
-	// an attribute slot may rewrite an anchor's own id. The resolved node must
+	// an attribute slot may rewrite an anchor's own id. Content slots must also
 	// carry the representative's server text; a runtime that rewrote it makes
-	// the transplant unsafe, so the member escalates.
+	// the transplant unsafe. Attribute slots only need the element resolved.
 	let subtreeSlots = 0;
 	let unobservedSlots = 0;
 	const mapped: Array< { slot: Slot; anchor: SlotAnchor; node: Element } > = [];
 	for ( const { slot, anchor } of located ) {
-		const node = resolveAnchor( processedBody, anchor, candidate => candidate.name === slot.repNode.name && anchorText( candidate ) === anchorText( slot.repNode ) );
+		const matchesText = ( candidate: Element ): boolean => slot.kind === 'attribute' || anchorText( candidate, mounts ) === anchorText( slot.repNode );
+		const node = resolveAnchor( processedBody, anchor, candidate => candidate.name === slot.repNode.name && matchesText( candidate ) );
 		if ( ! node || node.name !== slot.repNode.name ) {
 			return { ok: false, gate: { code: 'slot_anchor_unmapped', reason: `slot at ${ describeAnchor( anchor ) } has no matching anchor in the representative's captured document` } };
 		}
-		if ( anchorText( node ) !== anchorText( slot.repNode ) ) {
+		if ( ! matchesText( node ) ) {
 			return { ok: false, gate: { code: 'slot_anchor_unmapped', reason: `slot at ${ describeAnchor( anchor ) } carries different text in the representative's captured document than in its server document` } };
 		}
 		if ( slot.kind === 'subtree' || slot.kind === 'element' ) {
 			subtreeSlots++;
 			const parsed = html$( `<body>${ serializeNode( slot.memberNode as unknown as AnyNode ) }</body>` )( 'body' ).children().toArray() as Element[];
 			for ( const element of parsed ) {
-				const runtime = slotRuntimeObservation( element );
+				const runtime = slotRuntimeObservation( element, slot.repNode );
 				if ( runtime.runtime ) {
-					return { ok: false, gate: { code: 'runtime_slot_content', reason: `member slot at ${ describeAnchor( anchor ) } carries an embed, handler or hydration marker capture never observed` } };
+					return { ok: false, gate: { code: 'runtime_slot_content', runtimeAnchor: anchor, reason: `member slot at ${ describeAnchor( anchor ) } carries an embed, handler or hydration marker capture never observed` } };
 				}
 				if ( runtime.unobserved ) unobservedSlots++;
 			}
@@ -535,7 +683,22 @@ export function deriveMemberDocument( input: {
 		else repProcessed( 'head' ).append( replacements.map( node => member.html( node ) ).join( '' ) );
 		originals.remove();
 	}
-	return { ok: true, html: repProcessed.html(), stats: { slots: slots.length, subtreeSlots }, unobservedSlots };
+	return { ok: true, html: withMemberFeaturedImage( repProcessed.html(), input.featuredImages ), stats: { slots: slots.length, subtreeSlots }, unobservedSlots };
+}
+
+/**
+ * Every rendering of the representative's featured image, as a URL (any
+ * rendition query kept) or URL-encoded in inline data, becomes the member's.
+ */
+export function withMemberFeaturedImage( html: string, images: { representative?: string; member?: string } | undefined ): string {
+	const from = images?.representative?.split( '?' )[ 0 ];
+	const to = images?.member?.split( '?' )[ 0 ];
+	if ( ! from || ! to || from === to ) return html;
+	const escape = ( value: string ) => value.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' );
+	// A URL ends where its path ends: `banner.jpg` must not match `banner.jpg2`.
+	// Encoded, it ends at an escape (`%22`, `%3F`) instead of a raw delimiter.
+	const replaced = ( text: string, a: string, b: string, pathCharacters: string ) => text.replace( new RegExp( `${ escape( a ) }(?![${ pathCharacters }])`, 'g' ), b );
+	return replaced( replaced( html, from, to, '\\w.~/%-' ), encodeURIComponent( from ), encodeURIComponent( to ), '\\w.~-' );
 }
 
 /** The document with every element matching the content slot emptied. */
@@ -573,16 +736,25 @@ export function compareDerivedWithCapture( input: {
 	derivedHtml: string;
 	/** The member's real captured, processed document. */
 	realHtml: string;
+	/** Both server documents are required to distinguish runtime-only stylesheet links. */
+	repServerHtml?: string;
+	memberServerHtml?: string;
+	/** The adapter's style canonicalization, e.g. for server-shuffled @font-face rules. */
+	styleNormalization?: TemplateStyleNormalization;
 	baseUrl: string;
 } ): { equal: boolean; checks: Record< 'text' | 'links' | 'images' | 'skeleton' | 'fluidRules' | 'headStyles', boolean > } {
 	const derived = cheerio.load( input.derivedHtml );
 	const real = cheerio.load( input.realHtml );
 	// Rendered text only: inline script and style bodies carry per-request
-	// values (render timestamps, nonces) that no two documents share.
+	// values (render timestamps, nonces) that no two documents share. So does
+	// a clock a runtime prints at capture time ("Last refreshed at: <Date>"):
+	// the two documents were captured at different moments, not derived wrong.
 	const documentText = ( $: cheerio.CheerioAPI ): string => {
 		const body = $( 'body' ).clone();
 		body.find( 'script, style, noscript, template' ).remove();
-		return normalizedWhitespace( body.text() );
+		return normalizedWhitespace( body.text() )
+			.replace( /\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{2} \d{4} \d{2}:\d{2}:\d{2} GMT[+-]\d{4}(?: \([^)]*\))?/g, '<clock>' )
+			.replace( /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})\b/g, '<clock>' );
 	};
 	// Relative URLs in the member's server HTML resolve like a browser would:
 	// the real capture carries absolute, localized URLs.
@@ -591,17 +763,43 @@ export function compareDerivedWithCapture( input: {
 			.map( element => resolveUrl( ( element as Element ).attribs[ attribute ] ?? '', input.baseUrl ) )
 			.filter( value => value !== '' )
 			.sort();
-	const images = ( $: cheerio.CheerioAPI ): string => JSON.stringify(
-		$( 'img, picture > source[srcset]' ).toArray().map( element => {
+	// Images include inline-style backgrounds: a hero a runtime paints from
+	// per-member data lives there, and the server diff never sees it (#1813).
+	const images = ( $: cheerio.CheerioAPI ): string => JSON.stringify( [
+		...$( 'img, picture > source[srcset]' ).toArray().map( element => {
 			const node = element as Element;
 			return [ node.name, resolveUrl( node.attribs.src ?? '', input.baseUrl ),
 				srcsetCandidates( node.attribs.srcset ?? '' ).map( candidate =>
 					[ resolveUrl( candidate.url, input.baseUrl ), candidate.size, candidate.density ] ) ];
-		} ).map( image => JSON.stringify( image ) ).sort(),
-	);
-	const styles = ( $: cheerio.CheerioAPI ): string[] =>
-		[ ...$( 'style' ).toArray().map( element => normalizedWhitespace( $( element ).text() ) ),
-			...collect( $, 'link[rel~="stylesheet"]', 'href' ) ].filter( value => value !== '' ).sort();
+		} ),
+		...$( 'body [style*="url("]' ).toArray().flatMap( element =>
+			[ ...( ( element as Element ).attribs.style ?? '' ).matchAll( /url\(\s*(?:&quot;|["'])?([^"')&]+)/g ) ]
+				.map( match => [ 'background', resolveUrl( match[ 1 ]!, input.baseUrl ) ] ) ),
+	].map( image => JSON.stringify( image ) ).sort() );
+	const serverStyles = input.repServerHtml !== undefined && input.memberServerHtml !== undefined
+		? new Set( [ input.repServerHtml, input.memberServerHtml ].flatMap( html => collect( cheerio.load( html ), 'link[rel~="stylesheet"]', 'href' ) ) )
+		: undefined;
+	const styleText = ( block: TemplateStyleBlock ): string => normalizedWhitespace( input.styleNormalization?.pageStyles( [ block ] ) ?? block.text );
+	const serverStyleTexts = serverStyles && new Set( [ input.repServerHtml!, input.memberServerHtml! ].flatMap( html => styleBlocks( cheerio.load( html ) ).map( styleText ) ) );
+	// Inline styles a runtime probe injected into one capture only (for
+	// example a comments widget's sheet): absent from both server documents,
+	// not written by the capture, and with nothing differing on the other side.
+	const runtimeOnly = ( block: TemplateStyleBlock ): boolean => !! serverStyleTexts &&
+		! serverStyleTexts.has( styleText( block ) ) && ! Object.keys( block.attributes ).some( name => name.startsWith( 'data-blocks-engine-capture' ) );
+	const inlineStyles = ( $: cheerio.CheerioAPI ) => styleBlocks( $ ).map( block => ( { text: styleText( block ), runtimeOnly: runtimeOnly( block ) } ) );
+	const [ derivedInline, realInline ] = [ inlineStyles( derived ), inlineStyles( real ) ];
+	const unmatched = ( side: typeof derivedInline, other: typeof derivedInline ) => {
+		const texts = new Set( other.map( style => style.text ) );
+		return side.filter( style => ! texts.has( style.text ) );
+	};
+	const derivedOnly = unmatched( derivedInline, realInline );
+	const realOnly = unmatched( realInline, derivedInline );
+	const ignored = new Set( derivedOnly.length === 0 || realOnly.length === 0
+		? [ ...derivedOnly, ...realOnly ].filter( style => style.runtimeOnly ).map( style => style.text )
+		: [] );
+	const styles = ( $: cheerio.CheerioAPI, inline: typeof derivedInline ): string[] =>
+		[ ...inline.map( style => style.text ).filter( text => ! ignored.has( text ) ),
+			...collect( $, 'link[rel~="stylesheet"]', 'href' ).filter( href => ! serverStyles || serverStyles.has( href ) ) ].filter( value => value !== '' ).sort();
 	const fluidSheets = ( $: cheerio.CheerioAPI ): string[] =>
 		$( 'style[data-blocks-engine-capture-fluid-sheet-rules]' ).toArray()
 			.map( element => normalizedWhitespace( $( element ).text() ) )
@@ -618,17 +816,27 @@ export function compareDerivedWithCapture( input: {
 		links: collect( derived, 'a[href]', 'href' ).join( '\n' ) === collect( real, 'a[href]', 'href' ).join( '\n' ),
 		images: images( derived ) === images( real ),
 		skeleton: skeleton( derived ) === skeleton( real ),
-		headStyles: styles( derived ).join( '\n' ) === styles( real ).join( '\n' ),
+		headStyles: styles( derived, derivedInline ).join( '\n' ) === styles( real, realInline ).join( '\n' ),
 		fluidRules: fluidSheets( derived ).join( '\n' ) === fluidSheets( real ).join( '\n' ),
 	};
 	return { equal: Object.values( checks ).every( value => value ), checks };
 }
 
 export interface TemplateClusterRecord {
-	/** Group id from template-groups.json. */
+	/** Group id from template-groups.json, or `<group id>.<n>` for a member-shape sub-cluster. */
 	id: string;
 	key: string;
 	representative: string;
+	/** Group id this member-shape sub-cluster belongs to (#1805). */
+	parent?: string;
+	/** Adapter-declared member shape shared by the sub-cluster's members. */
+	shape?: string;
+	/**
+	 * Set on a group partitioned by member shape: its sub-clusters, each with
+	 * the representative chosen for that shape. The group's own `escalated`
+	 * rows are its unclustered (singleton-shape or unshaped) members.
+	 */
+	subClusters?: Array< { id: string; shape: string; representative: string; size: number } >;
 	/** Members offered for derivation, and their outcomes. */
 	derived: Array< { url: string; slots: number; subtreeSlots: number } >;
 	escalated: Array< { url: string; gate: string; reason: string; fallback?: { acquired: boolean; reason?: string } } >;

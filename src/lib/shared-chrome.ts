@@ -1,31 +1,60 @@
+import type { WebsiteInventory } from './website-inventory.js';
 import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AnyNode, Element } from 'domhandler';
 import { includeReferences, parseLocatedStructure, sourceRange, type HtmlRange } from './site-includes.js';
 
+/** Route-local attributes: per-document node identity and the current-page
+ * state. Copies of one region that differ only here are one region seen from
+ * different routes, not variants of it. */
+const ROUTE_LOCAL_ATTRIBUTES = /\s(?:data-blocks-engine-node-id|aria-current|aria-selected)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?/gi;
+
+/** Class tokens that mark the served item (Blocks Engine's
+ * `SourceClassIdentity::CURRENT_STATE_CLASSES`). A class naming one of them by
+ * any token (`header-nav-item--active`, `is-current`, `current-menu-item`) is
+ * the class-marked counterpart of `aria-current`. */
+const CURRENT_STATE_CLASSES = new Set( [ 'current', 'active', 'selected' ] );
+const CLASS_ATTRIBUTE = /(\sclass\s*=\s*)(?:"([^"]*)"|'([^']*)'|([^\s>"']+))/gi;
+
+function containsCurrentStateToken( value: string ): boolean {
+	return value.toLowerCase().split( /[^a-z0-9]+/ ).some( token => CURRENT_STATE_CLASSES.has( token ) );
+}
+
+/** Grouping key bytes only: route-local attributes and current-state classes
+ * removed. Emitted parts and route documents keep their authored bytes. */
+export function routeNeutralFragment( fragment: string ): string {
+	return fragment.replace( ROUTE_LOCAL_ATTRIBUTES, '' ).replace( CLASS_ATTRIBUTE, ( _match, prefix: string, double?: string, single?: string, bare?: string ) => {
+		const value = double ?? single ?? bare ?? '';
+		return `${ prefix }"${ value.split( /\s+/ ).filter( token => token && ! containsCurrentStateToken( token ) ).join( ' ' ) }"`;
+	} );
+}
+
 /** Only exact, site-level semantic landmarks are shared; authored bytes survive. */
-export function extractSharedChrome( root: string, routePaths: string[] ): void {
-	const sources = new Set( [ ...routePaths, ...shareChrome( root, routePaths, false ) ] );
+export function extractSharedChrome( root: string, routePaths: string[], inventory?: WebsiteInventory ): void {
+	const sources = new Set( [ ...routePaths, ...shareChrome( root, routePaths, false, inventory ) ] );
 	// Route-current links can vary while the brand, menus and footer content
 	// remain identical. Factor common subtrees from the actual source owners,
 	// including the parts just created, rather than freezing or stripping state.
 	for ( let pass = 0; pass < 16; pass++ ) {
 		for ( const path of sources ) for ( const reference of includeReferences( readFileSync( join( root, path ), 'utf8' ) ) ) sources.add( reference.path.slice( 1 ) );
-		const added = shareChrome( root, [ ...sources ], true );
+		const added = shareChrome( root, [ ...sources ], true, inventory );
 		if ( ! added.length ) break;
 		for ( const path of added ) sources.add( path );
 	}
 }
 
-function shareChrome( root: string, paths: string[], descendants: boolean ): string[] {
+function shareChrome( root: string, paths: string[], descendants: boolean, inventory?: WebsiteInventory ): string[] {
 	const partsDir = join( root, 'parts' );
 	if ( existsSync( partsDir ) && ( lstatSync( partsDir ).isSymbolicLink() || ! lstatSync( partsDir ).isDirectory() ) ) return [];
 	// Candidate landmarks overlap, often deeply. Retaining every candidate's
 	// sliced HTML makes memory scale with the sum of all ancestor subtrees, not
 	// the source bytes. Index their original ranges and materialize only an
 	// admitted part. Source documents stay unchanged until all ranges are chosen.
-	const groups = new Map< string, { length: number; occurrences: Array< HtmlRange & { path: string } > } >();
+	// Group by route-neutral bytes. A region whose route copies differ only in
+	// route-local attributes is shared on no route, so every route keeps the same
+	// structure (and its own landmark) instead of a route-dependent partition.
+	const groups = new Map< string, { id: string; length: number; exact: Set< string >; occurrences: Array< HtmlRange & { path: string } > } >();
 	for ( const path of new Set( paths ) ) {
 		const html = readFileSync( join( root, path ), 'utf8' );
 		const $ = parseLocatedStructure( html );
@@ -61,8 +90,10 @@ function shareChrome( root: string, paths: string[], descendants: boolean ): str
 			// Implied/unclosed elements have no reliable byte-preserving end tag.
 			if ( ! range || !( node as Element & { sourceCodeLocation?: { endTag?: unknown } } ).sourceCodeLocation?.endTag ) return;
 			const fragment = html.slice( range.start, range.end );
-			const key = `${ role }-${ createHash( 'sha256' ).update( fragment ).digest( 'hex' ) }`;
-			const group = groups.get( key ) ?? { length: range.end - range.start, occurrences: [] };
+			const id = `${ role }-${ createHash( 'sha256' ).update( fragment ).digest( 'hex' ) }`;
+			const key = `${ role }-${ createHash( 'sha256' ).update( routeNeutralFragment( fragment ) ).digest( 'hex' ) }`;
+			const group = groups.get( key ) ?? { id, length: range.end - range.start, exact: new Set(), occurrences: [] };
+			group.exact.add( id );
 			group.occurrences.push( { ...range, path } );
 			groups.set( key, group );
 		} );
@@ -70,7 +101,9 @@ function shareChrome( root: string, paths: string[], descendants: boolean ): str
 	const replacements = new Map< string, Array< HtmlRange & { include: string } > >();
 	const created: string[] = [];
 	// Prefer maximal shared regions and avoid overlapping source ranges.
-	for ( const [ id, group ] of [ ...groups ].sort( ( a, b ) => b[ 1 ].length - a[ 1 ].length || a[ 0 ].localeCompare( b[ 0 ] ) ) ) {
+	for ( const group of [ ...groups.values() ].sort( ( a, b ) => b.length - a.length || a.id.localeCompare( b.id ) ) ) {
+		if ( group.exact.size > 1 ) continue;
+		const id = group.id;
 		const occurrences = group.occurrences.filter( item => !( replacements.get( item.path ) ?? [] ).some( used => item.start < used.end && used.start < item.end ) );
 		if ( new Set( occurrences.map( item => item.path ) ).size < 2 ) continue;
 		const include = `<!--#include virtual="/parts/${ id }.html" -->`;
@@ -83,6 +116,7 @@ function shareChrome( root: string, paths: string[], descendants: boolean ): str
 		if ( existsSync( destination ) ) continue;
 		mkdirSync( partsDir, { recursive: true } );
 		writeFileSync( destination, fragment, { flag: 'wx' } );
+		inventory?.add( `parts/${ id }.html` );
 		created.push( `parts/${ id }.html` );
 		for ( const occurrence of occurrences ) {
 			const list = replacements.get( occurrence.path ) ?? [];
@@ -94,6 +128,7 @@ function shareChrome( root: string, paths: string[], descendants: boolean ): str
 		let html = readFileSync( join( root, path ), 'utf8' );
 		for ( const range of ranges.sort( ( a, b ) => b.start - a.start ) ) html = html.slice( 0, range.start ) + range.include + html.slice( range.end );
 		writeFileSync( join( root, path ), html );
+		inventory?.add( path );
 	}
 	return created;
 }

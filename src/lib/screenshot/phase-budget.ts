@@ -1,5 +1,6 @@
 import type { Page } from 'playwright';
 import type { ProfileDiagnostic } from './manifest-queue.js';
+import { orElse } from '../failure-class.js';
 
 /** All post-baseline probes share this allocation; most route time remains for
  * baseline capture, other profiles, recording and resource cleanup. A timeout
@@ -22,7 +23,7 @@ export function createPhaseBudget( page: Page, routeDeadlineMs: number, diagnost
 					expired = true;
 					overrun( Date.now() - started );
 					diagnostic( { code: 'interaction_phase_budget_exceeded', reason: `${ phase } exceeded ${ ms }ms; partial interaction evidence retained; remaining probes skipped` } );
-					void page.close( { runBeforeUnload: false } ).catch( () => {} );
+					void page.close( { runBeforeUnload: false } ).catch( orElse( undefined ) );
 					resolve( partial );
 				}, remaining );
 			} );

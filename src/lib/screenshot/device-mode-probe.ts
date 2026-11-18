@@ -1,3 +1,4 @@
+import { installResourceReplay, type CapturedResourceStore } from './resource-capture.js';
 import { attributeSourceDevice, categorizeSourceContext, getSourceResponse, sourceDocumentHtml } from '../browser-kit/source-traffic.js';
 import { createSourceContext } from '../browser-kit/index.js';
 import { assertPublicHttpUrl } from '../media-fetch/safe-fetch.js';
@@ -14,6 +15,7 @@ import type { Browser, BrowserContext, BrowserContextOptions, Page } from 'playw
 import { installReadOnlyProbeGuard, withReadOnlyProbes, lockMainFrameNavigation } from './probe-guards.js';
 import { canonicalizeInteractionReport } from './canonicalize-interaction-report.js';
 import { boundSharedChromeProbe, probeChromeOnPage } from './chrome-reuse.js';
+import { orElse } from '../failure-class.js';
 
 /** Marks phone-page controls the desktop pass already probes; removed from evidence. */
 const DESKTOP_CONTROL_ATTRIBUTE = 'data-lib-desktop-control';
@@ -60,7 +62,7 @@ export async function probePhoneOnlyChrome(
 	}, { roots: [ ...roots ], rootAttribute: CHROME_ROOT_ATTRIBUTE, desktopAttribute: DESKTOP_CONTROL_ATTRIBUTE, reusedAttribute: CHROME_REUSED_ATTRIBUTE } );
 	const clear = () => page.evaluate( ( names ) => {
 		for ( const name of names ) for ( const element of Array.from( document.querySelectorAll( `[${ name }]` ) ) ) element.removeAttribute( name );
-	}, marks ).catch( () => undefined );
+	}, marks ).catch( orElse( undefined ) );
 	if ( ! concealed ) {
 		await clear();
 		return [];
@@ -77,15 +79,17 @@ export async function probePhoneOnlyChrome(
 	} finally {
 		await clear();
 		if ( desktop ) {
-			await page.setViewportSize( desktop ).catch( () => undefined );
-			await settle().catch( () => undefined );
-			await restoreTopScrollState( page ).catch( () => undefined );
+			await page.setViewportSize( desktop ).catch( orElse( undefined ) );
+			await settle().catch( orElse( undefined ) );
+			await restoreTopScrollState( page ).catch( orElse( undefined ) );
 		}
 	}
 }
 
 export interface DeviceComparisonArgs {
+	resourceStore?: CapturedResourceStore;
 	governors?: ScreenshotOpts['governors'];
+	sourceTelemetry?: ScreenshotOpts['sourceTelemetry'];
 	browser: Browser;
 	url: string;
 	desktop: BrowserContextOptions;
@@ -127,11 +131,13 @@ const CHECK_RECHECK_MS = 1_500;
  */
 export async function loadForComparison( args: DeviceComparisonArgs, options: BrowserContextOptions, viewport: 'desktop' | 'mobile', mode: 'probe' | 'check', contexts: BrowserContext[], timings?: NonNullable< RouteDeviceDecision['checkTimings'] > ) {
 	const startedAt = Date.now();
-	const context = await createSourceContext( args.browser, options, { governors: args.governors, sourceUrl: args.url } );
+	const context = await createSourceContext( args.browser, options, { governors: args.governors, sourceUrl: args.url, sourceTelemetry: args.sourceTelemetry } );
 	contexts.push( context );
 	categorizeSourceContext(context, 'device-check');
+	if ( args.resourceStore ) await installResourceReplay( context, args.resourceStore, args.publicUrlsOnly );
 	await context.addInitScript( "if(typeof globalThis.__name==='undefined')globalThis.__name=function(fn){return fn;};" );
 	const page = await context.newPage();
+	args.resourceStore?.observe( page, { replayOnly: true } );
 	await args.initScript?.(page);
 	// The comparison and shared-chrome probes wait on the same render-affecting
 	// quiet as capture; watch the page's traffic from before its navigation.
@@ -162,7 +168,7 @@ export async function loadForComparison( args: DeviceComparisonArgs, options: Br
 	// failure-class: operational
 	if ( status >= 400 || status === 0 ) throw new Error( `the ${ viewport } document answered HTTP ${ status }` );
 	if ( args.identityHeaders && navigation.response ) args.identityHeaders[ viewport ] = replayableRequestHeaders( await navigation.response.request().allHeaders() );
-	const html = await navigation.response?.text().catch( () => undefined );
+	const html = await navigation.response?.text().catch( orElse( undefined ) );
 	const settledAt = Date.now();
 	if ( timings ) timings.navigate = Math.max( timings.navigate, settledAt - startedAt );
 	await applySourceCleanup( page, cleanupPolicyForResponse(args.cleanupPolicy ?? cleanupPolicy(), navigation.response, html ?? '') );
@@ -170,9 +176,9 @@ export async function loadForComparison( args: DeviceComparisonArgs, options: Br
 		// Bounded after the document is parsed: up to CHECK_LOAD_WAIT_MS for
 		// `load`, up to 0.5 s of network quiet, the short scroll, then up to 1 s
 		// of DOM quiet. Both identities are bounded alike.
-		await Promise.race( [ page.waitForLoadState( 'networkidle' ).catch( () => {} ), new Promise( resolve => setTimeout( resolve, 500 ) ) ] );
+		await Promise.race( [ page.waitForLoadState( 'networkidle' ).catch( orElse( undefined ) ), new Promise( resolve => setTimeout( resolve, 500 ) ) ] );
 		await withEvaluateTimeout( shortScroll( page ), 5_000 );
-		await settleDocument( page, 'stable', { quietMs: 300, timeoutMs: 1_000 } ).catch( () => {} );
+		await settleDocument( page, 'stable', { quietMs: 300, timeoutMs: 1_000 } ).catch( orElse( undefined ) );
 	} else {
 		await waitForStable( page );
 		await withEvaluateTimeout( shortScroll( page ), 10_000 );
@@ -191,6 +197,7 @@ export async function loadForComparison( args: DeviceComparisonArgs, options: Br
 	};
 	const structure = await withEvaluateTimeout( renderedElementStructure( page ), 10_000 );
 	const result = { page, html, target, fetchServerHtml, paths: structure.paths, classTokens: structure.classTokens, bodyClasses: await withEvaluateTimeout( renderedBodyClasses( page ), 10_000 ) };
+	await args.resourceStore?.settle( page );
 	if ( timings ) timings.settle = Math.max( timings.settle, Date.now() - settledAt );
 	return result;
 }
@@ -213,7 +220,11 @@ export function comparisonFailedAlike( desktop: unknown, phone: unknown ): boole
 
 /** Compare the desktop and phone identities of one route, loaded the same way. */
 async function compareIdentities( args: DeviceComparisonArgs, mode: 'probe' | 'check', contexts: BrowserContext[], timings?: NonNullable< RouteDeviceDecision['checkTimings'] > ) {
-	const [ desktopLoad, phoneLoad ] = await Promise.allSettled( [ loadForComparison( args, args.desktop, 'desktop', mode, contexts, timings ), loadForComparison( args, args.phone, 'mobile', mode, contexts, timings ) ] );
+	// Load sequentially so desktop warms replay for the phone load. Settle both:
+	// comparisonFailedAlike needs each identity's error.
+	const settled = <T,>( load: Promise< T > ): Promise< PromiseSettledResult< T > > => load.then( value => ( { status: 'fulfilled' as const, value } ), reason => ( { status: 'rejected' as const, reason } ) );
+	const desktopLoad = await settled( loadForComparison( args, args.desktop, 'desktop', mode, contexts, timings ) );
+	const phoneLoad = await settled( loadForComparison( args, args.phone, 'mobile', mode, contexts, timings ) );
 	if ( desktopLoad.status === 'rejected' || phoneLoad.status === 'rejected' ) {
 		const reason = ( result: PromiseSettledResult< unknown > ) => result.status === 'rejected' ? String( result.reason instanceof Error ? result.reason.message : result.reason ).replace( /^the (desktop|mobile) /, 'the ' ) : undefined;
 		// failure-class: operational
@@ -242,7 +253,7 @@ export async function checkRouteDeviceMode( args: DeviceComparisonArgs ): Promis
 		try {
 			if ( args.publicUrlsOnly ) assertPublicHttpUrl( args.url );
 			const documents = await Promise.all( ( [ 'desktop', 'mobile' ] as const ).map( async identity => {
-				const context = await createSourceContext( args.browser, identity === 'desktop' ? args.desktop : args.phone, { governors: args.governors, sourceUrl: args.url } );
+				const context = await createSourceContext( args.browser, identity === 'desktop' ? args.desktop : args.phone, { governors: args.governors, sourceUrl: args.url, sourceTelemetry: args.sourceTelemetry } );
 				attributeSourceDevice(context, identity === 'desktop' ? 'desktop' : 'mobile');
 				categorizeSourceContext(context, 'device-check');
 				contexts.push( context );
@@ -258,7 +269,7 @@ export async function checkRouteDeviceMode( args: DeviceComparisonArgs ): Promis
 				if ( inheritedFrom ) return { mode: 'reflow-only', reason: 'same server HTML and external scripts covered by a rendered route check', serverHtml, inheritedFrom, externalScripts: scripts };
 			}
 		} finally {
-			await Promise.all( contexts.map( context => context.close().catch( () => {} ) ) );
+			await Promise.all( contexts.map( context => context.close().catch( orElse( undefined ) ) ) );
 		}
 		switchCandidates = undefined;
 		const rendered = await renderedRouteDeviceMode( args, candidates => { switchCandidates = candidates; } );
@@ -269,7 +280,7 @@ export async function checkRouteDeviceMode( args: DeviceComparisonArgs ): Promis
 	// stops. A failed probe observes nothing and export keeps its fallback.
 	const serverHtml = result.serverHtml;
 	if ( result.mode === 'dual' && ( serverHtml === 'identical' || serverHtml === 'identical-after-normalization' ) && switchCandidates?.widths.length ) {
-		const observed = await probeSwitchWidth( args, serverHtml, switchCandidates ).catch( () => undefined );
+		const observed = await probeSwitchWidth( args, serverHtml, switchCandidates ).catch( orElse( undefined ) );
 		if ( observed !== undefined ) {
 			result.switchWidth = observed.switchWidth;
 			if ( observed.middleLayout ) result.middleLayout = observed.middleLayout;
@@ -320,7 +331,7 @@ async function renderedRouteDeviceMode( args: DeviceComparisonArgs, onSwitchCand
 			const recheckStartedAt = Date.now();
 			const reread = async ( page: Page ) => {
 				await new Promise( resolve => setTimeout( resolve, CHECK_RECHECK_MS ) );
-				await settleDocument( page, 'stable', { quietMs: 300, timeoutMs: 1_000 } ).catch( () => {} );
+				await settleDocument( page, 'stable', { quietMs: 300, timeoutMs: 1_000 } ).catch( orElse( undefined ) );
 				const structure = await withEvaluateTimeout( renderedElementStructure( page ), 10_000 );
 				return { paths: structure.paths, classTokens: structure.classTokens, bodyClasses: await withEvaluateTimeout( renderedBodyClasses( page ), 10_000 ) };
 			};
@@ -341,15 +352,16 @@ async function renderedRouteDeviceMode( args: DeviceComparisonArgs, onSwitchCand
 		}
 		const decided = decideRouteMode( { serverHtml: compared.serverHtml, structure, renderedDocuments, runtimeStyles, bodyClasses: differs() ? bodyClasses : undefined } );
 		checkTimings.equivalence += Date.now() - finalEquivalenceStartedAt;
-		if ( decided.mode === 'dual' && compared.serverHtml !== 'different' ) onSwitchCandidates?.( { widths: await withEvaluateTimeout( stylesheetSwitchBoundaries( compared.desktop.page ), 10_000 ).catch( () => [] ), desktop: desktopRendered, phone: phoneRendered } );
-		return { ...decided, inlineRuntimeHash: compared.desktop.html === undefined ? undefined : inlineRuntimeHash( compared.desktop.html, compared.url ), serverHtml: compared.serverHtml, externalScripts: compared.desktop.html === undefined ? undefined : externalScriptSources( compared.desktop.html, compared.url ), structure, ...( rechecked ? { rechecked } : {} ), checkMs: Date.now() - startedAt, checkTimings };
+		if ( decided.mode === 'dual' && compared.serverHtml !== 'different' ) onSwitchCandidates?.( { widths: await withEvaluateTimeout( stylesheetSwitchBoundaries( compared.desktop.page ), 10_000 ).catch( orElse( [] ) ), desktop: desktopRendered, phone: phoneRendered } );
+		const identityConfirmed = rechecked && decided.mode === 'dual' && ( bodyClasses.desktopOnly.length > 0 || bodyClasses.phoneOnly.length > 0 );
+		return { ...decided, inlineRuntimeHash: compared.desktop.html === undefined ? undefined : inlineRuntimeHash( compared.desktop.html, compared.url ), serverHtml: compared.serverHtml, externalScripts: compared.desktop.html === undefined ? undefined : externalScriptSources( compared.desktop.html, compared.url ), structure, ...( rechecked ? { rechecked } : {} ), ...( identityConfirmed ? { identityConfirmed } : {} ), checkMs: Date.now() - startedAt, checkTimings };
 	} catch ( error ) {
 		// Both identities failed alike (an absent route, an off-site redirect):
 		// there is no phone document to keep, and capture records the outcome once.
 		if ( error instanceof ComparisonUnavailable && error.same ) return { mode: 'reflow-only', reason: `no document in either identity: ${ error.message }`, checkMs: Date.now() - startedAt, checkTimings };
 		return { ...decideRouteMode( { error: error instanceof Error ? error.message : String( error ) } ), checkMs: Date.now() - startedAt, checkTimings };
 	} finally {
-		await Promise.all( contexts.map( context => context.close().catch( () => {} ) ) );
+		await Promise.all( contexts.map( context => context.close().catch( orElse( undefined ) ) ) );
 	}
 }
 
@@ -373,7 +385,7 @@ async function probeSwitchWidth( args: DeviceComparisonArgs, serverHtml: 'identi
 			const rendering: SwitchRendering = { paths: loaded.paths, bodyClasses: loaded.bodyClasses, classTokens: loaded.classTokens };
 			return { rendered: identity.classify( rendering ), rendering };
 		} finally {
-			await Promise.all( contexts.map( context => context.close().catch( () => {} ) ) );
+			await Promise.all( contexts.map( context => context.close().catch( orElse( undefined ) ) ) );
 		}
 	}, identity.same );
 }
@@ -433,7 +445,7 @@ export async function probeDeviceMode( args: DeviceModeProbeArgs ): Promise< { d
 				report = canonicalizeInteractionReport( report, html => html.replace( marker, '' ) );
 				// These states join the desktop document's evidence, so they must name
 				// its nodes: a runtime ID counter can number the phone rendering differently.
-				report = withCarriedSelectors( report, await withEvaluateTimeout( carrySelectors( phone.page, desktop.page, recordedSelectors( report.states ) ), 10_000 ).catch( () => new Map() ) );
+				report = withCarriedSelectors( report, await withEvaluateTimeout( carrySelectors( phone.page, desktop.page, recordedSelectors( report.states ) ), 10_000 ).catch( orElse( new Map() ) ) );
 				if ( args.canonicalizeHtml ) report = canonicalizeInteractionReport( report, args.canonicalizeHtml );
 				// Initially visible dialogs are not phone-only; the desktop pass owns them.
 				const { initialDialogs: _initial, routeNavigation: _routes, ...phoneReport } = report;
@@ -462,7 +474,7 @@ export async function probeDeviceMode( args: DeviceModeProbeArgs ): Promise< { d
 		const probeError = error instanceof Error ? error.message : String( error );
 		return { url, decision: { ...decideSiteMode( { requested, probeError } ), requested, url, ...( serverHtml ? { serverHtml } : {} ), ...( structure ? { structure } : {} ), ignored, durationMs: Date.now() - startedAt } };
 	} finally {
-		await Promise.all( contexts.map( context => context.close().catch( () => {} ) ) );
+		await Promise.all( contexts.map( context => context.close().catch( orElse( undefined ) ) ) );
 	}
 }
 

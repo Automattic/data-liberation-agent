@@ -43,6 +43,11 @@ it.each( [
 			}
 			return { kind: 'image', source_urls: [ originalUrl, displayedUrl ], resolved_original: originalUrl,
 				local_path: join( directory, resources[ originalUrl ].path ),
+				// A captured response alone is not verification evidence for export.
+				renditions: [ { kind: 'image', source_urls: [ displayedUrl ], resolved_original: displayedUrl,
+					local_path: resources[ displayedUrl ].path, references: [],
+					original: { source_url: displayedUrl, content_type: contentType, width: 400, height: 400 * height / width,
+						sha256: createHash( 'sha256' ).update( displayed ).digest( 'hex' ) } } ],
 				references: [ { route: source, kind: 'HTML', source_url: displayedUrl } ],
 				original: { source_url: originalUrl, content_type: contentType, width, height,
 					sha256: createHash( 'sha256' ).update( original ).digest( 'hex' ) } };

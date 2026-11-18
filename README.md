@@ -295,7 +295,7 @@ npm run mcp     # or: npx tsx src/mcp-server.ts
 
 The server exposes the same four verbs as tools — `inspect`, `liberate`, `compare`, `publish` — calling the same entry points the CLI calls. MCP is a transport here, not the architecture: nothing requires it, and it deliberately does not expose internal pipeline phases.
 
-> **First-time browser setup.** Capture uses Playwright's Chromium, which is not installed automatically:
+> **Browser setup.** Browser capture checks Chromium before discovery and installs the revision required by the engine's own Playwright if it is missing. Failed setup rejects with `browser-unavailable`; it never silently uses an embedder's different revision. To provision it ahead of time (for example, on a network-restricted host):
 >
 > ```bash
 > npm run setup:browser

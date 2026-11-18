@@ -180,7 +180,7 @@ describe('inspectSource', () => {
     expect(JSON.parse(result.stdout)).toMatchObject({ schemaVersion: '2.0', complexity: { band: 'unknown' }, coverage: { discovery: { limit: 3 }, sampling: { limit: 2 } } });
   }, 30_000);
 
-  it('does not sample nested sitemap documents and preserves distinct route URLs', async () => {
+  it('follows nested sitemap documents without sampling them and preserves distinct route URLs', async () => {
     const url = await fixture((request, response) => {
       const port = (server!.address() as { port: number }).port;
       const path = new URL(request.url ?? '/', 'http://fixture').pathname;
@@ -194,10 +194,10 @@ describe('inspectSource', () => {
     });
     const result = await inspectSource(url, { discoveryLimit: 5, sampleLimit: 5 });
 
-    expect(result.coverage.discovery).toMatchObject({ routes: 3, truncated: true });
+    expect(result.coverage.discovery).toMatchObject({ routes: 3, truncated: false });
     expect(result.samples.map((sample) => sample.url)).toContain(`${url}page/?variant=one`);
     expect(result.samples.map((sample) => sample.url)).toContain(`${url}page/?variant=two`);
-    expect(result.issues).toContainEqual(expect.objectContaining({ code: 'nested-sitemap-unvisited' }));
+    expect(result.issues).not.toContainEqual(expect.objectContaining({ code: 'nested-sitemap-unvisited' }));
   });
 
   it('reports non-HTML and failed HTTP samples without invented observations or resource links', async () => {

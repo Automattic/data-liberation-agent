@@ -1,4 +1,4 @@
-import * as cheerio from 'cheerio';
+import { readDocument } from './parsed-documents.js';
 
 /** Visit declared JSON-LD images and site logos; unrelated JSON strings stay intact. */
 export function mapMetadataImages( data: unknown, map: ( url: string ) => string ): void {
@@ -30,7 +30,7 @@ export function mapMetadataImages( data: unknown, map: ( url: string ) => string
 /** Shared capture/export interpretation of inert image metadata dependencies. */
 export function metadataImageReferences( html: string ): string[] {
 	const urls = new Set< string >();
-	const $ = cheerio.load( html );
+	const $ = readDocument( html );
 	$( 'meta[property],meta[name]' ).each( ( _, element ) => {
 		const node = $( element );
 		const field = ( node.attr( 'property' ) ?? node.attr( 'name' ) ?? '' ).toLowerCase();

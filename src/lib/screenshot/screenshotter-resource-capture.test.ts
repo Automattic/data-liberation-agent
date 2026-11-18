@@ -20,7 +20,8 @@ vi.mock( '../browser-kit/index.js', async ( importOriginal ) => ( {
 	connectBrowser: vi.fn(),
 } ) );
 
-vi.mock( './resource-capture.js', () => ( {
+vi.mock( './resource-capture.js', async ( importOriginal ) => ( {
+	...( await importOriginal< typeof import( './resource-capture.js' ) >() ),
 	CapturedResourceStore: class {
 		captureDomDependencies = mocks.captureDomDependencies;
 		captureSelectedSrcsets = vi.fn().mockResolvedValue( undefined );
@@ -35,6 +36,7 @@ function makePage( mobile: boolean, routedRequest?: object ) {
 	const routeHandlers: Array<(route: object) => Promise<void>> = [];
 	let currentUrl = '';
 	return {
+		context: vi.fn().mockReturnValue({}),
 		exposeBinding: vi.fn().mockResolvedValue(undefined),
 		once: vi.fn(),
 		on: vi.fn(),
@@ -55,7 +57,7 @@ function makePage( mobile: boolean, routedRequest?: object ) {
 				};
 				await next();
 			}
-			return { status: () => 200 };
+			return { status: () => 200, text: async () => '<html><body></body></html>' };
 		} ),
 		url: () => currentUrl,
 		viewportSize: () => null,
@@ -70,6 +72,7 @@ function makePage( mobile: boolean, routedRequest?: object ) {
 		waitForLoadState: vi.fn().mockResolvedValue( undefined ),
 		evaluate: vi.fn().mockImplementation( async ( callback: unknown ) => {
 			const source = String( callback );
+			if ( source.includes( 'glyphs.push' ) ) return [];
 			if ( source.includes( 'ViewTimeline' ) ) return [];
 			// The serializer sweeps source cleanup in its own task, so match it first.
 			if ( source.includes( 'DOCTYPE' ) ) {

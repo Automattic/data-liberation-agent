@@ -43,11 +43,13 @@ export function observeViewportWork(): void {
 	const MAX_GENERATIONS = 4;
 	type Schedule = ( handler: unknown, delay?: number, ...args: unknown[] ) => number;
 	type Cancel = ( id?: number ) => void;
-	const scope = window as unknown as { setTimeout: Schedule; clearTimeout: Cancel; clearInterval: Cancel };
+	const scope = window as unknown as { setTimeout: Schedule; setInterval: Schedule; clearTimeout: Cancel; clearInterval: Cancel };
 	const nativeSet = scope.setTimeout;
+	const nativeInterval = scope.setInterval;
 	const nativeClear = scope.clearTimeout;
 	const nativeClearInterval = scope.clearInterval;
 	const pending = new Set< number >();
+	const intervals = new Map<number, number>();
 	// 0 outside viewport work; otherwise the generation of what is running.
 	let generation = 0;
 	scope.setTimeout = function ( handler, delay, ...args ) {
@@ -68,13 +70,20 @@ export function observeViewportWork(): void {
 		pending.add( id );
 		return id;
 	};
+	// Finite resize-driven stepping uses intervals too. Perpetual intervals
+	// remain bounded rather than holding readiness forever.
+	scope.setInterval = function ( handler, delay, ...args ) {
+		const id = nativeInterval.call( window, handler, delay, ...args );
+		if ( generation !== 0 && typeof handler === 'function' && ( Number( delay ) || 0 ) <= MAX_DELAY_MS ) intervals.set( id, performance.now() + 2000 );
+		return id;
+	};
 	scope.clearTimeout = function ( id ) {
-		if ( id !== undefined ) pending.delete( id );
+		if ( id !== undefined ) { pending.delete( id ); intervals.delete( id ); }
 		return nativeClear.call( window, id );
 	};
 	// Timeout and interval ids share one pool; either clear cancels a timeout.
 	scope.clearInterval = function ( id ) {
-		if ( id !== undefined ) pending.delete( id );
+		if ( id !== undefined ) { pending.delete( id ); intervals.delete( id ); }
 		return nativeClearInterval.call( window, id );
 	};
 	const sleep = ( ms: number ) => new Promise< void >( resolve => { nativeSet.call( window, resolve, ms ); } );
@@ -89,7 +98,10 @@ export function observeViewportWork(): void {
 			await sleep( 0 );
 			generation = 0;
 		},
-		pending: () => pending.size,
+		pending: () => {
+			for ( const [ id, deadline ] of intervals ) if ( performance.now() >= deadline ) intervals.delete( id );
+			return pending.size + intervals.size;
+		},
 		sleep,
 	};
 	Object.defineProperty( window, key, { configurable: true, value: work } );

@@ -1,4 +1,5 @@
 import type { Page } from 'playwright';
+import { orElse } from '../failure-class.js';
 
 /**
  * A one-second bucket permits thousands of incidental errors, but cuts off well
@@ -24,7 +25,7 @@ export function guardPageErrors( page: Page, onStorm: ( reason: string ) => void
 		if ( ++count <= limit ) return;
 		stopped = true;
 		onStorm( `${ total } uncaught page errors; more than ${ limit } in one second; profile context closed` );
-		void page.context().close().catch( () => {} );
+		void page.context().close().catch( orElse( undefined ) );
 	};
 	page.on( 'pageerror', onError );
 	return {

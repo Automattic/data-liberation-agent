@@ -66,10 +66,15 @@ function fragmentTargets(
 		cache.set( file, $ );
 	}
 	if ( ! $ ) return null;
-	return $( '[id],a[name]' ).filter(
+	const targets = $( '[id],a[name]' ).filter(
 		( _index, target ) =>
 			$!( target ).attr( 'id' ) === fragment || $!( target ).attr( 'name' ) === fragment
-	).length;
+	);
+	// The browser scrolls to the first target in tree order, and an ancestor
+	// precedes its descendants, so a target nested inside another is never the
+	// one chosen. Builders such as GoDaddy repeat a section id on its inner
+	// region; only targets in separate subtrees make the jump ambiguous.
+	return targets.filter( ( _index, target ) => $!( target ).parents().filter( ( _i, parent ) => targets.is( parent ) ).length === 0 ).length;
 }
 
 /**

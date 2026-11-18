@@ -26,11 +26,24 @@ export function siteNameFromRouteTitles( title: string | undefined, routeTitles:
 	return title;
 }
 
+// Common schema.org Organization types; an arbitrary named Thing (such as a
+// Person or Product) is not evidence of the site's name.
+const ORGANIZATION_TYPES = new Set( [
+	'Organization', 'LocalBusiness', 'Corporation', 'Restaurant', 'Store',
+	'ProfessionalService', 'HomeAndConstructionBusiness', 'GeneralContractor',
+	'FoodEstablishment', 'LodgingBusiness', 'Hotel', 'MedicalBusiness',
+	'MedicalOrganization', 'HealthAndBeautyBusiness', 'AutomotiveBusiness',
+	'FinancialService', 'RealEstateAgent', 'TravelAgency', 'EntertainmentBusiness',
+	'SportsActivityLocation', 'EducationalOrganization', 'School', 'CollegeOrUniversity',
+	'GovernmentOrganization', 'NGO', 'NonprofitOrganization', 'PerformingGroup', 'SportsOrganization',
+] );
+
 /**
- * The name a document's schema.org `WebSite` JSON-LD declares for the site,
- * the site's own explicit statement of its name.
+ * Prefer the site's explicit schema.org WebSite name, falling back to a declared
+ * organization name only when no WebSite name exists in any JSON-LD script.
  */
 export function declaredSiteName( html: string ): string | undefined {
+	let organizationName: string | undefined;
 	for ( const [ , json ] of html.matchAll( /<script\b[^>]*type=["']?application\/ld\+json["']?[^>]*>([\s\S]*?)<\/script>/gi ) ) {
 		let data: unknown;
 		try {
@@ -42,8 +55,10 @@ export function declaredSiteName( html: string ): string | undefined {
 			node && typeof node === 'object' && Array.isArray( ( node as { '@graph'?: unknown } )[ '@graph' ] ) ? ( node as { '@graph': unknown[] } )[ '@graph' ] : [ node ] );
 		for ( const node of nodes as Array< { '@type'?: unknown; name?: unknown } | null > ) {
 			const types = Array.isArray( node?.[ '@type' ] ) ? node[ '@type' ] : [ node?.[ '@type' ] ];
-			if ( types.includes( 'WebSite' ) && typeof node?.name === 'string' && node.name.trim() ) return node.name.trim();
+			if ( typeof node?.name !== 'string' || ! node.name.trim() ) continue;
+			if ( types.includes( 'WebSite' ) ) return node.name.trim();
+			if ( organizationName === undefined && types.some( type => typeof type === 'string' && ORGANIZATION_TYPES.has( type ) ) ) organizationName = node.name.trim();
 		}
 	}
-	return undefined;
+	return organizationName;
 }

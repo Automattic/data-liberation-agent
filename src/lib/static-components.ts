@@ -1,10 +1,14 @@
 import * as cheerio from 'cheerio';
+import type { Element } from 'domhandler';
 import type { CapturedComponent } from './screenshot/component-states.js';
+import { applyWidthClasses } from './screenshot/initial-document.js';
 
 function safeStateHtml(html: string): string {
 	const $ = cheerio.load(html);
 	$('script,iframe,object,embed,base').remove();
-	$('*').each((_index, node) => {
+	$<Element, string>('*').each((_index, node) => {
+		// Captured states come from the live DOM, before initial-document projection.
+		applyWidthClasses($(node));
 		for (const [name, value] of Object.entries($(node).attr() ?? {})) {
 			if (/^on/i.test(name) || name === 'srcdoc' || /^(?:href|src|action|formaction)$/i.test(name) && /^\s*(?:javascript|vbscript|data:text\/html):/i.test(value)) $(node).removeAttr(name);
 		}

@@ -2,12 +2,12 @@
 // single-colour icon records the same colour whatever format carries it, and
 // only bounded, icon-sized glyphs inside links and buttons are sampled.
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { chromium, type Browser, type Page } from 'playwright';
+import { describe, expect } from 'vitest';
+import { it, type BrowserFixtures } from '../../../test/browser.js';
+import { type Browser, type Page } from 'playwright';
 import { exportWebsiteCapture } from '../capture-export.js';
 import { capturePageHtml, captureScreenshots } from './screenshotter.js';
 import { GLYPH_COLOR_ATTRIBUTE, GLYPH_PENDING_ATTRIBUTE, GlyphColorCache, monochromeGlyphColor, recordGlyphColors } from './glyph-color.js';
@@ -21,8 +21,8 @@ const BLUE = '#1877f2';
 const SVG_GLYPH = ( fill: string ) =>
 	`<svg width="32" height="32" viewBox="0 0 32 32"><path fill-rule="evenodd" fill="${ fill }" d="M9 2h14a7 7 0 0 1 7 7v14a7 7 0 0 1-7 7H9a7 7 0 0 1-7-7V9a7 7 0 0 1 7-7zM14 8v5h-3v4h3v10h5V17h4v-4h-4V8z"/></svg>`;
 
-async function open( browser: Browser, body: string ): Promise< Page > {
-	const page = await browser.newPage( { viewport: { width: 800, height: 600 }, deviceScaleFactor: 2 } );
+async function open( { newPage }: Pick<BrowserFixtures, 'newPage'>, browser: Browser, body: string ): Promise< Page > {
+	const page = await newPage( { viewport: { width: 800, height: 600 }, deviceScaleFactor: 2 } );
 	await page.route( `${ ORIGIN }/**`, ( route ) => {
 		const path = new URL( route.request().url() ).pathname;
 		const file = /^\/icons\/([a-z-]+\.(avif|webp|png))$/.exec( path );
@@ -41,16 +41,9 @@ const recorded = ( page: Page ) =>
 	page.evaluate( ( attribute ) => Array.from( document.querySelectorAll( '[id]' ) ).map( ( node ) => [ node.id, node.getAttribute( attribute ) ] ), GLYPH_COLOR_ATTRIBUTE );
 
 describe( 'rendered glyph colour', () => {
-	let browser: Browser;
-	beforeAll( async () => {
-		browser = await chromium.launch();
-	} );
-	afterAll( async () => {
-		await browser.close();
-	} );
 
-	it( 'records the same colour for an AVIF, WebP, PNG, picture, inline SVG and background-image glyph', async () => {
-		const page = await open(
+	it( 'records the same colour for an AVIF, WebP, PNG, picture, inline SVG and background-image glyph', async ({ browser, newPage }) => {
+		const page = await open({ newPage },
 			browser,
 			`<footer>
 				<a id="avif" href="/a"><img src="/icons/glyph.avif" width="32" height="32" alt="A"></a>
@@ -85,8 +78,8 @@ describe( 'rendered glyph colour', () => {
 		await page.close();
 	} );
 
-	it( 'records nothing for a multicolour glyph, a large image, or an image outside a link or button', async () => {
-		const page = await open(
+	it( 'records nothing for a multicolour glyph, a large image, or an image outside a link or button', async ({ browser, newPage }) => {
+		const page = await open({ newPage },
 			browser,
 			`<a href="/a"><img id="multicolor" src="/icons/multicolor.png" width="32" height="32" alt="A"></a>
 			<a href="/b"><img id="large" src="/icons/glyph.png" width="96" height="96" alt="B"></a>
@@ -100,9 +93,9 @@ describe( 'rendered glyph colour', () => {
 		await page.close();
 	} );
 
-	it( 'samples at most the per-document bound, in document order', async () => {
+	it( 'samples at most the per-document bound, in document order', async ({ browser, newPage }) => {
 		const icons = Array.from( { length: 30 }, ( _, index ) => `<a href="/${ index }"><img id="icon-${ index }" src="/icons/glyph.png" width="16" height="16" alt=""></a>` ).join( '' );
-		const page = await open( browser, icons );
+		const page = await open({ newPage },  browser, icons );
 		expect( await recordGlyphColors( page, { maxGlyphs: 24 } ) ).toEqual( { candidates: 30, sampled: 24, recorded: 24 } );
 		const colors = await recorded( page );
 		expect( colors.slice( 0, 24 ).every( ( [ , color ] ) => color === BLUE ) ).toBe( true );
@@ -110,21 +103,21 @@ describe( 'rendered glyph colour', () => {
 		await page.close();
 	} );
 
-	it( 'samples a repeated glyph once and records it on every copy (#924)', async () => {
+	it( 'samples a repeated glyph once and records it on every copy (#924)', async ({ browser, newPage }) => {
 		const icons = Array.from( { length: 6 }, () => `<a href="/brand"><img src="/icons/glyph.png" width="16" height="16" alt=""></a>` ).join( '' );
-		const page = await open( browser, `<footer>${ icons }</footer>` );
+		const page = await open({ newPage },  browser, `<footer>${ icons }</footer>` );
 		expect( await recordGlyphColors( page, { maxGlyphs: 2 } ) ).toEqual( { candidates: 6, sampled: 1, recorded: 6 } );
 		expect( await page.locator( `footer img[${ GLYPH_COLOR_ATTRIBUTE }="${ BLUE }"]` ).count() ).toBe( 6 );
 		expect( await capturePageHtml( page ) ).not.toContain( 'data-blocks-engine-capture-glyph-probe' );
 		await page.close();
 	} );
 
-	it( 'gives a shared glyph the same colour on every route, in either capture order (#924)', async () => {
+	it( 'gives a shared glyph the same colour on every route, in either capture order (#924)', async ({ browser, newPage }) => {
 		// Document A reaches the shared glyph only after `maxGlyphs` distinct fillers.
 		const fillers = Array.from( { length: 3 }, ( _, index ) => `<a href="/${ index }"><img id="filler-${ index }" src="/icons/glyph.png" width="16" height="16" alt=""></a>` ).join( '' );
 		const shared = `<footer><a href="https://social.example/brand">${ SVG_GLYPH( BLUE ) }</a></footer>`;
-		const capture = async ( body: string, cache: GlyphColorCache ) => {
-			const page = await open( browser, body );
+		const capture = async ( { browser, newPage }: Pick<BrowserFixtures, 'browser' | 'newPage'>, body: string, cache: GlyphColorCache ) => {
+			const page = await open({ newPage },  browser, body );
 			const result = await recordGlyphColors( page, { maxGlyphs: 3 }, cache );
 			const html = await capturePageHtml( page );
 			await page.close();
@@ -135,8 +128,8 @@ describe( 'rendered glyph colour', () => {
 
 		// B then A: A applies B's sample from the cache, without a screenshot or a bound.
 		const forward = new GlyphColorCache();
-		const b1 = await capture( shared, forward );
-		const a1 = await capture( fillers + shared, forward );
+		const b1 = await capture({ browser, newPage },  shared, forward );
+		const a1 = await capture({ browser, newPage },  fillers + shared, forward );
 		expect( b1.result ).toEqual( { candidates: 1, sampled: 1, recorded: 1 } );
 		expect( a1.result ).toEqual( { candidates: 4, sampled: 3, recorded: 4 } );
 		expect( footerOf( a1.html ) ).toContain( expected );
@@ -144,8 +137,8 @@ describe( 'rendered glyph colour', () => {
 
 		// A then B: A defers the glyph; the run's final pass settles it from B.
 		const reverse = new GlyphColorCache();
-		const a2 = await capture( fillers + shared, reverse );
-		const b2 = await capture( shared, reverse );
+		const a2 = await capture({ browser, newPage },  fillers + shared, reverse );
+		const b2 = await capture({ browser, newPage },  shared, reverse );
 		expect( a2.result ).toEqual( { candidates: 4, sampled: 3, recorded: 3 } );
 		expect( footerOf( a2.html ) ).toContain( GLYPH_PENDING_ATTRIBUTE );
 		const a2Final = reverse.resolveHtml( a2.html );
@@ -185,8 +178,8 @@ describe( 'rendered glyph colour', () => {
 		expect( monochromeGlyphColor( pixels( () => [ 24, 119, 242, 0 ] ), 8, 8 ) ).toBe( '' );
 	} );
 
-	it( 'records the colour in the desktop and mobile documents a capture saves', async () => {
-		const server = createServer( ( request, response ) => {
+	it( 'records the colour in the desktop and mobile documents a capture saves', async ({ serve }) => {
+		const { server } = await serve(( request, response ) => {
 			const file = /^\/icons\/([a-z-]+\.(avif|webp|png))$/.exec( request.url ?? '' );
 			if ( file ) {
 				response.setHeader( 'content-type', TYPES[ file[ 2 ] ] );
@@ -195,8 +188,8 @@ describe( 'rendered glyph colour', () => {
 			}
 			response.setHeader( 'content-type', 'text/html' );
 			response.end( '<!doctype html><title>Home</title><main><h1>Home</h1></main><footer><a href="https://social.example/brand"><img src="/icons/glyph.avif" width="32" height="32" alt="Brand"></a></footer>' );
-		} );
-		await new Promise< void >( ( resolve ) => server.listen( 0, '127.0.0.1', resolve ) );
+		});
+
 		const origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
 		mkdirSync( '.tmp-test', { recursive: true } );
 		const outputDir = mkdtempSync( join( process.cwd(), '.tmp-test', 'glyph-color-' ) );
@@ -214,7 +207,7 @@ describe( 'rendered glyph colour', () => {
 				expect( html ).not.toContain( 'data-blocks-engine-capture-glyph-probe' );
 			}
 		} finally {
-			await new Promise< void >( ( resolve ) => server.close( () => resolve() ) );
+
 			rmSync( outputDir, { recursive: true, force: true } );
 		}
 	}, 60_000 );

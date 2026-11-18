@@ -50,6 +50,23 @@ describe('shared option contract', () => {
     }
   });
 
+  it('preserves the template-cluster tri-state across CLI and MCP', () => {
+    expect(parseCliOptions('liberate', []).options.templateClusters).toBeUndefined();
+    expect(convertMcpOptions('liberate', { url: 'https://example.com/' }).templateClusters).toBeUndefined();
+    expect(parseCliOptions('liberate', ['--template-clusters']).options.templateClusters).toBe(true);
+    expect(parseCliOptions('liberate', ['--no-template-clusters']).options.templateClusters).toBe(false);
+    for (const flags of [
+      ['--template-clusters', '--no-template-clusters'],
+      ['--no-template-clusters', '--template-clusters'],
+    ]) {
+      expect(() => parseCliOptions('liberate', flags)).toThrow('Cannot use both --template-clusters and --no-template-clusters');
+    }
+    for (const templateClusters of [true, false, undefined]) {
+      expect(convertMcpOptions('liberate', { url: 'https://example.com/', templateClusters }).templateClusters).toBe(templateClusters);
+    }
+    expect(HELP).toContain('--template-clusters / --no-template-clusters');
+  });
+
   it('rejects unknown flags before interpreting their values as a URL', () => {
     expect(() => parseCliOptions('liberate', ['--route-limt', '5', 'https://example.com'])).toThrow('Did you mean --route-limit?');
     expect(() => parseCliOptions('inspect', ['https://example.com', '--sample-limt', '5'])).toThrow('Did you mean --sample-limit?');

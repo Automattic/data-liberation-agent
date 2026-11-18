@@ -23,6 +23,7 @@ export function validateHttpCaptureOptions( options: CaptureOptions ): void {
 
 export async function captureHttpWebsite( input: {
 	options: CaptureOptions; sourceUrl: string; platform: Platform; startedAt: number;
+	detection: import('./detect-platform/index.js').DetectionResult;
 	routeScope?: import('../platform/types.js').SiteRouteScope;
 	progress: ( progress: CaptureProgress ) => void; title?: string;
 	/** Routes the shared route budget kept, entrypoint first. */
@@ -31,6 +32,8 @@ export async function captureHttpWebsite( input: {
 	discoveryDiagnostics: RouteDiagnostic[];
 	/** Receipt counts from template grouping, when `routeSelection: 'template-coverage'` ran it. */
 	templateGroups?: Record<string, unknown>;
+	/** Effective template-cluster policy resolved by capture orchestration. */
+	templateClustersDecision?: { enabled: boolean; source: string };
 	/** Routes skipped before capture because their rel=canonical is another inventory route (#835). */
 	canonicalAliases?: ReadonlyArray< import('./route-aliases.js').CanonicalRouteAlias >;
 	/** The capture's per-origin source request governors, shared with template grouping. */
@@ -60,11 +63,13 @@ export async function captureHttpWebsite( input: {
 	const diagnostics: RouteDiagnostic[] = [ ...input.discoveryDiagnostics, ...( receipt.discoveryDiagnostics ?? [] ) ];
 	const failedRoutes = new Set( acquisition.documents.filter( document => document.status !== 'acquired' ).map( document => document.url ) );
 	const summary = { routesDiscovered: urls.length, routesCaptured: receipt.routes.length, routesSkipped: 0, routesFailed: failedRoutes.size, routesOmitted: budgetOmittedRoutes( diagnostics ).length, durationMs: Date.now() - input.startedAt, complete: false, entrypointCaptured: true };
+	receipt.source.detection = input.detection;
 	receipt.summary = summary;
 	receipt.discoveryDiagnostics = diagnostics;
 	receipt.failures = failures;
 	receipt.orchestration = { mode: 'http', requestedRoutes: urls.length, discoveredRoutes: urls.length + summary.routesOmitted, runtimeRouteLimit: options.http?.runtimeRouteLimit ?? 0, runtime, verification: 'unverified' };
 	if ( input.templateGroups ) receipt.templateGroups = input.templateGroups;
+	if ( input.templateClustersDecision ) receipt.templateClustersDecision = input.templateClustersDecision;
 	writeFileSync( captureReceiptPath, JSON.stringify( receipt, null, 2 ) + '\n' );
 	const diagnosticPath = join( options.outputDir, 'diagnostics.json' );
 	const diagnostic = JSON.parse( readFileSync( diagnosticPath, 'utf8' ) );

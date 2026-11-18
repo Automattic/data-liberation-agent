@@ -1,13 +1,14 @@
 import { load } from 'cheerio';
-import { chromium } from 'playwright';
-import { expect, it } from 'vitest';
+
+import { expect } from 'vitest';
+import { it } from '../../../test/browser.js';
 import { capturePageHtml } from '../../lib/screenshot/screenshotter.js';
 import { godaddyWmAdapter } from './index.js';
 
-it('ports the GoDaddy marker independently of the Google view centre using scoped runtime props', async () => {
-  const browser = await chromium.launch();
-  try {
-    const page = await browser.newPage();
+it('ports the GoDaddy marker independently of the Google view centre using scoped runtime props', async ({ newPage }) => {
+
+  {
+    const page = await newPage();
     await page.setContent(`<!doctype html><div id="owner"><div data-aid="CONTACT_MAP_REND">
       <div class="gm-style" style="width:720px;height:360px"><a href="https://maps.google.com/maps?ll=51.49,-0.11&z=14&t=m">Open map</a></div>
     </div></div><script>
@@ -20,15 +21,13 @@ it('ports the GoDaddy marker independently of the Google view centre using scope
     const captured = load(await capturePageHtml(page));
     expect(captured('iframe').attr('src')).toBe('https://maps.google.com/maps?ll=51.49%2C-0.11&z=14&t=m&q=51.50012345%2C-0.12098765&output=embed');
     expect(captured('[data-blocks-engine-capture-google-map-marker]')).toHaveLength(0);
-  } finally {
-    await browser.close();
   }
 });
 
-it('does not infer a marker from missing, invalid, cyclic or non-Google component evidence', async () => {
-  const browser = await chromium.launch();
-  try {
-    const page = await browser.newPage();
+it('does not infer a marker from missing, invalid, cyclic or non-Google component evidence', async ({ newPage }) => {
+
+  {
+    const page = await newPage();
     await page.setContent(`<!doctype html>${['missing','invalid','cyclic','other','outside'].map(id=>
       `<div id="${id}" ${id==='outside'?'':'data-aid="CONTACT_MAP_REND"'}><div class="gm-style" style="width:200px;height:100px"><a href="https://maps.google.com/maps?ll=1,2&z=5">Open map</a></div></div>`
     ).join('')}<script>
@@ -44,7 +43,5 @@ it('does not infer a marker from missing, invalid, cyclic or non-Google componen
     for (const frame of captured('iframe').toArray()) {
       expect(captured(frame).attr('src')).toBe('https://maps.google.com/maps?ll=1%2C2&z=5&output=embed');
     }
-  } finally {
-    await browser.close();
   }
 });

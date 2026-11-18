@@ -17,7 +17,7 @@ const { captureScreenshotsMock } = vi.hoisted( () => ( {
 
 vi.mock( './media-fetch/safe-fetch.js', async ( importOriginal ) => ( {
 	...await importOriginal< typeof import('./media-fetch/safe-fetch.js') >(),
-	safeFetch: vi.fn( async ( url: string ) => ( { finalUrl: url } ) ),
+	safeFetch: vi.fn( async ( url: string ) => ( { finalUrl: url, status: 200 } ) ),
 } ) );
 
 const { buildTemplateGroupsMock } = vi.hoisted( () => ( { buildTemplateGroupsMock: vi.fn() } ) );
@@ -171,6 +171,49 @@ describe( 'downloadCaptureSectionMedia', () => {
 } );
 
 describe( 'captureWebsite fluid learning', () => {
+	it( 'detects Blogger and enumerates structured content after a throttled entry retries', async () => {
+		const { createServer } = await import( 'node:http' );
+		const actualFetch = await vi.importActual< typeof import('./media-fetch/safe-fetch.js') >( './media-fetch/safe-fetch.js' );
+		const actualDetection = await vi.importActual< typeof import('./detect-platform/index.js') >( './detect-platform/index.js' );
+		const { detect } = await import( './detect-platform/index.js' );
+		const { bloggerAdapter } = await import( '../adapters/blogger/index.js' );
+		let requests = 0;
+		const server = createServer( ( _request, response ) => {
+			requests++;
+			if ( requests === 1 ) {
+				response.writeHead( 429, { 'Retry-After': '1' } );
+				response.end( 'Throttled' );
+			} else {
+				response.writeHead( 200, { 'Content-Type': 'text/html' } );
+				response.end( '<html><head><meta name="generator" content="Blogger"></head><body>Blog</body></html>' );
+			}
+		} );
+		await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+		const url = `http://127.0.0.1:${ ( server.address() as import('node:net').AddressInfo ).port }/`;
+		const outputDir = join( process.cwd(), '.tmp-test', 'capture-throttled-entry' );
+		const enumerate = vi.fn( async () => ( { entries: [], diagnostics: [] } ) );
+		vi.mocked( safeFetch ).mockImplementationOnce( actualFetch.safeFetch );
+		vi.mocked( detect ).mockImplementationOnce( actualDetection.detect );
+		try {
+			const result = await captureWebsite( { url, outputDir, trustedOrigins: [ url ], templateClusters: true }, {
+				findAdapter: platform => platform === 'blogger' ? {
+					...bloggerAdapter,
+					discover: async () => ( { urls: [] } ),
+					structuredContent: { ...bloggerAdapter.structuredContent!, enumerate },
+				} : null,
+			} );
+			expect( requests ).toBe( 2 );
+			expect( enumerate ).toHaveBeenCalledOnce();
+			expect( result.provenance.platform ).toBe( 'blogger' );
+			expect( JSON.parse( readFileSync( result.captureReceiptPath, 'utf8' ) ).source.detection ).toMatchObject( {
+				platform: 'blogger', signals: expect.arrayContaining( [ expect.stringMatching( /Blogger/i ) ] ),
+			} );
+		} finally {
+			await new Promise<void>( ( resolve, reject ) => server.close( error => error ? reject( error ) : resolve() ) );
+			rmSync( outputDir, { recursive: true, force: true } );
+			buildTemplateGroupsMock.mockClear();
+		}
+	} );
 	it( 'admits client-rendered entry navigation before deep inventory routes under the time budget', async () => {
 		const root = join( process.cwd(), '.tmp-test', 'capture-rendered-navigation' );
 		const menu = [ 'https://example.com/about-us', 'https://example.com/contact' ];
@@ -245,14 +288,14 @@ describe( 'captureWebsite fluid learning', () => {
 	} );
 	it( 'carries adapter document ownership into seeds, capture and export without inferring a generic subpath scope', async () => {
 		const scopedSource = 'https://example.com/tenant';
-		const routeScope = { origin: 'https://example.com', pathPrefixes: ['/tenant'] };
-		await captureWebsite( { url: scopedSource, outputDir: root }, {
+		const routeScope = { origin: 'https://example.com', pathPrefixes: ['/tenant'], ignoredQueryParams: ['max-results'] };
+		await captureWebsite( { url: `${scopedSource}?max-results=7`, outputDir: root }, {
 			findAdapter: () => ( { id: 'neutral', routeScope: () => routeScope,
-				discover: async () => ( { urls: [ {url: `${scopedSource}/about?view=one`}, {url: 'https://example.com/'}, {url: 'https://example.com/tenant-two'} ] } ),
+				discover: async () => ( { urls: [ {url: `${scopedSource}/about?view=one&max-results=7`}, {url: `${scopedSource}/about?view=one`}, {url: 'https://example.com/'}, {url: 'https://example.com/tenant-two'} ] } ),
 			} ),
 		} );
 		expect( captureScreenshotsMock ).toHaveBeenLastCalledWith( expect.objectContaining( { routeScope, urls: [ scopedSource, `${scopedSource}/about?view=one` ] } ) );
-		expect( exportWebsiteCapture ).toHaveBeenLastCalledWith( expect.objectContaining( { routeScope } ) );
+		expect( exportWebsiteCapture ).toHaveBeenLastCalledWith( expect.objectContaining( { sourceUrl: scopedSource, routeScope } ) );
 	} );
 
 	it( 'reports adapter-excluded application routes without capturing them', async () => {
@@ -440,7 +483,7 @@ describe( 'captureWebsite completeness', () => {
 		expect( isUsableCapture( result ) ).toBe( true );
 	} );
 
-	it( 'publishes refusal evidence then surfaces the specific failure to callers', async () => {
+	it( 'ships a capture the source refused after its entrypoint as a partial site with the refusal evidence', async () => {
 		const realExport = await vi.importActual< typeof import('./capture-export.js') >( './capture-export.js' );
 		const { SourceBlockedClientError } = await import( './source-request-governor.js' );
 		vi.mocked( exportWebsiteCapture ).mockImplementationOnce( realExport.exportWebsiteCapture );
@@ -453,9 +496,10 @@ describe( 'captureWebsite completeness', () => {
 		mkdirSync( join( root, 'screenshots' ), { recursive: true } );
 		writeFileSync( join( root, 'html', 'home.html' ), '<main><h1>Fixture</h1></main>' );
 		writeFileSync( join( root, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries: { [ sourceUrl ]: { html: 'html/home.html' } } } ) );
-		await expect( captureWebsite( { url: sourceUrl, outputDir: root }, {
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root }, {
 			findAdapter: () => ( { id: 'generic', discover: async () => ( { urls: [] } ) } ),
-		} ) ).rejects.toBe( blocked );
+		} );
+		expect( result ).toMatchObject( { complete: false, entrypointCaptured: true } );
 		const receipt = JSON.parse( readFileSync( join( root, 'capture-receipt.json' ), 'utf8' ) );
 		expect( receipt.discoveryDiagnostics ).toContainEqual( expect.objectContaining( { code: 'source_blocked_client', requestsBeforeFirstRefusal: 10, firstRefusalAt: blocked.evidence.firstRefusalAt } ) );
 	} );
@@ -831,7 +875,7 @@ describe( 'captureWebsite route selection', () => {
 	afterEach( () => {
 		captureScreenshotsMock.mockClear();
 		vi.mocked( safeFetch ).mockReset();
-		vi.mocked( safeFetch ).mockImplementation( async ( url: string ) => ( { finalUrl: url } ) as Awaited< ReturnType< typeof safeFetch > > );
+		vi.mocked( safeFetch ).mockImplementation( async ( url: string ) => ( { finalUrl: url, status: 200 } ) as Awaited< ReturnType< typeof safeFetch > > );
 		buildTemplateGroupsMock.mockClear();
 		rmSync( root, { recursive: true, force: true } );
 	} );
@@ -845,7 +889,24 @@ describe( 'captureWebsite route selection', () => {
 		expect( capturedUrls() ).toEqual( spreadSample( [ sourceUrl, ...inventory ], 6 ) );
 		expect( existsSync( join( root, 'template-groups.json' ) ) ).toBe( false );
 		expect( JSON.parse( readFileSync( result.captureReceiptPath, 'utf8' ) ).templateGroups ).toBeUndefined();
+		expect( JSON.parse( readFileSync( result.captureReceiptPath, 'utf8' ) ).templateClustersDecision ).toEqual( { enabled: false, source: 'default' } );
 		expect( result.discoveryDiagnostics.some( row => row.code === 'template_grouping_unavailable' ) ).toBe( false );
+	} );
+
+	it.each( [ true, false ] )( 'explicit false disables clusters with structured content=%s', async ( structured ) => {
+		serveHtml();
+		const enumerate = vi.fn( async () => ( { entries: [], diagnostics: [] } ) );
+		const platform = adapter().findAdapter();
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 6, templateClusters: false }, {
+			findAdapter: () => ( { ...platform, ...( structured ? { structuredContent: {
+				enumerate, bodyEquivalent: () => false, memberDocument: () => undefined,
+				termArchiveUrl: () => sourceUrl, termName: () => undefined,
+			} } : {} ) } ),
+		} );
+		expect( enumerate ).not.toHaveBeenCalled();
+		expect( buildTemplateGroupsMock ).not.toHaveBeenCalled();
+		expect( capturedUrls() ).toEqual( spreadSample( [ sourceUrl, ...inventory ], 6 ) );
+		expect( JSON.parse( readFileSync( result.captureReceiptPath, 'utf8' ) ).templateClustersDecision ).toEqual( { enabled: false, source: 'explicit' } );
 	} );
 
 	it( 'spends the budget on one route per template first with template-coverage', async () => {
@@ -911,7 +972,7 @@ describe( 'captureWebsite route selection', () => {
 		expect( result.complete ).toBe( true );
 	} );
 
-	it( 'persists each cluster verification verdict in template-clusters.json', async () => {
+	it.each( [ true, undefined ] )( 'persists cluster verification with templateClusters=%s on a structured-content adapter', async ( templateClusters ) => {
 		const posts = [ 'https://example.com/post-a/', 'https://example.com/post-b/', 'https://example.com/post-c/' ];
 		const postHtml = ( url: string ): string => url === sourceUrl
 			? '<html><head></head><body><main><section class="hero"><h1>Home</h1></section></main></body></html>'
@@ -931,12 +992,22 @@ describe( 'captureWebsite route selection', () => {
 			writeFileSync( join( root, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries } ) );
 			return { urls, captured: urls.length, skipped: 0, failed: 0, durationMs: 1 };
 		} );
-		await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 3, templateClusters: true }, {
+		await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 3, templateClusters }, {
 			findAdapter: () => ( {
 				id: 'generic', platform: 'generic',
+				structuredContent: {
+					enumerate: async () => ( { entries: [], diagnostics: [] } ),
+					bodyEquivalent: () => false,
+					memberDocument: () => undefined,
+					termArchiveUrl: ( term: string ) => `${ sourceUrl }category/${ term }/`,
+					termName: () => undefined,
+				},
 				discover: async () => ( { urls: posts.map( url => ( { url, type: 'page' } ) ) } ),
 				extract: async () => ( { title: '', content: '' } ),
 			} ),
+		} );
+		expect( JSON.parse( readFileSync( join( root, 'capture-receipt.json' ), 'utf8' ) ).templateClustersDecision ).toEqual( {
+			enabled: true, source: templateClusters === true ? 'explicit' : 'adapter-structured-content',
 		} );
 		// Entrypoint, the posts representative and its verification member.
 		expect( capturedUrls() ).toEqual( [ sourceUrl, posts[ 0 ], posts[ 1 ] ] );

@@ -6,6 +6,16 @@ import { installProbeIntrinsics } from './probe-intrinsics.js';
 /** Shared identity for Node-side HTTP requests to source sites (not browser device profiles). */
 export const SOURCE_USER_AGENT = 'Mozilla/5.0 (compatible; DataLiberation/1.0)';
 
+/**
+ * DLA's Accept header for image requests, independent of Chromium's codecs.
+ * Format-negotiating CDNs (Wix, Squarespace, Cloudinary f_auto, imgix
+ * auto=format, Photon) choose the served encoding from it; without it they
+ * fall back to the legacy/original format, which can be 100x larger.
+ * Exclude JPEG XL: portable image verification does not support that format.
+ */
+export const BROWSER_IMAGE_ACCEPT =
+  'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8';
+
 /** Configure Chromium itself, not just context headers (Chromium adds hints later).
  * Every page is configured before its first request, including popups. Routing is
  * also a barrier for pages created by the browser rather than context.newPage().
@@ -101,6 +111,7 @@ export async function installSourceIdentity(context: BrowserContext, options: Br
       headers['sec-ch-ua-mobile'] = mobile ? '?1' : '?0';
       headers['sec-ch-ua-platform'] = JSON.stringify(platform);
     }
+    if (route.request().resourceType() === 'image') headers.accept = BROWSER_IMAGE_ACCEPT;
     if (!page || !ownedPages.has(page)) {
       // Popup main requests have no target yet. Fetch with the context's cookies
       // and explicit identity instead of allowing Chromium to add native hints.
@@ -121,17 +132,18 @@ export async function installSourceIdentity(context: BrowserContext, options: Br
 }
 
 /** Source contexts must use this factory, not just spread identity options. */
-export async function createSourceContext(browser: Browser, options: BrowserContextOptions = {}, traffic?: { governors?: SourceRequestGovernors; sourceUrl: string }): Promise<BrowserContext> {
+export async function createSourceContext(browser: Browser, options: BrowserContextOptions = {}, traffic?: { governors?: SourceRequestGovernors; sourceUrl: string; sourceTelemetry?: import('../../platform/types.js').Platform['sourceTelemetry'] }): Promise<BrowserContext> {
   const context = await browser.newContext({ ...options, serviceWorkers: 'block' });
   try {
     const governors = traffic?.governors;
     const sourceUrl = traffic?.sourceUrl ?? options.baseURL;
-    if (governors && sourceUrl) {
-      governSourceContext(context, governors, sourceUrl);
-      attributeSourceDevice(context, options.isMobile ? 'mobile' : 'desktop');
-    }
     await installProbeIntrinsics(context);
     await installSourceIdentity(context, options);
+    // Last registered runs first: block telemetry before identity routing can continue it.
+    if (governors && sourceUrl) {
+      await governSourceContext(context, governors, sourceUrl, traffic?.sourceTelemetry);
+      attributeSourceDevice(context, options.isMobile ? 'mobile' : 'desktop');
+    }
     return context;
   } catch (error) {
     await context.close().catch(() => {});

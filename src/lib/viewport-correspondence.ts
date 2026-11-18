@@ -414,7 +414,13 @@ export function correspondenceMerge(
 			while ( i < dKids.length && desktopToMobile.has( dKids[ i ] ) ) i++;
 			while ( j < mKids.length && mobileToDesktop.has( mKids[ j ] ) ) j++;
 			if ( i >= dKids.length ) {
-				for ( ; j < mKids.length; j++ ) mobileOnlyInsertions.push( { parent: pd, element: mKids[ j ] } );
+				for ( ; j < mKids.length; j++ ) {
+					// The tail can still contain seeded matches after a phone-only
+					// sibling. They keep their identity, never become inserted islands.
+					if ( mobileToDesktop.has( mKids[ j ] ) ) continue;
+					if ( mobileWraps.has( mKids[ j ] ) ) { declined = true; return; }
+					mobileOnlyInsertions.push( { parent: pd, element: mKids[ j ] } );
+				}
 				return;
 			}
 			if ( j >= mKids.length ) return; // remaining desktop children are one-sided; the classification pass marks them
@@ -472,14 +478,14 @@ export function correspondenceMerge(
 	// meet desktop rules in the merged DOM, so it travels under an alias the
 	// mobile stylesheet is rewritten to.
 	const classAliases = new Map< string, string >();
-	let unsafeClassAlias = false;
+	const retainedClassTokens = new Set< string >();
 	const desktopClassTokens = new Set< string >();
 	$d( '[class]' ).each( ( _index, node ) => {
 		if ( ! isElementNode( node ) ) return;
 		( node.attribs?.class ?? '' ).split( /\s+/ ).filter( Boolean ).forEach( ( token ) => desktopClassTokens.add( token ) );
 	} );
 	const aliasClass = ( token: string ): string => {
-		if ( desktopClassTokens.has( token ) ) unsafeClassAlias = true;
+		if ( desktopClassTokens.has( token ) ) retainedClassTokens.add( token );
 		const alias = classAliases.get( token ) ?? `${ RESPONSIVE_PROJECTION_CLASS_PREFIX }class-${ createHash( 'sha256' ).update( token ).digest( 'hex' ).slice( 0, 12 ) }`;
 		classAliases.set( token, alias );
 		return alias;
@@ -568,20 +574,6 @@ export function correspondenceMerge(
 		if ( ! isStableIdentityId( id ) ) continue;
 		idCounts.set( id, ( idCounts.get( id ) ?? 0 ) + 1 );
 	}
-	// Hook names derive from an element's nearest stable-id ancestor and its
-	// own content, never from document order alone, so chrome repeated on
-	// every route serializes identically and stays recognizable downstream.
-	const identityPath = ( element: Element ): string => {
-		const parts: string[] = [];
-		for ( let current: Element | undefined = element; current && current !== bodyD; current = parentOf( current ) ) {
-			const id = current.attribs?.id ?? '';
-			if ( id && isStableIdentityId( id ) ) return `#${ id }/${ parts.join( '/' ) }`;
-			const parent = parentOf( current );
-			const siblings = parent ? childElements( parent ) : [];
-			parts.unshift( `${ current.tagName }[${ Math.max( 0, siblings.indexOf( current ) ) }]:${ ownText( current ).slice( 0, 64 ) }` );
-		}
-		return `body/${ parts.join( '/' ) }`;
-	};
 	const project = ( d: cheerio.Cheerio< Element >, m: cheerio.Cheerio< Element > ): void => {
 		let projected = false;
 		const desktopStyle = d.attr( 'style' ) ?? '';
@@ -595,8 +587,9 @@ export function correspondenceMerge(
 			let selector: string;
 			if ( id && isStableIdentityId( id ) && idCounts.get( id ) === 1 ) selector = `#${ id }`;
 			else {
+				// Equal hooks must project equal rules, independent of document order.
 				const hook = `${ RESPONSIVE_PROJECTION_CLASS_PREFIX }${ createHash( 'sha256' )
-					.update( identityPath( d.get( 0 ) as Element ) )
+					.update( JSON.stringify( [ switchWidth, desktopStyle, projectedMobileStyle ] ) )
 					.digest( 'hex' )
 					.slice( 0, 12 ) }`;
 				d.addClass( hook );
@@ -622,7 +615,8 @@ export function correspondenceMerge(
 			projected = true;
 		}
 		const desktopClasses = ( d.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean );
-		const mobileClasses = ( m.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean );
+		// Insertion markers are assembly-owned visibility, not source state.
+		const mobileClasses = ( m.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( token => Boolean( token ) && token !== RESPONSIVE_MOBILE_ONLY_CLASS && token !== RESPONSIVE_DESKTOP_ONLY_CLASS );
 		const missing = mobileClasses.filter( ( token ) => ! desktopClasses.includes( token ) );
 		if ( missing.length > 0 ) {
 			d.attr( 'class', [ ...desktopClasses, ...missing.map( aliasClass ) ].join( ' ' ) );
@@ -639,12 +633,11 @@ export function correspondenceMerge(
 	for ( const [ desktopElement, mobileElement ] of desktopToMobile ) {
 		project( $d( desktopElement ), $m( mobileElement ) );
 	}
-	if ( unsafeClassAlias ) return undefined;
 	$d( '[class]' ).each( ( _index, node ) => {
 		const element = $d( node );
 		element.attr(
 			'class',
-			( element.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean ).map( ( token ) => classAliases.get( token ) ?? token ).join( ' ' )
+			( element.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean ).map( ( token ) => retainedClassTokens.has( token ) && element.closest( `.${ RESPONSIVE_MOBILE_ONLY_CLASS }` ).length === 0 ? token : classAliases.get( token ) ?? token ).join( ' ' )
 		);
 	} );
 	const css =
@@ -660,6 +653,7 @@ export function correspondenceMerge(
 		projectedElements,
 		css,
 		classAliases,
+		retainedClassTokens,
 		divergedComponents: 0,
 		identityBasis: 'content',
 	};

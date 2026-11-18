@@ -1,12 +1,12 @@
-import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import { downloadMedia, existingMediaNames } from './media-fetch/media.js';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect } from 'vitest';
+import { it } from '../../test/browser.js';
 import { captureWebsite } from '../index.js';
+import { defaultAdapter } from '../adapters/default/index.js';
 import { nextjsAdapter } from '../adapters/nextjs/index.js';
-import { getPlaywright } from './browser-kit/index.js';
 import { captureAssets, collectAssets as collectImageAssets, imageContentType, resourceContentType, resolvedImageOriginal, svgDeclaredSize } from './image-assets.js';
 import { AssetAcquisitionQueue } from './asset-acquisition-queue.js';
 import { runWithTrustedOrigins } from './media-fetch/safe-fetch.js';
@@ -35,12 +35,72 @@ it.each([
  expect(resourceContentType(bytes, 'document', path)).toBe(expected);
 });
 
+it('records stored JPEG dimensions and EXIF orientation through capture asset export', async () => {
+ mkdirSync('.tmp-test', { recursive: true });
+ const root = mkdtempSync('.tmp-test/image-orientation-');
+ try {
+  const jpeg = readFileSync('test/fixtures/resource-assets/tall-1920x2880.jpg');
+  // APP1 Exif: little-endian TIFF, one SHORT Orientation entry (6 = 90° CW).
+  const exif = Buffer.from('ffe1002245786966000049492a0008000000010012010300010000000600000000000000', 'hex');
+  const bytes = Buffer.concat([jpeg.subarray(0, 2), exif, jpeg.subarray(2)]);
+  mkdirSync(join(root, 'resources'));
+  writeFileSync(join(root, 'resources/rotated.jpg'), bytes);
+  writeFileSync(join(root, 'resources/manifest.json'), JSON.stringify({ resources: {
+   'https://example.com/rotated.jpg': { path: 'resources/rotated.jpg', contentType: 'image/jpeg' },
+  } }));
+  const [record] = await captureAssets(root, [{ url: 'https://example.com/', html: '<img src="/rotated.jpg">' }], Date.now() - 1);
+  expect(record.error).toBeUndefined();
+  expect(record.original).toMatchObject({ content_type: 'image/jpeg', width: 1920, height: 2880, orientation: 6, sha256: createHash('sha256').update(bytes).digest('hex') });
+  expect(readFileSync(record.local_path!)).toEqual(bytes);
+  expect(JSON.parse(readFileSync(join(root, 'image-assets.json'), 'utf8')).images[0].original).toEqual(record.original);
+ } finally { rmSync(root, { recursive: true, force: true }); }
+}, 30000);
+
 it('chooses the largest srcset candidate and delegates optimizer resolution to the adapter', () => {
  const records = collectImageAssets([{ url: 'https://example.com/', html: '<img src="small.webp" srcset="large.webp 900w, small.webp 100w"><div style="background:url(small.webp)"></div>' }]);
  expect(records).toHaveLength(1);
  expect(records[0].resolved_original).toBe('https://example.com/large.webp');
  expect(records[0].source_urls).toEqual(expect.arrayContaining(['https://example.com/small.webp', 'https://example.com/large.webp']));
  expect(resolvedImageOriginal('https://example.com/_next/image?url=%2Flogo.webp&w=640&q=75', nextjsAdapter.resolveImageOriginal)).toBe('https://example.com/logo.webp');
+});
+
+it.each([
+ ['shared lazy placeholder', '/w1/default_thumb.png', '/w1/default_thumb.png', true, false],
+ ['picture lazy placeholder', '/w1/default_thumb.png', '/w1/default_thumb.png', true, true],
+ ['ordinary src renditions', '/first-small.jpg', '/second-small.jpg', false, false],
+] as const)('keeps srcset identities across documents: %s', (_name, firstSrc, secondSrc, placeholder, picture) => {
+ const sets = [
+  ['/first-small.jpg', '/first-large.jpg'],
+  ['/second-small.jpg', '/second-large.jpg'],
+ ];
+ const records = collectImageAssets([firstSrc, secondSrc].map((src, index) => ({
+  url: `https://example.com/page-${index}`,
+  html: `${picture ? '<picture>' : ''}<img src="${src}" srcset="${sets[index][0]} 225w, ${sets[index][1]} 510w">${picture ? '</picture>' : ''}<style>.card{background:url(${src})}</style>`,
+ })));
+ expect(records).toHaveLength(placeholder ? 3 : 2);
+ for (const urls of sets) {
+  const record = records.find(record => record.source_urls.includes(`https://example.com${urls[0]}`))!;
+  expect(record.source_urls).toEqual(urls.map(url => `https://example.com${url}`));
+  expect(record.resolved_original).toBe(`https://example.com${urls[1]}`);
+  expect(record.references.every(ref => record.source_urls.includes(ref.source_url))).toBe(true);
+ }
+ if (placeholder) {
+  const fallback = records.find(record => record.source_urls.includes(`https://example.com${firstSrc}`))!;
+  expect(fallback.source_urls).toEqual([`https://example.com${firstSrc}`]);
+  expect(fallback.resolved_original).toBe(`https://example.com${firstSrc}`);
+  expect(fallback.references.map(ref => ref.kind).sort()).toEqual(['CSS', 'CSS', 'content', 'content']);
+ }
+});
+
+it('maps Base44 public renditions to originals without changing unrelated hosts or API originals', () => {
+ const original = 'https://media.base44.com/images/public/app/photo.jpeg';
+ const rendition = `${original}/v1/fill/w_379,h_237,enc_webp/photo.webp`;
+ const records = collectImageAssets([{ url: 'https://example.com/', html: `<img src="${rendition}"><img src="${original}">` }], defaultAdapter.resolveImageOriginal);
+ expect(records).toHaveLength(1);
+ expect(records[0].resolved_original).toBe(original);
+ expect(records[0].source_urls).toEqual(expect.arrayContaining([original, rendition]));
+ for (const url of ['https://base44.app/api/apps/app/files/mp/public/app/photo.jpg', rendition.replace('media.base44.com', 'other.example')])
+  expect(resolvedImageOriginal(url, defaultAdapter.resolveImageOriginal)).toBe(url);
 });
 
 it('keeps generic optimizer-shaped URLs opaque and bounds adapter resolution to HTTP(S) targets', () => {
@@ -90,6 +150,30 @@ it('joins overlapping srcsets without losing the largest original when another d
 });
 
 describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public capture fixture (~15s)', () => {
+ it('verifies a redirected Base44-shaped API original (~1s)', async ({ serve }) => {
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"><rect width="20" height="10"/></svg>';
+  const hits: string[] = [];
+  const { server } = await serve((request, response) => {
+   hits.push(request.url!);
+   if (request.url!.startsWith('/api/')) { response.writeHead(302, { location: '/original.svg' }); response.end(); }
+   else { response.writeHead(200, { 'content-type': 'image/svg+xml' }); response.end(svg); }
+  });
+
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  mkdirSync('.tmp-test', { recursive: true });
+  const root = mkdtempSync(join(process.cwd(), '.tmp-test', 'redirected-original-'));
+  try {
+   const source = `${url}/api/apps/app/files/mp/public/app/photo.svg`;
+   const records = await runWithTrustedOrigins([url], () => captureAssets(root, [{ url, html: `<img src="${source}">` }], undefined, defaultAdapter.resolveImageOriginal));
+   expect(records[0].original).toMatchObject({ source_url: source, content_type: 'image/svg+xml', width: 20, height: 10 });
+   expect(readFileSync(records[0].local_path!, 'utf8')).toBe(svg);
+   expect(hits).toEqual(['/api/apps/app/files/mp/public/app/photo.svg', '/original.svg']);
+  } finally {
+
+   rmSync(root, { recursive: true, force: true });
+  }
+ });
+
  it('admits locally captured bytes after the deadline but records new downloads as deadline-skipped', async () => {
   mkdirSync('.tmp-test', { recursive: true });
   const root = mkdtempSync(join(process.cwd(), '.tmp-test', 'image-deadline-'));
@@ -120,17 +204,17 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
   }
  });
 
- it.each([
+ it.for([
   ['while routes can still start', 60_000, 2],
   ['once route admission has closed', -1, 6],
- ])('limits concurrent asset downloads %s', async (_name, closesIn, expected) => {
+ ] as const)('limits concurrent asset downloads %s', async ([_name, closesIn, expected], { serve }) => {
   const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="4" height="2"><rect width="4" height="2"/></svg>';
   let inFlight = 0, most = 0;
-  const server = createServer((_request, response) => {
+  const { server } = await serve((_request, response) => {
    most = Math.max(most, ++inFlight);
    setTimeout(() => { inFlight--; response.writeHead(200, { 'content-type': 'image/svg+xml' }); response.end(svg); }, 100);
   });
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
   mkdirSync('.tmp-test', { recursive: true });
   const root = mkdtempSync(join(process.cwd(), '.tmp-test', 'asset-queue-'));
@@ -144,16 +228,16 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
    });
    expect(most).toBe(expected);
   } finally {
-   server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+
    rmSync(root, { recursive: true, force: true });
   }
  });
 
- it('fetches a captured route\'s lightbox original before the deadline so assets admit it afterwards', async () => {
+ it('fetches a captured route\'s lightbox original before the deadline so assets admit it afterwards', async ({ serve }) => {
   const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="40" height="20"/></svg>';
   let hits = 0;
-  const server = createServer((request, response) => { hits++; response.writeHead(200, { 'content-type': 'image/svg+xml' }); response.end(svg); });
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const { server } = await serve((request, response) => { hits++; response.writeHead(200, { 'content-type': 'image/svg+xml' }); response.end(svg); });
+
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
   mkdirSync('.tmp-test', { recursive: true });
   const root = mkdtempSync(join(process.cwd(), '.tmp-test', 'asset-queue-'));
@@ -173,17 +257,17 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
    });
    expect(hits).toBe(1);
   } finally {
-   server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+
    rmSync(root, { recursive: true, force: true });
   }
  });
 
- it('acquires and verifies a real srcset rendition rather than reusing original stub aliases', async () => {
+ it('acquires and verifies a real srcset rendition rather than reusing original stub aliases', async ({ serve }) => {
   const hits: string[] = [];
   const svg = (width: number) => `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="10"><rect width="${width}" height="10"/>${width > 300 ? '<!--' + 'x'.repeat(1000) + '-->' : ''}</svg>`;
   let failAdequate = false;
-  const server = createServer((request, response) => { hits.push(request.url!); if (failAdequate && request.url!.includes('300')) { response.writeHead(500); response.end(); return; } response.writeHead(200, { 'content-type': 'image/svg+xml' }); response.end(svg(Number(/w=(\d+)/.exec(request.url!)?.[1] ?? 1800))); });
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const { server } = await serve((request, response) => { hits.push(request.url!); if (failAdequate && request.url!.includes('300')) { response.writeHead(500); response.end(); return; } response.writeHead(200, { 'content-type': 'image/svg+xml' }); response.end(svg(Number(/w=(\d+)/.exec(request.url!)?.[1] ?? 1800))); });
+
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
   mkdirSync('.tmp-test', { recursive: true });
   const root = mkdtempSync(join(process.cwd(), '.tmp-test', 'responsive-bytes-'));
@@ -195,9 +279,12 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
     const stubs = MediaStubStore.load(root);
     for (const source of ['photo.svg', 'photo.svg?w=100', 'photo.svg?w=300', 'photo.svg?w=1800']) stubs.markSuccess(`${url}${source}`, originalPath);
     stubs.flush();
-    const documents = [{ url, html: '<picture><source srcset="photo.svg?w=100 100w, photo.svg?w=300 300w, photo.svg?w=1800 1800w"><img style="width:250px" src="photo.svg"></picture>' }];
+    // An uncaptured alias without a width must not become an acquisition job;
+    // uncaptured width alternatives still use nearest-adequate/fallback ordering.
+    const documents = [{ url, html: '<picture><source srcset="photo.svg?w=100 100w, photo.svg?w=300 300w, photo.svg?w=1800 1800w"><img style="width:250px" src="photo.svg"></picture><img src="photo.svg?alias=uncaptured">' }];
     const [record] = await captureAssets(root, documents, Date.now() + 30000, source => source.split('?')[0]);
     const small = record.renditions!.find(child => child.original);
+    expect(record.source_urls).toContain(`${url}photo.svg?alias=uncaptured`);
     // Only the nearest adequate rendition is fetched when it succeeds.
     expect(hits).toEqual(['/photo.svg?w=300']);
     expect(record.renditions).toHaveLength(1);
@@ -217,21 +304,21 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
     expect(fallback.renditions!.map(child => child.original?.width)).toEqual([100]);
    });
   } finally {
-   server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+
    rmSync(root, { recursive: true, force: true });
   }
  });
 
- it('preserves verified hashes across independent writers and a lying-header rendition rename (~1s)', async () => {
+ it('preserves verified hashes across independent writers and a lying-header rendition rename (~1s)', async ({ serve }) => {
   const svg = (width: number) => `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="10"><rect width="${width}" height="10"/></svg>`;
   let duringRendition: (() => Promise<void>) | undefined;
-  const server = createServer(async (request, response) => {
+  const { server } = await serve(async (request, response) => {
    // Keep the URL/header as JPEG so captureAssets must correct it from decoded bytes.
    if (request.url!.includes('500w')) await duringRendition!();
    response.writeHead(200, { 'content-type': request.url!.includes('500w') ? 'image/jpeg' : 'image/svg+xml' });
    response.end(svg(request.url!.includes('500w') ? 500 : 1500));
   });
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
   mkdirSync('.tmp-test', { recursive: true });
   const root = mkdtempSync(join(process.cwd(), '.tmp-test', 'media-writers-'));
@@ -262,15 +349,15 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
     }
    });
   } finally {
-   server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+
    rmSync(root, { recursive: true, force: true });
   }
  });
 
- it('keeps a verified original when later section media shares its filename', async () => {
+ it('keeps a verified original when later section media shares its filename', async ({ serve }) => {
   const svg = (width: number) => `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="10"><rect width="${width}" height="10"/></svg>`;
-  const server = createServer((request, response) => { response.writeHead(200, { 'content-type': 'image/svg+xml' }); response.end(svg(request.url!.startsWith('/large/') ? 40 : 20)); });
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const { server } = await serve((request, response) => { response.writeHead(200, { 'content-type': 'image/svg+xml' }); response.end(svg(request.url!.startsWith('/large/') ? 40 : 20)); });
+
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
   mkdirSync('.tmp-test', { recursive: true });
   const root = mkdtempSync(join(process.cwd(), '.tmp-test', 'media-names-'));
@@ -283,23 +370,22 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
     expect(readFileSync(record.local_path!, 'utf8')).toBe(svg(20));
    });
   } finally {
-   server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+
    rmSync(root, { recursive: true, force: true });
   }
  });
 
- it('exports one alpha-preserving original with every srcset/proxy/CSS URL and flags unresolved images', async () => {
-  const pw = await getPlaywright(), browser = await pw.chromium.launch({ headless: true });
-  const page = await browser.newPage();
+ it('exports one alpha-preserving original with every srcset/proxy/CSS URL and flags unresolved images', async ({ serve, newPage }) => {
+  const page = await newPage();
   const data = await page.evaluate(() => {
    const c = document.createElement('canvas'); c.width = 203; c.height = 90;
    c.getContext('2d')!.fillRect(0, 0, 100, 90);
    return { webp: c.toDataURL('image/webp').split(',')[1], jpeg: c.toDataURL('image/jpeg').split(',')[1] };
   });
-  await browser.close();
+  await page.context().close();
   const webp = Buffer.from(data.webp, 'base64'), jpeg = Buffer.from(data.jpeg, 'base64');
   const proxy = (w: number) => `/_next/image?url=%2Fpreview.webp&w=${w}&q=75`;
-  const server = createServer((request, response) => {
+  const { server } = await serve((request, response) => {
    const path = new URL(request.url!, 'http://example.com').pathname;
    // Deliberately lie about the format: metadata and filename must follow bytes.
    if (path === '/logo.webp') { response.writeHead(200, { 'content-type': 'image/jpeg' }); response.end(webp); }
@@ -308,7 +394,7 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
    else if (path === '/missing.webp') { response.writeHead(200, { 'content-type': 'image/webp' }); response.end('<html>placeholder</html>'); }
    else { response.writeHead(200, { 'content-type': 'text/html' }); response.end(`<!doctype html><title>Next image fixture</title><link rel="stylesheet" href="/hero.css"><link rel="icon" href="${proxy(67)}"><link rel="apple-touch-icon" href="/logo.webp"><h1>Transparent logo</h1><nav><a href="/logo.webp"><img alt="Logo" src="${proxy(67)}" srcset="${proxy(203)} 203w, ${proxy(67)} 67w"></a></nav><img alt="Content logo" src="${proxy(67)}"><div class="hero" style="width:203px;height:90px;background-image:url('${proxy(67)}')"></div><img alt="Missing" src="/missing.webp">`); }
   });
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
   mkdirSync('.tmp-test', { recursive: true });
   const root = mkdtempSync(join(process.cwd(), '.tmp-test', 'next-image-'));
@@ -346,7 +432,7 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
    const findings = JSON.parse(readFileSync(join(root, 'website/source-findings.json'), 'utf8')).findings;
    expect(findings).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'image_resource_unresolved', unit: 'asset', loss_class: 'omitted_unit', location: { url: `${url}missing.webp` } })]));
   } finally {
-   server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+
    rmSync(root, { recursive: true, force: true });
   }
  }, 120_000);

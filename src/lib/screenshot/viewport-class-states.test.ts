@@ -7,8 +7,10 @@ import { exportWebsiteCapture } from '../capture-export.js';
 import { expect, it } from 'vitest';
 import { observeRuntimeStyleWrites } from './runtime-style-writes.js';
 import { markInitialDocument, projectInitialDocument } from './initial-document.js';
-import { aliasRules, captureViewportClassStates, type ViewportClassMemo } from './viewport-class-states.js';
+import { captureViewportClassStates, projectViewportClassRules, type ViewportClassMemo } from './viewport-class-states.js';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
+import { observeViewportEntrances } from '../viewport-entrances.js';
+import { triggerLazyLoad } from './page-helpers.js';
 
 // A sidebar script pins the menu open at wide widths and draws its toggle open
 // with it (the Google Sites pattern); narrower widths show the closed icon.
@@ -54,6 +56,119 @@ it( 'serves script-toggled class state at the widths the source applied it', asy
 		await browser.close();
 	}
 }, 60_000 );
+
+// One browser pass (~3s): scroll proves the entrance before the width sweep.
+it( 'excludes entrance pose tokens per element but keeps genuine width tokens', async () => {
+	const browser = await chromium.launch();
+	try {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await page.addInitScript( observeViewportEntrances );
+		await page.goto( `data:text/html,${ encodeURIComponent( `<!doctype html><style>
+			body{margin:0}.hero{height:1200px}@media(max-width:767px){.hero{height:200px}}
+			.reveal{width:200px;height:120px;opacity:0;transition:opacity .3s}
+			.shown{opacity:1}.spacer{height:1600px}.compact{color:red}
+		</style><nav id="nav">Menu</nav><div class="hero"></div>
+		<div id="reveal" class="reveal hidden">Reveal</div><div class="spacer"></div><script>
+		const reveal=document.getElementById('reveal');
+		function update(){
+			const r=reveal.getBoundingClientRect();
+			if(r.top<innerHeight && r.bottom>0){reveal.classList.add('shown');reveal.classList.remove('hidden');}
+			else if(r.top>=innerHeight){reveal.classList.remove('shown');reveal.classList.add('hidden');}
+		}
+		function width(){
+			for(const el of [reveal,document.getElementById('nav')]) el.classList.toggle('compact',innerWidth<768);
+			update();
+		}
+		addEventListener('scroll',update,{passive:true});addEventListener('resize',width);width();
+		</script>` ) }` );
+		await triggerLazyLoad( page );
+		await page.evaluate( () => scrollTo( 0, 0 ) );
+		await page.waitForTimeout( 350 );
+		const result = await captureViewportClassStates( page, { widths: [ 390, 768, 1440 ], settleMs: 0 } );
+		expect( result.aliased ).toBe( 2 );
+		const carried = await page.locator( '[data-blocks-engine-capture-width-classes]' ).evaluateAll( elements => elements.map( element => ( {
+			id: element.id,
+			tokens: ( JSON.parse( element.getAttribute( 'data-blocks-engine-capture-width-classes' )! ) as Array<[string, string, boolean]> ).map( pair => pair[ 0 ] ),
+		} ) ) );
+		expect( carried ).toEqual( [ { id: 'nav', tokens: [ 'compact' ] }, { id: 'reveal', tokens: [ 'compact' ] } ] );
+	} finally {
+		await browser.close();
+	}
+}, 30_000 );
+
+// Two routes (~2s) load the same CSS; only the first has resize-driven dots.
+it( 'serializes shared header rules identically when only one route has width-toggled dots', async () => {
+	const browser = await chromium.launch();
+	const css = '.nav>li.active>a{color:red}.dots>li.active{color:blue}';
+	try {
+		const headers: string[] = [];
+		for ( const dots of [ true, false ] ) {
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			await page.route( 'https://fixture.test/shared.css', route => route.fulfill( { contentType: 'text/css', body: css } ) );
+			await page.route( 'https://fixture.test/route', route => route.fulfill( { contentType: 'text/html', body: `<!doctype html><html><head><link rel="stylesheet" href="https://fixture.test/shared.css"></head><body>
+				<ul class="nav"><li class="active"><a>Shared header</a></li></ul>
+				${ dots ? `<ul class="dots"><li>Dot</li></ul><script>
+				const sync=()=>document.querySelector('.dots>li').classList.toggle('active',innerWidth>=1280);
+				addEventListener('resize',sync);sync();</script>` : '' }</body></html>` } ) );
+			await page.goto( 'https://fixture.test/route' );
+			await markInitialDocument( page );
+			const initial = await page.content();
+			const result = await captureViewportClassStates( page, { widths: [ 390, 1440 ], settleMs: 0 } );
+			expect( result.aliased ).toBe( dots ? 1 : 0 );
+			const portable = projectInitialDocument( initial, await page.content(), () => ( { css, url: 'https://fixture.test/shared.css' } ) );
+			// Resolve a still-linked sheet as the serializer would, without
+			// confusing a retained link with a missing header rule.
+			const serializedCss = portable.includes( '<link' ) ? css : portable.match( /<style[^>]*>([\s\S]*?)<\/style>/ )![ 1 ]!;
+			headers.push( serializedCss.match( /\.nav[^{}]*\{[^{}]*\}/ )![ 0 ] );
+			expect( serializedCss ).not.toContain( '.nav>li:is(' );
+			if ( dots ) expect( serializedCss ).toContain( '.dots>li:is(.active,.data-blocks-engine-capture-width-class-' );
+			await page.close();
+		}
+		expect( headers ).toEqual( [ '.nav>li.active>a{color:red}', '.nav>li.active>a{color:red}' ] );
+	} finally {
+		await browser.close();
+	}
+}, 30_000 );
+
+// Controlled timer ticks put the same timer rotator in opposite phases without
+// wall-clock races. Returning to the initial width also returns to its phase,
+// so checking only the restored class would incorrectly accept both captures.
+it( 'does not project timer-rotated classes as width contracts in either phase', async () => {
+	const browser = await chromium.launch();
+	try {
+		const heads: string[] = [];
+		const css = '@media(min-width:600px){.rotating{opacity:0}}';
+		for ( const active of [ false, true ] ) {
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			await page.setContent( `<!doctype html><html><head><link rel="stylesheet" media="all" href="data:text/css,${ encodeURIComponent( css ) }"></head><body>
+				<div class="slide${ active ? ' rotating' : '' }">Announcement</div><script>
+				window.tick=0;window.rotated=0;
+				setInterval(()=>{if(window.rotated<window.tick){
+					document.querySelector('.slide').classList.toggle('rotating');window.rotated++;
+				}},10);
+				</script></body></html>` );
+			const resize = page.setViewportSize.bind( page );
+			page.setViewportSize = async size => {
+				await resize( size );
+				await page.evaluate( () => { ( window as unknown as { tick: number } ).tick++; } );
+				await page.waitForFunction( () => {
+					const state = window as unknown as { tick: number; rotated: number };
+					return state.tick === state.rotated;
+				} );
+			};
+			const result = await captureViewportClassStates( page, { widths: [ 1439, 1440 ], settleMs: 0 } );
+			const html = projectViewportClassRules( await page.content(), () => ( { css, url: 'https://fixture.test/base.css' } ) );
+			expect( result.aliased ).toBe( 0 );
+			expect( html ).not.toContain( 'capture-width-class' );
+			heads.push( html.match( /<head>[\s\S]*?<\/head>/ )![ 0 ] );
+			await page.close();
+		}
+		expect( heads[ 0 ] ).toBe( heads[ 1 ] );
+		expect( heads[ 0 ] ).toContain( '<link' );
+	} finally {
+		await browser.close();
+	}
+}, 30_000 );
 
 // One real capture/export (~20s): both sweeps run against a resize-driven runtime.
 it( 'keeps learned transforms through the viewport class sweep', async () => {
@@ -135,6 +250,36 @@ it( 'bounds class probing before fluid learning without losing delayed geometry'
 			await copy.setViewportSize( { width, height: 900 } );
 			expect( ( await copy.locator( '#frame' ).boundingBox() )!.width ).toBeCloseTo( width * .5, 0 );
 		}
+	} finally {
+		await browser.close();
+	}
+}, 60_000 );
+
+// Three routes have the same nav, but bold current labels shift its overflow widths.
+// One browser pass per route; approximately 10 seconds total.
+it( 'names shared nav width evidence independently of route-current geometry (#1949)', async () => {
+	const browser = await chromium.launch();
+	try {
+		const headers: string[] = [];
+		const contracts: string[] = [];
+		for ( const current of [ 0, 1, 2 ] ) {
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			await page.setContent( `<style>nav{font:20px serif}li{display:inline-block}a[aria-current]{font-weight:bold}.overflow{visibility:hidden}</style><header><nav><ul>${ [ 'Home', 'Meet the therapist', 'Rates' ].map( ( label, index ) => `<li><a href="/${ index }"${ index === current ? ' aria-current="page"' : '' }>${ label }</a></li>` ).join( '' ) }</ul></nav></header><script>
+			const items=[...document.querySelectorAll('li')];
+			const total=items.reduce((n,item)=>n+item.getBoundingClientRect().width,0);
+			const sync=()=>items.forEach((item,i)=>item.classList.toggle('overflow',innerWidth<500+total+i*40));
+			addEventListener('resize',sync);sync();</script>` );
+			await markInitialDocument( page );
+			const result = await captureViewportClassStates( page, { widths: [ 390, 1440 ], settleMs: 0 } );
+			expect( result.aliased ).toBe( 3 );
+			const html = projectInitialDocument( await page.content(), await page.content() );
+			headers.push( html.match( /<header>[\s\S]*?<\/header>/ )![ 0 ].replace( / aria-current="page"/g, '' ) );
+			contracts.push( await page.locator( 'body' ).getAttribute( 'data-blocks-engine-capture-width-class-contracts' ) ?? '' );
+			await page.close();
+		}
+		expect( new Set( contracts ).size ).toBeGreaterThan( 1 ); // Width evidence genuinely differs.
+		expect( headers[ 1 ] ).toBe( headers[ 0 ] );
+		expect( headers[ 2 ] ).toBe( headers[ 0 ] );
 	} finally {
 		await browser.close();
 	}

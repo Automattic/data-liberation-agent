@@ -9,12 +9,13 @@ import {
 	statSync,
 	writeFileSync,
 } from 'node:fs';
-import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as cheerio from 'cheerio';
 import { chromium } from 'playwright';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, vi } from 'vitest';
+import { it, test } from '../../../test/browser.js';
+import { BROWSER_IMAGE_ACCEPT, createSourceContext } from '../browser-kit/source-identity.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 import {
 	CAPTURED_RESOURCE_TIMEOUT_CEILING_MS,
@@ -60,6 +61,58 @@ describe( 'CapturedResourceStore', () => {
 			expect( readFileSync( join( outputDir, resource.path ), 'utf8' ) ).toBe( `${ origin }${ name }.svg` );
 		}
 	});
+	it( 'captures shared img fallbacks independently while retaining single-image rendition aliases', async () => {
+		for ( const acrossDocuments of [ false, true ] ) {
+			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-srcset-fallback-' ) );
+			dirs.push( outputDir );
+			const origin = 'https://example.com/';
+			const store = new CapturedResourceStore( outputDir, origin, async url => ( {
+				finalUrl: url, status: 200, headers: new Headers( { 'content-type': 'image/svg+xml' } ),
+				body: Buffer.from( url ),
+			} ) );
+			const first = '<img src="/placeholder.svg" srcset="/first.svg 1600w">';
+			const second = '<img src="/placeholder.svg" srcset="/second.svg 1600w">';
+			const single = '<img src="/small.svg" srcset="/large.svg 1600w">';
+			const candidate = '<img src="/candidate.svg" srcset="/candidate.svg 400w, /candidate-large.svg 1600w">';
+			await store.captureDomDependencies( first + single + candidate + ( acrossDocuments ? '' : second ), origin );
+			if ( acrossDocuments ) {
+				await store.flush();
+				const initial = JSON.parse( readFileSync( join( outputDir, 'resources/manifest.json' ), 'utf8' ) );
+				expect( initial.resources[ `${ origin }placeholder.svg` ].path ).toBe( initial.resources[ `${ origin }first.svg` ].path );
+				await store.captureDomDependencies( second, `${ origin }next/` );
+			}
+			await store.flush();
+			const manifest = JSON.parse( readFileSync( join( outputDir, 'resources/manifest.json' ), 'utf8' ) );
+			expect( manifest.failures ).toEqual( [] );
+			const placeholder = manifest.resources[ `${ origin }placeholder.svg` ];
+			expect( readFileSync( join( outputDir, placeholder.path ), 'utf8' ) ).toBe( `${ origin }placeholder.svg` );
+			for ( const name of [ 'first', 'second' ] )
+				expect( placeholder.path ).not.toBe( manifest.resources[ `${ origin }${ name }.svg` ].path );
+			expect( manifest.omissions ).not.toContainEqual( expect.objectContaining( { url: `${ origin }placeholder.svg` } ) );
+			for ( const [ fallback, representative ] of [ [ 'small', 'large' ], [ 'candidate', 'candidate-large' ] ] ) {
+				const resource = manifest.resources[ `${ origin }${ fallback }.svg` ];
+				expect( resource.path ).toBe( manifest.resources[ `${ origin }${ representative }.svg` ].path );
+				expect( readFileSync( join( outputDir, resource.path ), 'utf8' ) ).toBe( `${ origin }${ representative }.svg` );
+				expect( manifest.omissions ).toContainEqual( { url: `${ origin }${ fallback }.svg`, representative: `${ origin }${ representative }.svg`, reason: 'redundant-srcset-rendition' } );
+			}
+		}
+	} );
+	it( 'queues inline-style images with other deferred media instead of fetching them (#1814)', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-deferred-style-' ) );
+		dirs.push( outputDir );
+		const origin = 'https://example.com/';
+		const fetched: string[] = [];
+		const store = new CapturedResourceStore( outputDir, origin, async url => {
+			fetched.push( url );
+			return { finalUrl: url, status: 200, headers: new Headers( { 'content-type': 'text/css' } ), body: Buffer.from( 'p{}' ) };
+		} );
+		const deferred: string[] = [];
+		await store.captureDomDependencies( `<link rel="stylesheet" href="/site.css"><img src="/body.jpg">
+			<div style="background-image: url(&quot;https://cdn.example/hero.jpg?format=1500w&quot;)"></div><div style="background:url(/thumb.jpg)"></div>`, origin, { deferMedia: url => deferred.push( url ) } );
+		await store.flush();
+		expect( deferred.sort() ).toEqual( [ 'https://cdn.example/hero.jpg?format=1500w', `${ origin }body.jpg`, `${ origin }thumb.jpg` ] );
+		expect( fetched ).toEqual( [ `${ origin }site.css` ] );
+	} );
 	it( 'retries a referenced image once when its first fetch is transiently unavailable', async () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-transient-' ) );
 		dirs.push( outputDir );
@@ -354,7 +407,7 @@ describe( 'CapturedResourceStore', () => {
 				status: () => 200,
 				headers: () => ( { 'cache-control': 'public, max-age=3600', vary } ),
 				body: async () => Buffer.from( path ),
-				request: () => ( { resourceType: () => resourceType, headers: () => requestHeaders } ),
+				request: () => ( { resourceType: () => resourceType, allHeaders: async () => requestHeaders } ),
 			} );
 		}
 		await store.settle( firstRoute as never );
@@ -417,7 +470,7 @@ describe( 'CapturedResourceStore', () => {
 					...extra,
 				} ),
 				body: vi.fn().mockResolvedValue( Buffer.from( url ) ),
-				request: () => ( { resourceType: () => resourceType } ),
+				request: () => ( { resourceType: () => resourceType, allHeaders: async () => ( {} ) } ),
 			} );
 		}
 
@@ -1732,12 +1785,14 @@ describe( 'CapturedResourceStore', () => {
 describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )(
 	'resources in a real browser',
 	() => {
-		it( 'probes each responsive image once per capture and keeps every rendition', async () => {
+		it( 'probes each responsive image once per capture and keeps every rendition', async ({ serve, newPage, browser }) => {
 			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-srcset-probe-' ) );
 			dirs.push( outputDir );
 			const png = Buffer.from( 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64' );
-			const server = createServer( ( req, res ) => {
+			const imageHeaders: { userAgent?: string; accept?: string }[] = [];
+			const { server } = await serve(( req, res ) => {
 				if ( req.url?.endsWith( '.png' ) ) {
+					imageHeaders.push( { userAgent: req.headers['user-agent'], accept: req.headers.accept } );
 					res.setHeader( 'content-type', 'image/png' );
 					res.setHeader( 'cache-control', 'max-age=3600' );
 					return res.end( png );
@@ -1747,37 +1802,47 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				const second = req.url === '/second';
 				res.setHeader( 'content-type', 'text/html' );
 				res.end( `<!doctype html><meta name="viewport" content="width=device-width"><img style="width:400px" src="../small.png" srcset="../small.png 400w,../large.png 1200w" sizes="100vw" data-node="${ second ? 2 : 1 }"><div style="height:3000px"></div><picture><img style="width:200px" src="/blur.png" data-node="${ second ? 4 : 3 }"></picture><img style="width:10px" src="" srcset="" alt="unset"><script>new IntersectionObserver( entries => { for ( const entry of entries ) if ( entry.isIntersecting ) entry.target.src = '/full.png'; } ).observe( document.querySelector( 'picture img' ) );</script>` );
-			} );
-			await new Promise< void >( done => server.listen( 0, '127.0.0.1', done ) );
+			});
+
 			const origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
-			const browser = await chromium.launch();
+
+			const contextOptions = { userAgent: 'Mozilla/5.0 Chrome/130.0.0.0 srcset-probe-test', viewport: { width: 1440, height: 900 } };
+			const traffic = { sourceUrl: `${ origin }/` };
+			const context = await createSourceContext( browser, contextOptions, traffic );
+			const page = await context.newPage();
+			const newContext = vi.spyOn( browser, 'newContext' );
 			try {
 				const store = new CapturedResourceStore( outputDir, `${ origin }/` );
-				const page = await browser.newPage();
-				const newContext = vi.spyOn( browser, 'newContext' );
 				const probes = [];
 				for ( const route of [ '/', '/second' ] ) {
 					await page.goto( `${ origin }${ route }` );
 					const before = newContext.mock.calls.length;
-					await store.captureSelectedSrcsets( page );
+					await store.captureSelectedSrcsets( page, contextOptions, traffic );
 					probes.push( newContext.mock.calls.length - before );
 				}
 				// The second route has no unseen image and opens no probe; an unset
 				// source stays unset rather than naming its page.
 				expect( probes[ 0 ] ).toBeGreaterThan( 0 );
 				expect( probes[ 1 ] ).toBe( 0 );
+				// The native image Accept can equal ours: the distinctive source UA
+				// proves fresh width contexts did not bypass the source identity path.
+				expect( imageHeaders.length ).toBeGreaterThan( 0 );
+				expect( imageHeaders.every( headers => headers.userAgent === contextOptions.userAgent && headers.accept === BROWSER_IMAGE_ACCEPT ) ).toBe( true );
+				for ( const [ options ] of newContext.mock.calls ) {
+					expect( options ).toMatchObject( { userAgent: contextOptions.userAgent, deviceScaleFactor: 1, serviceWorkers: 'block', storageState: { cookies: [], origins: [] } } );
+				}
 				await store.settle( page );
 				await store.flush();
 				const manifest = JSON.parse( readFileSync( join( outputDir, 'resources/manifest.json' ), 'utf8' ) );
 				expect( Object.keys( manifest.resources ).filter( url => /\/(?:small|large|full)\.png$/.test( url ) ).sort() )
 					.toEqual( [ `${ origin }/full.png`, `${ origin }/large.png`, `${ origin }/small.png` ].sort() );
 			} finally {
-				await browser.close();
-				await new Promise( done => server.close( done ) );
+				newContext.mockRestore();
+				await context.close();
 			}
 		}, 30_000 );
 
-		it( 'keeps the live text advance when HTTPS CSS imports a blocked HTTP font stylesheet', async () => {
+		it( 'keeps the live text advance when HTTPS CSS imports a blocked HTTP font stylesheet', async ({ newPage }) => {
 			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-mixed-browser-' ) );
 			dirs.push( outputDir );
 			const sourceUrl = 'https://mixed-content.example/';
@@ -1789,9 +1854,9 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				finalUrl: url, status: 200, headers: new Headers( { 'content-type': 'text/css' } ),
 				body: Buffer.from( url === imported ? `@font-face{font-family:Mixed;src:url(${ font })}` : css ),
 			} ) );
-			const browser = await chromium.launch();
-			try {
-				const page = await browser.newPage();
+
+			{
+				const page = await newPage();
 				const store = new CapturedResourceStore( outputDir, sourceUrl, fetchMedia );
 				store.observe( page );
 				const insecureRequests: string[] = [];
@@ -1823,14 +1888,12 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				await page.goto( 'http://portable.example/', { waitUntil: 'networkidle' } );
 				expect( await advance() ).toBe( liveAdvance );
 				expect( await page.evaluate( () => document.fonts.size ) ).toBe( 0 );
-			} finally {
-				await browser.close();
 			}
 		}, 30_000 );
-		it( 'does not save POST, sendBeacon or fetch-POST replies as resources but keeps GET data', async () => {
+		it( 'does not save POST, sendBeacon or fetch-POST replies as resources but keeps GET data', async ({ serve, newPage }) => {
 			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-resources-beacon-' ) );
 			dirs.push( outputDir );
-			const server = createServer( ( req, res ) => {
+			const { server } = await serve(( req, res ) => {
 				if ( req.url === '/' ) {
 					res.setHeader( 'content-type', 'text/html' );
 					res.end(
@@ -1848,12 +1911,12 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 					res.setHeader( 'content-type', 'application/json' );
 					res.end( '{"accepted":true}' );
 				}
-			} );
-			await new Promise< void >( ( done ) => server.listen( 0, '127.0.0.1', done ) );
+			});
+
 			const origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
-			const browser = await chromium.launch();
-			try {
-				const page = await browser.newPage();
+
+			{
+				const page = await newPage();
 				const store = new CapturedResourceStore( outputDir, `${ origin }/` );
 				store.observe( page );
 				await page.goto( `${ origin }/`, { waitUntil: 'networkidle' } );
@@ -1867,9 +1930,6 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				expect( manifest.failures ).toEqual( [] );
 				expect( existsSync( join( outputDir, 'resources', '__beacon' ) ) ).toBe( false );
 				expect( existsSync( join( outputDir, 'resources', 'analytics' ) ) ).toBe( false );
-			} finally {
-				await browser.close();
-				await new Promise( ( done ) => server.close( done ) );
 			}
 		}, 30_000 );
 	}

@@ -1,8 +1,8 @@
-import { createServer } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
-import { expect, it } from 'vitest';
+import { expect } from 'vitest';
+import { it } from '../../../test/browser.js';
 import { CapturedResourceStore } from './resource-capture.js';
 import { createSourceContext } from '../browser-kit/source-identity.js';
 import { attributeSourceDevice, attributeSourcePhase, attributeSourceReplay } from '../browser-kit/source-traffic.js';
@@ -11,12 +11,12 @@ import { SourceRequestGovernors } from '../source-request-governor.js';
 const skipBrowser = Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath());
 
 // About 3 seconds: drive the replay/store seam without a full screenshot pipeline.
-it.skipIf(skipBrowser)('replays immutable prefetches across routes and identities without exporting speculation', async () => {
+it.skipIf(skipBrowser)('replays immutable prefetches across routes and identities without exporting speculation', async ({ serve, browser, newContext }) => {
   const hits = new Map<string, number>();
   const types = new Map<string, string>();
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jXioAAAAASUVORK5CYII=', 'base64');
   const prefetches = Array.from({ length: 12 }, (_, i) => `/cdn/runtime/chunk-${i}.js`);
-  const server = createServer((req, res) => {
+  const { server } = await serve((req, res) => {
     const url = req.url!;
     hits.set(url, (hits.get(url) ?? 0) + 1);
     if (url.startsWith('/route-')) {
@@ -32,12 +32,12 @@ it.skipIf(skipBrowser)('replays immutable prefetches across routes and identitie
     res.setHeader('content-type', url.includes('.jpg') ? 'image/png' : url.endsWith('.css') ? 'text/css' : 'text/javascript');
     res.end(url.includes('.jpg') ? png : url.endsWith('.css') ? 'img{width:100vw}' : '/* shared asset */');
   });
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+
   const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
   mkdirSync('.tmp-test', { recursive: true });
   const dir = mkdtempSync(join(process.cwd(), '.tmp-test', 'prefetch-replay-'));
   const store = new CapturedResourceStore(dir, origin);
-  const browser = await chromium.launch({ headless: true });
+
   const governors = new SourceRequestGovernors();
   try {
     for (let routeIndex = 0; routeIndex < 3; routeIndex++) {
@@ -112,7 +112,7 @@ it.skipIf(skipBrowser)('replays immutable prefetches across routes and identitie
     const cacheableHits = [...hits].filter(([url]) => url.startsWith('/cdn/')).reduce((sum, [, count]) => sum + count, 0);
     expect(cacheableHits).toBe(17); // 12 speculative chunks + CSS/JS + 3 image widths
     // A later real script load must still enter the portable manifest.
-    const context = await browser.newContext();
+    const context = await newContext();
     try {
       const page = await context.newPage();
       store.observe(page);
@@ -126,9 +126,8 @@ it.skipIf(skipBrowser)('replays immutable prefetches across routes and identitie
     expect(manifest.resources[`${origin}${prefetches[1]}`]).toBeUndefined();
     expect(manifest.resources[`${origin}/uncached.js`]).toBeUndefined();
   } finally {
-    await browser.close();
+
     rmSync(dir, { recursive: true, force: true });
-    server.closeAllConnections();
-    await new Promise<void>(resolve => server.close(() => resolve()));
+
   }
 }, 30_000);

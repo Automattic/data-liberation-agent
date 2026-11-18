@@ -4,6 +4,7 @@ import { copyExclusive, moveExclusive } from './media-fetch/exclusive-file.js';
 import { basename, extname, join, resolve as resolvePath } from 'node:path';
 import * as cheerio from 'cheerio';
 import postcss from 'postcss';
+import { imageSize } from 'image-size';
 import { rewriteCssUrlReferences, srcsetCandidates } from './srcset.js';
 import { metadataImageReferences } from './identity-resources.js';
 import { MAX_PORTABLE_MEDIA_DIMENSION, portableSrcsetRepresentative } from './portable-media-limits.js';
@@ -26,8 +27,11 @@ export interface AssetRecord {
 	original: {
 		source_url: string;
 		content_type: string;
+		/** Stored pixel dimensions, before EXIF orientation is applied. */
 		width?: number;
 		height?: number;
+		/** EXIF orientation of the unchanged original bytes, when present. */
+		orientation?: number;
 		/** At least one non-opaque decoded pixel; not inferred from a file extension. */
 		alpha?: boolean;
 		sha256: string;
@@ -144,7 +148,9 @@ export function readAssets( root: string ): ImageAssetRecord[] {
  */
 export function collectAssets( documents: ImageDocuments, resolve?: ImageResolver, storedFont: ( url: string ) => boolean = () => true ): ImageAssetRecord[] {
 	const groups: Array<{ urls: Set<string>; original: string; size: number; references: ImageAssetReference[]; kind: NonNullable<ImageAssetRecord['kind']> }> = [];
-	const add = ( values: string[], preferred: string, base: string, references: ImageAssetReference[], size = 0, kind: NonNullable<ImageAssetRecord['kind']> = 'image' ) => {
+	type Use = typeof groups[number] & { candidates: Set<string>; fallback: Set<string> };
+	const uses: Use[] = [];
+	const normalizedUrls = ( values: string[], base: string, kind: NonNullable<ImageAssetRecord['kind']> ) => {
 		const urls = new Set<string>();
 		for ( const value of values ) {
 			try {
@@ -155,20 +161,20 @@ export function collectAssets( documents: ImageDocuments, resolve?: ImageResolve
 				}
 			} catch { /* Invalid references cannot be fetched. */ }
 		}
+		return urls;
+	};
+	const add = ( values: string[], preferred: string, base: string, references: ImageAssetReference[], size = 0, kind: NonNullable<ImageAssetRecord['kind']> = 'image', srcset: string[] = [], src?: string ) => {
+		const urls = normalizedUrls( values, base, kind );
 		if ( ! urls.size ) return;
 		let original: string;
 		try { original = kind === 'image' ? resolvedImageOriginal( new URL( preferred, base ).href, resolve ) : new URL( preferred, base ).href; }
 		catch { original = [ ...urls ][ 0 ]; }
 		if ( ! urls.has( original ) ) original = [ ...urls ][ 0 ];
-		const overlapping = groups.filter( group => group.kind === kind && [ ...urls ].some( url => group.urls.has( url ) ) );
-		for ( const group of overlapping ) {
-			for ( const url of group.urls ) urls.add( url );
-			references.push( ...group.references );
-			// A CSS reference or smaller document must not demote the srcset original.
-			if ( group.size > size ) { original = group.original; size = group.size; }
-			groups.splice( groups.indexOf( group ), 1 );
-		}
-		groups.push( { urls, original, size, references, kind } );
+		const candidates = normalizedUrls( srcset, base, kind );
+		const fallback = normalizedUrls( src ? [ src ] : [], base, kind );
+		// An ordinary src rendition is identity evidence, not a fallback bridge.
+		if ( [ ...fallback ].some( value => candidates.has( value ) ) ) fallback.clear();
+		uses.push( { urls, original, size, references, kind, candidates, fallback } );
 	};
 	for ( const { html, url: documentUrl } of documents ) {
 		const $ = cheerio.load( html );
@@ -199,7 +205,7 @@ export function collectAssets( documents: ImageDocuments, resolve?: ImageResolve
 				values.push( lightbox );
 			}
 			const representative = portableSrcsetRepresentative( candidates );
-			if ( values.length ) add( values, lightbox ?? representative?.url ?? values[ 0 ], url, references, lightbox ? Infinity : representative?.size ?? 0 );
+			if ( values.length ) add( values, lightbox ?? representative?.url ?? values[ 0 ], url, references, lightbox ? Infinity : representative?.size ?? 0, 'image', candidates.map( candidate => candidate.url ), src );
 		} );
 		$( 'a[href]' ).each( ( i, node ) => {
 			const href = $( node ).attr( 'href' )!;
@@ -268,6 +274,40 @@ export function collectAssets( documents: ImageDocuments, resolve?: ImageResolve
 				} );
 			} catch { /* The stylesheet owner reports malformed CSS. */ }
 		}
+	}
+	// Decide fallback ownership over the complete inventory before joining anything.
+	// Otherwise a later document cannot undo an earlier placeholder bridge.
+	const fallbackCandidates = new Map<string, Set<string>[]>();
+	const sharedFallbacks = new Set<string>();
+	for ( const use of uses ) {
+		if ( ! use.candidates.size ) continue;
+		for ( const source of use.fallback ) {
+			const previous = fallbackCandidates.get( source ) ?? [];
+			if ( previous.some( candidates => ! [ ...use.candidates ].some( value => candidates.has( value ) ) ) ) sharedFallbacks.add( source );
+			previous.push( use.candidates );
+			fallbackCandidates.set( source, previous );
+		}
+	}
+	const joinGroup = ( urls: Set<string>, original: string, size: number, references: ImageAssetReference[], kind: NonNullable<ImageAssetRecord['kind']> ) => {
+		if ( ! urls.size ) return;
+		const overlapping = groups.filter( group => group.kind === kind && [ ...urls ].some( url => group.urls.has( url ) ) );
+		for ( const group of overlapping ) {
+			for ( const url of group.urls ) urls.add( url );
+			references.push( ...group.references );
+			// A CSS reference or smaller document must not demote the srcset original.
+			if ( group.size > size ) { original = group.original; size = group.size; }
+			groups.splice( groups.indexOf( group ), 1 );
+		}
+		groups.push( { urls, original, size, references, kind } );
+	};
+	for ( const use of uses ) {
+		const detached = use.kind === 'image' ? [ ...use.urls ].filter( source => sharedFallbacks.has( source ) ) : [];
+		for ( const source of detached ) {
+			use.urls.delete( source );
+			joinGroup( new Set( [ source ] ), source, 0, use.references.filter( ref => ref.source_url === source ), use.kind );
+		}
+		const references = use.references.filter( ref => ! detached.includes( ref.source_url ) );
+		joinGroup( use.urls, use.urls.has( use.original ) ? use.original : [ ...use.urls ][ 0 ], use.size, references, use.kind );
 	}
 	return groups.map( group => ( {
 		kind: group.kind, destination_owner: group.kind === 'font' ? 'theme' : 'media-library',
@@ -373,10 +413,21 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 	try {
 		if ( images.length ) {
 			let page: import('playwright').Page | undefined;
-			// Rendition jobs carry their parent and the smaller fallbacks to try
-			// only if this one fails: one extra verified download per family.
+			// Captured aliases must pass the original's signature/decode/extension
+			// checks too. Uncaptured alternatives retain bounded fallback acquisition.
 			const jobs: Array<{ record: ImageAssetRecord; rendition: boolean; parent?: ImageAssetRecord; rest?: ImageAssetRecord[] }> =
 				images.map( record => ( { record, rendition: false } ) );
+			for ( const parent of images ) {
+				if ( parent.kind !== 'image' ) continue;
+				for ( const url of parent.source_urls ) {
+					if ( url === parent.resolved_original || ! resources[ url ] ) continue;
+					jobs.push( { record: {
+						kind: 'image', destination_owner: parent.destination_owner,
+						source_urls: [ url ], references: parent.references.filter( reference => reference.source_url === url ),
+						resolved_original: url, original: null,
+					}, rendition: true, parent } );
+				}
+			}
 			for ( const { record, rendition, parent, rest } of jobs ) {
 				const source = record.resolved_original;
 				try {
@@ -405,11 +456,6 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 					const bytes = readFileSync( result.localPath );
 					const contentType = record.kind === 'image' ? imageContentType( bytes ) : resourceContentType( bytes, record.kind!, source );
 					if ( ! contentType ) throw new Error( 'unverified resource bytes or placeholder' ); // failure-class: operational
-					if ( record.kind === 'font' && record.references.some( ref => {
-						const format = ref.font_face?.format?.toLowerCase();
-						const expected = { woff: 'font/woff', woff2: 'font/woff2', truetype: 'font/ttf', opentype: 'font/otf' }[ format ?? '' ];
-						return expected && expected !== contentType;
-					} ) ) throw new Error( 'font bytes do not match declared format' ); // failure-class: operational
 					if ( record.kind === 'image' && ! page ) {
 						browser ??= await launchChromium( { timeout: 30000 } );
 						page = await browser.newPage();
@@ -417,6 +463,12 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 					}
 					const metadata = record.kind === 'image' ? await decodeImage( page!, bytes, contentType ) : {};
 					if ( contentType === 'image/svg+xml' ) Object.assign( metadata, svgDeclaredSize( bytes ) );
+					// Browser decoding verifies pixels but applies EXIF rotation. The
+					// original describes the stored JPEG frame, not its display geometry.
+					if ( contentType === 'image/jpeg' ) {
+						const { width, height, orientation } = imageSize( bytes );
+						Object.assign( metadata, { width, height }, orientation === undefined ? {} : { orientation } );
+					}
 					// Even a lying response header's extension follows the verified bytes.
 					const extension = contentType === 'text/plain' && extname( new URL( source ).pathname ).toLowerCase() === '.csv'
 			? '.csv' : extensionFromContentType( contentType );
@@ -433,7 +485,7 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 					else ( parent!.renditions ??= [] ).push( record );
 					if ( ! rendition && record.kind === 'image' ) {
 						const widths = Object.entries( record.rendition_widths ?? {} )
-							.filter( ( [ url, width ] ) => url !== source && width <= MAX_PORTABLE_MEDIA_DIMENSION && width < ( record.original!.width ?? Infinity ) )
+							.filter( ( [ url, width ] ) => url !== source && ! resources[ url ] && width <= MAX_PORTABLE_MEDIA_DIMENSION && width < ( record.original!.width ?? Infinity ) )
 							.sort( ( a, b ) => a[ 1 ] - b[ 1 ] || a[ 0 ].localeCompare( b[ 0 ] ) );
 						const adequate = widths.findIndex( ( [ , width ] ) => width >= ( record.rendered_width ?? 0 ) );
 						// Try the nearest adequate rendition, then smaller fallbacks. Each

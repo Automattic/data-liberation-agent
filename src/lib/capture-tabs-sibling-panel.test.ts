@@ -1,3 +1,4 @@
+import { stripNodeIds } from './test-helpers/strip-node-ids.js';
 import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -30,15 +31,15 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('binds tabs without aria-cont
 		const report = JSON.parse(readFileSync(join(root, 'interaction-states.json'), 'utf8')) as { pages: Array<{ components: CapturedComponent[] }> };
 		const tabs = report.pages[0]!.components.find(node => node.kind === 'tabs')!;
 		expect(tabs).toMatchObject({ status: 'captured', initial: 'tab-0', panel: '#panel' });
-		expect(tabs.states.map(state => [state.id, state.html])).toEqual([
+		expect(tabs.states.map(state => [state.id, stripNodeIds(state.html)])).toEqual([
 			['tab-0', '<div id="panel" role="tabpanel"><p>Alpha panel text</p></div>'],
 			['tab-1', '<div id="panel-tab-1" role="tabpanel"><p>Beta panel text</p></div>'],
 			['tab-2', '<div id="panel-tab-2" role="tabpanel"><p>Gamma panel text</p></div>'],
 		]);
 		// The exported route carries the same tablist + tabpanel shape as aria-controls tabs.
 		const html = readFileSync(join(root, 'website/index.html'), 'utf8');
-		expect(html).toContain('aria-controls="panel-tab-2">Gamma</button>');
-		expect(html).toContain('<div id="panel" role="tabpanel"><p>Alpha panel text</p></div><div id="panel-tab-1" role="tabpanel" hidden=""><p>Beta panel text</p></div>');
+		expect(stripNodeIds(html)).toContain('aria-controls="panel-tab-2">Gamma</button>');
+		expect(stripNodeIds(html)).toContain('<div id="panel" role="tabpanel"><p>Alpha panel text</p></div><div id="panel-tab-1" role="tabpanel" hidden=""><p>Beta panel text</p></div>');
 	} finally {
 		await new Promise<void>(resolve => server.close(() => resolve())); rmSync(root, { recursive: true, force: true });
 	}

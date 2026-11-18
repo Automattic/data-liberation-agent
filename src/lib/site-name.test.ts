@@ -22,7 +22,24 @@ describe( 'siteNameFromRouteTitles', () => {
 } );
 
 describe( 'declaredSiteName', () => {
-	it( 'reads the name a WebSite JSON-LD node declares, and nothing else', () => {
+	it.each( [ 'Organization', 'LocalBusiness', 'Corporation', 'Restaurant', 'Store', 'ProfessionalService', 'NGO', 'EducationalOrganization' ] )( 'falls back to a declared %s name', type => {
+		expect( declaredSiteName( `<script type="application/ld+json">{"@type":"${ type }","name":" Acme "}</script>` ) ).toBe( 'Acme' );
+		expect( declaredSiteName( `<script type="application/ld+json">{"@graph":[{"@type":["Thing","${ type }"],"name":"Acme"}]}</script>` ) ).toBe( 'Acme' );
+	} );
+
+	it( 'prefers WebSite over Organization across nodes and scripts', () => {
+		const organization = '<script type="application/ld+json">{"@type":"Organization","name":"Acme LLC"}</script>';
+		const website = '<script type="application/ld+json">{"@type":"WebSite","name":"Acme"}</script>';
+		expect( declaredSiteName( organization + website ) ).toBe( 'Acme' );
+		expect( declaredSiteName( website + organization ) ).toBe( 'Acme' );
+		expect( declaredSiteName( '<script type="application/ld+json">[{"@type":"Organization","name":"Acme LLC"},{"@type":["WebSite"],"name":"Acme"}]</script>' ) ).toBe( 'Acme' );
+	} );
+
+	it( 'ignores empty or non-string organization names', () => {
+		expect( declaredSiteName( '<script type="application/ld+json">[{"@type":"Organization","name":" "},{"@type":"LocalBusiness","name":42}]</script>' ) ).toBeUndefined();
+	} );
+
+	it( 'reads the name a WebSite JSON-LD node declares', () => {
 		const ld = ( json: string ) => `<head><script type="application/ld+json">${ json }</script></head>`;
 		expect( declaredSiteName( ld( '{"@type":"WebSite","name":" Acme "}' ) ) ).toBe( 'Acme' );
 		expect( declaredSiteName( ld( '{"@graph":[{"@type":"Person","name":"Jo"},{"@type":["WebSite"],"name":"Acme"}]}' ) ) ).toBe( 'Acme' );

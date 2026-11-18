@@ -1,10 +1,13 @@
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import * as cheerio from 'cheerio';
 import { extname, join } from 'node:path';
 import { documentRequestUrl, normalizedUrl } from './url/route-key.js';
 import { isSecurityServiceRejection } from './screenshot/navigation-rejection.js';
 import { sameHttpSite } from './screenshot/same-origin.js';
 import type { CanonicalRouteAlias } from './route-aliases.js';
 import type { SourceDataScript } from './source-data.js';
+import { IntegrityError } from './failure-class.js';
 
 export interface RouteEntry {
 	url: string;
@@ -25,8 +28,7 @@ function capturedOriginRoot( urls: string[], origin: string ): boolean {
 	} );
 }
 
-function routeOutputPath( url: string, sourceUrl: string, entrypointUrl: string, originRootCaptured: boolean ): string {
-	if ( url === entrypointUrl && ! originRootCaptured ) return 'index.html';
+function routeOutputPath( url: string, sourceUrl: string, entrypointUrl: string, originRootCaptured: boolean ): string | undefined {
 	const route = new URL( url );
 	const source = new URL( sourceUrl );
 	// Artifact paths must retain URL percent-encoding. Decoding turns a valid
@@ -40,8 +42,9 @@ function routeOutputPath( url: string, sourceUrl: string, entrypointUrl: string,
 			// Preserve malformed percent escapes as opaque path bytes.
 		}
 		if ( decoded === '.' || decoded === '..' || /[\\/\0]/.test( decoded ) )
-			throw new Error( `Captured route path escapes the website directory: ${ route.pathname }` );
+			return undefined;
 	}
+	if ( url === entrypointUrl && ! originRootCaptured ) return 'index.html';
 	const sourcePath = originRootCaptured ? '' : source.pathname.replace( /\/$/, '' );
 	if ( sameHttpSite( url, sourceUrl ) && sourcePath && pathname.startsWith( `${ sourcePath }/` ) ) {
 		pathname = pathname.slice( sourcePath.length );
@@ -154,11 +157,10 @@ export interface RouteStage<T extends RouteEntry> {
 	/** Inert metadata carried by collapsed aliases is applied to the retained document. */
 	duplicateSourceData: Array< { claimed: T; sourceData: SourceDataScript[] } >;
 	/**
-	 * Routes dropped because the website path they need is already claimed by
-	 * another route (`route_path_collision`). The first claimant keeps the path;
-	 * the entrypoint always claims first.
+	 * Routes dropped because their website path is unsafe or already claimed.
+	 * The first claimant keeps the path; the entrypoint always claims first.
 	 */
-	pathCollisions: RouteDiagnostic[];
+	pathDiagnostics: RouteDiagnostic[];
 }
 
 export function allocateCaptureRoutes<T extends RouteEntry>(
@@ -192,7 +194,19 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 	}
 	const entrypointUrl = entrypointCandidates[ 0 ].url;
 	const originRootCaptured = capturedOriginRoot( capturedEntries.map( ( entry ) => entry.url ), new URL( sourceUrl ).origin );
-	const naturalRoutePath = ( url: string ) => routeOutputPath( url, sourceUrl, entrypointUrl, originRootCaptured ).replace( /\\/g, '/' );
+	const pathDiagnostics: RouteDiagnostic[] = [];
+	const unsafePathReason = ( url: string ) => `Captured route path escapes the website directory: ${ new URL( url ).pathname }`;
+	capturedEntries = capturedEntries.filter( entry => {
+		if ( routeOutputPath( entry.url, sourceUrl, entrypointUrl, originRootCaptured ) !== undefined ) return true;
+		if ( entry.url === entrypointUrl ) throw new IntegrityError( unsafePathReason( entry.url ) );
+		pathDiagnostics.push( { code: 'route_path_unsafe', url: entry.url, reason: unsafePathReason( entry.url ), unit: 'route', severity: 'error' } );
+		return false;
+	} );
+	const naturalRoutePath = ( url: string ) => {
+		const path = routeOutputPath( url, sourceUrl, entrypointUrl, originRootCaptured );
+		if ( path === undefined ) throw new IntegrityError( unsafePathReason( url ) );
+		return path.replace( /\\/g, '/' );
+	};
 	const allocatedPaths = new Map< string, string >();
 	const reservedPaths = new Set( capturedEntries.map( ( entry ) => naturalRoutePath( entry.url ) ) );
 	const entryForAddress = ( url: string ): T | undefined => {
@@ -292,7 +306,6 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 	const duplicateRoutes: RouteStage<T>[ 'duplicateRoutes' ] = [];
 	const canonicalRouteAliases = new Map< string, string >();
 	const duplicateSourceData: RouteStage<T>[ 'duplicateSourceData' ] = [];
-	const pathCollisions: RouteDiagnostic[] = [];
 	const collided = new Map< string, RouteDiagnostic >();
 	const claimedRoutes = new Map< string, T >();
 	// A claimed file path's parent directories, each with a route inside it: a
@@ -301,7 +314,7 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 	const parentDirectories = ( path: string ) => path.split( '/' ).slice( 0, -1 ).map( ( _, index, parts ) => parts.slice( 0, index + 1 ).join( '/' ) );
 	const collide = ( entry: T, routePath: string, reason: string ) => {
 		const collision: RouteDiagnostic = { code: 'route_path_collision', url: entry.url, reason, unit: 'route', severity: 'error', path: `website/${ routePath }` };
-		pathCollisions.push( collision );
+		pathDiagnostics.push( collision );
 		collided.set( entry.url, collision );
 	};
 	// The entrypoint claims first; the rest claim in URL order, base documents
@@ -333,15 +346,28 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 		duplicateRoutes.push( { url: entry.url, canonicalUrl: claimed.url, path: `website/${ routePath }` } );
 		canonicalRouteAliases.set( documentRequestUrl( entry.url ), routePath );
 	}
-	// Different paths do not compete for an output filename. Collapse explicit
-	// canonical links only onto a retained same-origin document; never infer
-	// aliases from social metadata, or drop cycles/chains with no final target.
+	// Different paths do not compete for an output filename. A canonical link
+	// can be stale SPA shell metadata, so require matching rendered content too.
+	// Keep DOM structure, attributes and media (not just text) as identity proof;
+	// metadata and executable/style payloads are not page content. Cache only
+	// digests, rather than holding every parsed document in memory.
+	const contentDigests = new Map< T, string >();
+	const contentDigest = ( entry: T ): string => {
+		const cached = contentDigests.get( entry );
+		if ( cached !== undefined ) return cached;
+		const $ = cheerio.load( readFileSync( entry.htmlPath, 'utf8' ) );
+		$( 'script,style,link,meta,title' ).remove();
+		const digest = createHash( 'sha256' ).update( $( 'body' ).html()?.trim() ?? '' ).digest( 'hex' );
+		contentDigests.set( entry, digest );
+		return digest;
+	};
+	// Never infer aliases from social metadata, or drop cycles/chains with no final target.
 	const canonicalTargets = new Map< T, T >();
 	for ( const entry of retained ) {
 		if ( entry.url === entrypointUrl || ! entry.canonicalLinkUrl ) continue;
 		if ( new URL( entry.canonicalLinkUrl ).origin !== new URL( entry.url ).origin ) continue;
 		const target = entryForAddress( entry.canonicalLinkUrl );
-		if ( target && target !== entry && retained.has( target ) ) canonicalTargets.set( entry, target );
+		if ( target && target !== entry && retained.has( target ) && contentDigest( entry ) === contentDigest( target ) ) canonicalTargets.set( entry, target );
 	}
 	for ( const [ entry, target ] of canonicalTargets ) {
 		if ( canonicalTargets.has( target ) ) continue;
@@ -388,5 +414,5 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 		duplicateRoutes.push( { url, canonicalUrl: targetEntry.url, path: `website/${ routePath }` } );
 		canonicalRouteAliases.set( documentRequestUrl( url ), routePath );
 	}
-	return { entrypointUrl, entrypointEntry: entrypointCandidates[ 0 ], routePathOf, retainedEntries, duplicateRoutes, canonicalRouteAliases, portableRedirects, missingRedirectTargets, duplicateSourceData, pathCollisions };
+	return { entrypointUrl, entrypointEntry: entrypointCandidates[ 0 ], routePathOf, retainedEntries, duplicateRoutes, canonicalRouteAliases, portableRedirects, missingRedirectTargets, duplicateSourceData, pathDiagnostics };
 }

@@ -129,6 +129,40 @@ describe('Blogger feed template content', () => {
 		} finally { fetch.mockRestore(); rmSync(outputDir, { recursive: true, force: true }); }
 	});
 
+	it('retries a member document whose prefetched request failed', async () => {
+		const parent = join(process.cwd(), '.tmp-test');
+		mkdirSync(parent, { recursive: true });
+		const outputDir = mkdtempSync(join(parent, 'blogger-retry-'));
+		mkdirSync(join(outputDir, 'screenshots'));
+		const manifestEntries = Object.fromEntries(entries.slice(0, 2).map((entry, i) => {
+			writeFileSync(join(outputDir, `screenshots/${i}.html`), document(entry));
+			return [entry.permalink, { slug: entry.slug, html: `screenshots/${i}.html`, capturedAt: new Date().toISOString() }];
+		}));
+		writeFileSync(join(outputDir, 'screenshots/manifest.json'), JSON.stringify({ version: 1, entries: manifestEntries }));
+		// Member pages are unreachable: only the member document can derive them.
+		const fetch = vi.spyOn(fetching, 'safeFetch').mockImplementation(async url => String(url) === entries[0]!.permalink
+			? { body: Buffer.from(document(entries[0]!)), status: 200, finalUrl: String(url), headers: new Headers() }
+			: { body: Buffer.from(''), status: 503, finalUrl: String(url), headers: new Headers() });
+		const attempts = new Map<string, number>();
+		const flaky = { ...bloggerStructuredContent, memberDocument: (html: string, rep: BloggerFeedEntry, member: BloggerFeedEntry) => {
+			attempts.set(member.permalink, (attempts.get(member.permalink) ?? 0) + 1);
+			return attempts.get(member.permalink) === 1 && member.slug !== 'post-1' ? Promise.reject(new Error('timeout')) : bloggerStructuredContent.memberDocument(html, rep, member);
+		} };
+		const fingerprint = templateFingerprint(document(entries[0]!), entries[0]!.permalink);
+		try {
+			const result = await deriveTemplateClusterMembers({
+				sourceUrl: entries[0]!.permalink, outputDir, contentSource: flaky as typeof bloggerStructuredContent, contentEntries: entries, frontierUrls: [], governors: new SourceRequestGovernors(),
+				report: {
+					schema: TEMPLATE_GROUPS_SCHEMA, sourceUrl: entries[0]!.permalink,
+					fingerprint: { version: 1, maxSkeletonDepth: 8 }, limits: { ...TEMPLATE_GROUPING_LIMITS }, throttle: { events: 0 },
+					coverage: { routes: 8, fingerprinted: 8, unfingerprinted: 0, groups: 1, singletons: 0 }, unfingerprinted: [],
+					groups: [{ id: 't1', ...fingerprint, representative: entries[0]!.permalink, size: entries.length, members: entries.map(entry => entry.permalink) }],
+				},
+			});
+			expect(result.summary).toMatchObject({ derived: 6, escalated: 0, unavailable: 0 });
+		} finally { fetch.mockRestore(); rmSync(outputDir, { recursive: true, force: true }); }
+	});
+
 	it.each([
 		{ name: 'structurally different feed body derives', body: '<details><summary>Rules</summary><table><tbody><tr><td><div><ul><li>Feed body 3</li></ul></div></td></tr></tbody></table></details>', derived: 6, acquired: 0 },
 		{ name: 'unobserved embed escalates and is HTTP-acquired', body: '<p>Feed body 3</p><iframe src="https://www.youtube.com/embed/fixture"></iframe>', derived: 5, acquired: 1 },

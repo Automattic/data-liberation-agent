@@ -319,6 +319,35 @@ describe( 'planPortableMediaFamilies', () => {
 		expect( materialized.mediaReplacements.get( '/poster.svg' ) ).toBe( TRANSPARENT_IMAGE_DATA_URL );
 	} );
 
+	it( 'ships every referenced crop of one family above the dimension ceiling', () => {
+		const dir = tempDir( 'media-dimension-ceiling-crops-' );
+		const homepage = join( dir, 'home.html' );
+		const narrow = candidate( dir, 'narrow.avif', 'https://cdn.example/bg/w_800,h_5400/bg.png', 300_000, 5400 );
+		const wide = candidate( dir, 'wide.avif', 'https://cdn.example/bg/w_1440,h_2600/bg.png', 400_000, 2600 );
+		writeFileSync( homepage, `<main><img src="${ narrow.sourceUrl }"><img src="${ wide.sourceUrl }"></main>` );
+		// Each profile serialized its own crop: different aspect ratios, both
+		// above the portable dimension ceiling, with no bounded rendition.
+		for ( const [ crop, width, height, fill ] of [ [ narrow, 800, 5400, 110 ], [ wide, 1440, 2600, 119 ] ] as const ) {
+			crop.imageAsset = {
+				source_urls: [ crop.sourceUrl ], references: [], resolved_original: crop.sourceUrl,
+				original: {
+					source_url: crop.sourceUrl, content_type: 'image/avif', width, height,
+					sha256: createHash( 'sha256' ).update( Buffer.alloc( crop.bytes, fill ) ).digest( 'hex' ),
+				},
+			};
+		}
+		const budget = 1024 * 1024;
+		const plan = planPortableMediaFamilies( [ { family: 'bg', candidates: [ narrow, wide ] } ], budget, homepage );
+		expect( plan.families[ 0 ].admitted.map( entry => entry.candidate.sourceUrl ).sort() ).toEqual( [ wide.sourceUrl, narrow.sourceUrl ].sort() );
+		const materialized = materializePortableMedia( {
+			websiteDir: join( dir, 'website' ), plan, maxBytes: budget,
+			retainedReferences: new Map( [ [ 'bg', [ narrow.sourceUrl, wide.sourceUrl ] ] ] ),
+			failedMedia: [],
+		} );
+		expect( materialized.mediaReplacements.get( narrow.sourceUrl ) ).toBe( '/media/narrow.avif' );
+		expect( materialized.mediaReplacements.get( wide.sourceUrl ) ).toBe( '/media/wide.avif' );
+	} );
+
 	it( 'rejects changed verified bytes even during baseline admission', () => {
 		const dir = tempDir( 'media-integrity-' );
 		const homepage = join( dir, 'home.html' );

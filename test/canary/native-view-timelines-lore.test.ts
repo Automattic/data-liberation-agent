@@ -1,7 +1,8 @@
 import { mkdirSync, writeFileSync, readFileSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
-import { chromium, devices } from 'playwright';
-import { expect, it } from 'vitest';
+import { devices } from 'playwright';
+import { expect } from 'vitest';
+import { it, test } from '../browser.js';
 import { captureNativeViewTimelines } from '../../src/lib/screenshot/native-view-timelines.js';
 import { capturePageHtml, captureScreenshots } from '../../src/lib/screenshot/screenshotter.js';
 import { exportWebsiteCapture } from '../../src/lib/capture-export.js';
@@ -11,18 +12,18 @@ import { CapturedResourceStore } from '../../src/lib/screenshot/resource-capture
 /** Bounded live evidence probe, not part of the offline suite or a parity claim
  * for the complete site. Portable motion is compared with the same captured CSS.
  */
-it( 'retains the live Home photo native translation and separate phone perspective', async () => {
-	const browser = await chromium.launch();
+it( 'retains the live Home photo native translation and separate phone perspective', async ({ newPage }) => {
+
 	const output = join( process.cwd(), '.tmp-test', 'lore-native-view-timelines-551' );
 	mkdirSync( output, { recursive: true } );
-	try {
+	{
 		const { defaultBrowserType: _unused, ...phone } = devices[ 'iPhone 13' ];
 		for ( const [ name, profile, width ] of [ [ 'desktop', {}, 1440 ], [ 'phone', phone, 390 ] ] as const ) {
 			const captureDir = join( output, `${ name }-capture` );
 			mkdirSync( join( captureDir, 'html' ), { recursive: true } );
 			mkdirSync( join( captureDir, 'screenshots' ), { recursive: true } );
 			const resources = new CapturedResourceStore( captureDir, 'https://www.lorecounselling.ca/' );
-			const page = await browser.newPage( { ...profile, viewport: { width, height: 900 } } );
+			const page = await newPage( { ...profile, viewport: { width, height: 900 } } );
 			resources.observe( page );
 			await page.goto( 'https://www.lorecounselling.ca/', { waitUntil: 'domcontentloaded', timeout: 60_000 } );
 			await page.waitForFunction( () => document.getElementById( 'bgMedia_comp-m558n8xt14' )?.getAnimations().length, { timeout: 30_000 } );
@@ -51,7 +52,7 @@ it( 'retains the live Home photo native translation and separate phone perspecti
 			expect( config ).toContain( name === 'desktop' ? 'translateX(8%)' : 'perspective(100px) translateZ(11.54px)' );
 			// Same document geometry; this isolates effect retention from media localization
 			// and from independently owned device-profile/fluid geometry work.
-			const copy = await browser.newPage( { ...profile, viewport: { width, height: 900 } } );
+			const copy = await newPage( { ...profile, viewport: { width, height: 900 } } );
 			const server = await startStaticServer( join( captureDir, 'website' ) );
 			try {
 			const remoteRequests: Array<{ url: string; resourceType: string; mainFrame: boolean }> = [];
@@ -94,10 +95,10 @@ it( 'retains the live Home photo native translation and separate phone perspecti
 			}
 			} finally { await copy.close(); await server.close(); await page.close(); }
 		}
-	} finally { await browser.close(); }
+	}
 }, 150_000 );
 
-it( 'retains the desktop photo through the owning pipeline at its canonical source baseline', async () => {
+it( 'retains the desktop photo through the owning pipeline at its canonical source baseline', async ({ newPage }) => {
 	const outputDir = mkdtempSync( join( process.cwd(), '.tmp-test', 'lore-native-pipeline-551-' ) );
 	const url = 'https://www.lorecounselling.ca/';
 	let observed: unknown;
@@ -119,9 +120,9 @@ it( 'retains the desktop photo through the owning pipeline at its canonical sour
 	expect( native.preserved ).toBeGreaterThanOrEqual( 1 );
 	expect( portable ).toContain( 'data-blocks-engine-capture-native-view-timeline-runtime' );
 	const server = await startStaticServer( join( outputDir, 'website' ) );
-	const browser = await chromium.launch();
+
 	try {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		const remoteRequests: Array<{ url: string; resourceType: string; mainFrame: boolean }> = [];
 		await page.route( '**/*', route => {
 			const requestUrl = route.request().url();
@@ -140,5 +141,5 @@ it( 'retains the desktop photo through the owning pipeline at its canonical sour
 		expect( actual.x ).toBeCloseTo( ( observed as { x: number } ).x, 2 );
 		expect( remoteRequests.every( request => request.resourceType === 'document' && ! request.mainFrame ) ).toBe( true );
 		writeFileSync( join( outputDir, 'motion-gate.json' ), JSON.stringify( { status: 'passed', scope: 'desktop photo baseline native transform and x geometry; external iframe documents blocked', observed, actual, remoteRequests }, null, 2 ) );
-	} finally { await browser.close(); await server.close(); }
+	} finally {  await server.close(); }
 }, 180_000 );

@@ -1,4 +1,5 @@
-import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { WebsiteInventory } from './website-inventory.js';
 import { join } from 'node:path';
 import * as cheerio from 'cheerio';
 import { rewriteSrcset, srcsetReferences } from './srcset.js';
@@ -103,7 +104,17 @@ function omitEmptyFontFaceSrc( css: string ): string {
 					if ( ! urlMatch ) return true;
 					return ! isUnavailableCssAssetUrl( ( urlMatch[ 1 ] ?? urlMatch[ 2 ] ?? '' ).trim() );
 				} );
-				return kept.length === 0 ? '' : `${ prefix[ 0 ] }${ kept.join( ',' ) }`;
+				// Local font extensions follow verified bytes, not the source's format hint.
+				const normalized = kept.map( part => part.replace(
+					/(url\(\s*(?:["']([^"']*)["']|([^\s)]+))\s*\))\s*format\([^)]*\)/gi,
+					( match, url, quoted, bare ) => {
+						const reference: string = quoted ?? bare;
+						const extension = reference.startsWith( '/' ) && /\.(woff2?|ttf|otf)(?:[?#]|$)/i.exec( reference );
+						const format = extension && { woff: 'woff', woff2: 'woff2', ttf: 'truetype', otf: 'opentype' }[ extension[ 1 ].toLowerCase() ];
+						return format ? `${ url } format("${ format }")` : match;
+					}
+				) );
+				return normalized.length === 0 ? '' : `${ prefix[ 0 ] }${ normalized.join( ',' ) }`;
 			} )
 			.filter( ( declaration ) => declaration.trim() !== '' );
 		return `${ open }${ declarations.join( ';' ) }}`;
@@ -206,20 +217,15 @@ export function stripRemoteAssetRequests( html: string ): string {
 	return $.html();
 }
 
-export function selfContainWebsite( websiteDir: string ): void {
-	const visit = ( directory: string ): void => {
-		for ( const name of readdirSync( directory ) ) {
-			const path = join( directory, name );
-			if ( statSync( path ).isDirectory() ) {
-				visit( path );
-				continue;
-			}
-			if ( name.endsWith( '.html' ) ) {
-				writeFileSync( path, stripRemoteAssetRequests( readFileSync( path, 'utf8' ) ) );
-			} else if ( name.endsWith( '.css' ) ) {
-				writeFileSync( path, stripRemoteCssUrls( readFileSync( path, 'utf8' ) ) );
-			}
+export function selfContainWebsite( websiteDir: string, inventory = new WebsiteInventory( websiteDir ) ): void {
+	for ( const file of inventory.traversalFiles ) {
+		const path = join( websiteDir, file.path );
+		if ( file.path.endsWith( '.html' ) ) {
+			writeFileSync( path, stripRemoteAssetRequests( readFileSync( path, 'utf8' ) ) );
+			inventory.add( file.path );
+		} else if ( file.path.endsWith( '.css' ) ) {
+			writeFileSync( path, stripRemoteCssUrls( readFileSync( path, 'utf8' ) ) );
+			inventory.add( file.path );
 		}
-	};
-	visit( websiteDir );
+	}
 }

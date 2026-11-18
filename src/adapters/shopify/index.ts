@@ -20,10 +20,19 @@ export type { ShopifyAdapterOpts, ShopifyInventory } from './types.js';
 // ---------------------------------------------------------------------------
 
 export const shopifyAdapter: PlatformAdapter = {
+  sourceTelemetry: ['/.well-known/shopify/monorail/'],
   id: 'shopify',
   detection,
   liberation: capture,
   discover,
+  routeScope: sourceUrl => ({
+    origin: new URL(sourceUrl).origin,
+    pathPrefixes: ['/'],
+    ignoredQueryParams: [
+      'pr_prod_strat', 'pr_rec_id', 'pr_rec_pid', 'pr_ref_pid', 'pr_seq', 'pr_request_id',
+      '_pos', '_sid', '_ss', '_psq', '_fid',
+    ],
+  }),
   acquisition: shopifyAcquisition,
   structuredContent: shopifyStructuredContent,
   templateIdentity: shopifyTemplateIdentity,

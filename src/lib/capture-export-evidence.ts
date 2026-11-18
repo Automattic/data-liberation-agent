@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { mergeConsentLayouts } from './consent-banner-layout.js';
 import { normalizedUrl } from './url/route-key.js';
 import { ROUTE_OMITTED_BY_BUDGET } from './route-budget.js';
@@ -44,6 +44,7 @@ interface AssetEvidenceEntry {
 	evidenceDocuments: Array< { state: 'desktop' | 'mobile'; html: string } >;
 }
 export interface CaptureEvidenceInput {
+	inventory?: import('./website-inventory.js').WebsiteInventory;
 	locations: { captureRoot: string; stageRoot: string };
 	source: {
 		sourceUrl: string;
@@ -390,7 +391,10 @@ export function importerReports( stageDir: string, captureRoot: string ): string
 		.filter( item => item.kind === 'file' && ( item.required || existsSync( join( stageDir, item.path ) ) ) )
 		.map( item => item.path as string );
 	const analysis = SITE_ANALYSIS_FILES.filter( file => existsSync( join( captureRoot, file ) ) );
-	return [ ...owned, ...analysis ].sort();
+	const boxes = existsSync( join( captureRoot, 'box-tree' ) )
+		? readdirSync( join( captureRoot, 'box-tree' ), { recursive: true, encoding: 'utf8' } ).filter( path => path.endsWith( '.json' ) ).map( path => `box-tree/${ path.split( '\\' ).join( '/' ) }` )
+		: [];
+	return [ ...owned, ...analysis, ...boxes ].sort();
 }
 
 export const UNCAPTURED_ROUTE_REASON = 'target route was not captured';
@@ -686,7 +690,10 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 			}
 		} catch { /* An invalid policy URL remains source evidence. */ }
 	}
-	if (consentBanner) writeFileSync(join(stageDir, 'website', 'consent-banner.json'), `${JSON.stringify(consentBanner, null, 2)}\n`);
+	if (consentBanner) {
+		writeFileSync(join(stageDir, 'website', 'consent-banner.json'), `${JSON.stringify(consentBanner, null, 2)}\n`);
+		input.inventory?.add( 'consent-banner.json' );
+	}
 
 	const receiptPath = join( stageDir, 'capture-receipt.json' );
 	// The entrypoint's self-declared generator: source evidence kept apart from the capturing platform.

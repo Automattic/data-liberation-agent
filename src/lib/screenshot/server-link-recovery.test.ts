@@ -7,6 +7,7 @@ import { captureScreenshots } from './screenshotter.js';
 
 it.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )( 'discovers server links even when the entrypoint times out before serialization', async () => {
 	const server = createServer( ( request, response ) => {
+		if ( request.url?.includes( 'liberation-absent-' ) ) { response.writeHead( 404 ); response.end(); return; }
 		response.setHeader( 'content-type', 'text/html' );
 		response.end( request.url === '/' ? '<!doctype html><title>Home</title><main><a href="/linked">Linked document</a></main>' : '<!doctype html><title>Linked</title><main>Linked document</main>' );
 	} );

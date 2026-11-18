@@ -1,26 +1,18 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { describe, expect, vi } from 'vitest';
+import { it } from '../../../test/browser.js';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { chromium, type Browser } from 'playwright';
+
 import { markInitialDocument, projectInitialDocument } from './initial-document.js';
 import { DEFAULT_SWEEP_WIDTHS, type FluidSeriesMemo, learnAndApplyFluidGeometry, refinementSeries, refinementWidths } from './fluid-capture.js';
 
 describe( 'learnAndApplyFluidGeometry', () => {
-	let browser: Browser;
 
-	beforeAll( async () => {
-		browser = await chromium.launch();
-	} );
-
-	afterAll( async () => {
-		await browser.close();
-	} );
-
-	it.each( [
+	it.for( [
 		{ name: 'redundant minimum without another sweep trigger', extra: '', expectedSweep: false, redundant: true },
 		{ name: 'redundant minimum during another element sweep', extra: '<div id="vary"></div><script>const resize=()=>document.querySelector(\'#vary\').style.width=innerWidth/2+\'px\';addEventListener(\'resize\',resize);resize();</script>', expectedSweep: true, redundant: true },
 		{ name: 'minimum taller than content', extra: '', expectedSweep: true, redundant: false },
-	] )( 'handles $name', async ( { extra, expectedSweep, redundant } ) => {
-		const page = await browser.newPage( { viewport: { width: 1920, height: 900 } } );
+	] )( 'handles $name', { timeout: 20_000 }, async ( { extra, expectedSweep, redundant }, { newPage } ) => {
+		const page = await newPage( { viewport: { width: 1920, height: 900 } } );
 		try {
 			await page.setContent( `<style>.wrap{width:90%}</style><div class="wrap">${ 'reflowing content '.repeat(100) }</div>${ extra }
 				<div class="pin"></div>
@@ -39,11 +31,11 @@ describe( 'learnAndApplyFluidGeometry', () => {
 				expect( result.applied ).toBe( extra ? 1 : 0 );
 			} else expect( result.applied ).toBeGreaterThan( 0 );
 		} finally { await page.close(); }
-	}, 20_000 );
+	} );
 
 	// One sweep (~6s): refitting replaces, rather than edits, the fitted span.
-	it( 'exports learned geometry after resize-driven and post-learning fitted node replacement', async () => {
-		const page = await browser.newPage( { viewport: { width: 1920, height: 900 } } );
+	it( 'exports learned geometry after resize-driven and post-learning fitted node replacement', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1920, height: 900 } } );
 		try {
 			await page.setContent( `<header><a>Phone title</a></header>
 				<script>
@@ -83,7 +75,25 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			await page.locator( '.textFitted' ).waitFor( { state: 'attached' } );
 			await markInitialDocument( page );
 			const initial = await page.content();
-			const result = await learnAndApplyFluidGeometry( page, { settleMs: 10 } );
+			const stderr = vi.spyOn( process.stderr, 'write' );
+			const phaseStarted = Date.now();
+			let result;
+			let phaseMs;
+			let timing;
+			try {
+				result = await learnAndApplyFluidGeometry( page, { settleMs: 10 } );
+				phaseMs = Date.now() - phaseStarted;
+				const lines = stderr.mock.calls.map( ( [ line ] ) => String( line ) ).filter( line => line.startsWith( '[timing] fluid ' ) );
+				expect( lines ).toHaveLength( 1 );
+				timing = JSON.parse( lines[ 0 ]!.slice( '[timing] fluid '.length ) );
+			} finally { stderr.mockRestore(); }
+			const sampledMs = timing.widths.reduce( ( sum: number, width: { resizeMs: number; restMs: number; measureMs: number; runtimeSheetsMs: number } ) =>
+				sum + width.resizeMs + width.restMs + width.measureMs + width.runtimeSheetsMs, 0 );
+			expect( sampledMs ).toBeGreaterThan( 0 );
+			expect( sampledMs ).toBe( timing.totals.sampledMs );
+			expect( sampledMs ).toBeLessThanOrEqual( timing.totals.totalMs );
+			expect( timing.totals.totalMs ).toBeLessThanOrEqual( phaseMs );
+			expect( [ ...timing.sampledWidths ].sort( ( a: number, b: number ) => a - b ) ).toEqual( result.sampledWidths );
 			expect( result.sampledWidths.length ).toBeGreaterThan( 3 );
 			const exported = projectInitialDocument( initial, await page.content() );
 			expect( exported ).toContain( 'font-size: clamp(' );
@@ -100,9 +110,9 @@ describe( 'learnAndApplyFluidGeometry', () => {
 	}, 20_000 );
 
 	// Two real sweeps (~8s) cover initial learning and cross-route memo reuse.
-	it( 'preserves integer-fitted phone titles inside headers hidden at wide widths', async () => {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
-		const copy = await browser.newPage();
+	it( 'preserves integer-fitted phone titles inside headers hidden at wide widths', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+		const copy = await newPage();
 		const memo: FluidSeriesMemo = new Map();
 		try {
 			for ( const route of [ 'entrypoint', 'interior' ] ) {
@@ -127,9 +137,9 @@ describe( 'learnAndApplyFluidGeometry', () => {
 	}, 30_000 );
 
 	// One browser sweep (~8s) covers both disappearance and retained desktop sizing.
-	it( 'learns equal-height card minima only in the wide regime', async () => {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
-		const copy = await browser.newPage();
+	it( 'learns equal-height card minima only in the wide regime', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+		const copy = await newPage();
 		try {
 			await page.setContent( `<style>
 				body{margin:0}.grid{display:grid;grid-template-columns:1fr 1fr;align-items:start}
@@ -166,8 +176,8 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		} finally { await page.close(); await copy.close(); }
 	}, 30_000 );
 
-	it( 'does not refine constant pixel minima or tag non-pixel minima', async () => {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'does not refine constant pixel minima or tag non-pixel minima', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
 			await page.setContent( '<div style="min-height:50vh">Native</div>' );
 			expect( ( await learnAndApplyFluidGeometry( page, { settleMs: 10 } ) ).sampledWidths ).toEqual( [] );
@@ -179,8 +189,8 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		} finally { await page.close(); }
 	}, 30_000 );
 
-	it( 'leaves important-only literal insets untagged without resizing', async () => {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'leaves important-only literal insets untagged without resizing', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		const learner = process.env.DLA_FLUID_BASELINE ? ( await import( process.env.DLA_FLUID_BASELINE ) ).learnAndApplyFluidGeometry as typeof learnAndApplyFluidGeometry : learnAndApplyFluidGeometry;
 		try {
 			await page.setContent( '<div id="priority" style="position:absolute;inset:10px auto auto 20px!important">Priority</div>' );
@@ -198,9 +208,9 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		} finally { vi.restoreAllMocks(); await page.close(); }
 	}, 30_000 );
 
-	it( 'preserves literal measurements, normalized rest and learned output across the full geometry ladder', async () => {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
-		const copy = await browser.newPage();
+	it( 'preserves literal measurements, normalized rest and learned output across the full geometry ladder', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+		const copy = await newPage();
 		const learner = process.env.DLA_FLUID_BASELINE ? ( await import( process.env.DLA_FLUID_BASELINE ) ).learnAndApplyFluidGeometry as typeof learnAndApplyFluidGeometry : learnAndApplyFluidGeometry;
 		try {
 			await page.setContent( `<style>body{margin:0}#parent{width:80vw;height:200px}#item{position:relative}#custom{width:var(--size)}</style>
@@ -303,8 +313,8 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		} finally { vi.restoreAllMocks(); await page.close(); await copy.close(); }
 	}, 60_000 );
 
-	it.each( [ false, true ] )( 'preserves non-relative left declarations with relative-offset learning (other geometry: %s)', async otherGeometry => {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+	it.for( [ false, true ] )( 'preserves non-relative left declarations with relative-offset learning (other geometry: %s)', { timeout: 20_000 }, async (otherGeometry, { newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
 			await page.setContent( `<style>body{margin:0}#containing{position:relative;width:80vw}#immediate{width:20vw}</style>
 				<div id="containing"><div id="immediate">${ [ 'static', 'absolute', 'fixed', 'sticky' ].map( position =>
@@ -317,10 +327,10 @@ describe( 'learnAndApplyFluidGeometry', () => {
 				expect( await page.locator( `#${ position }` ).evaluate( node => ( node as HTMLElement ).style.left ) ).toBe( '144px' );
 			if ( ! otherGeometry ) expect( resize ).not.toHaveBeenCalled();
 		} finally { await page.close(); }
-	}, 20_000 );
+	} );
 
-	it( 'reaches rest at every width when a script animates an element forever', async () => {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'reaches rest at every width when a script animates an element forever', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
 			// #spinner is rewritten every frame (a perpetual animation): it can never be
 			// quiet, so it must not hold every width to the full rest deadline.
@@ -339,9 +349,9 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		} finally { await page.close(); }
 	}, 40_000 );
 
-	it( 'rejects sparse relative-left fits when authored media changes position during the sweep', async () => {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
-		const copy = await browser.newPage();
+	it( 'rejects sparse relative-left fits when authored media changes position during the sweep', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+		const copy = await newPage();
 		try {
 			await page.setContent( `<style>body{margin:0}.item{position:relative;height:20px}#authored{left:10vw}@media(min-width:600px) and (max-width:700px){.item{position:static}}@media(max-width:599px){#authored{left:20vw}}</style>
 				<div id="runtime" class="item" style="width:720px;left:360px">Runtime</div><div id="authored" class="item" style="width:720px">Authored</div>
@@ -360,9 +370,9 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		} finally { await page.close(); await copy.close(); }
 	}, 20_000 );
 
-	it( 'verifies relative-left container fits against horizontal position rather than unchanged element width', async () => {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
-		const reference = await browser.newPage(), copy = await browser.newPage();
+	it( 'verifies relative-left container fits against horizontal position rather than unchanged element width', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+		const reference = await newPage(), copy = await newPage();
 		const html = `<style>body{margin:0}#parent{width:50vw;padding:40px}#item{position:relative;width:60px;height:20px}</style><div id="parent"><div id="item" style="left:400px">Offset</div></div>
 			<script>const update=()=>document.querySelector('#item').style.left=document.querySelector('#parent').clientWidth/2+'px';addEventListener('resize',update);update();</script>`;
 		try {
@@ -385,9 +395,9 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		} finally { await page.close(); await reference.close(); await copy.close(); }
 	}, 20_000 );
 
-	it( 'verifies segmented relative-left rules at the original phase and every bounded width', async () => {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
-		const reference = await browser.newPage(), copy = await browser.newPage();
+	it( 'verifies segmented relative-left rules at the original phase and every bounded width', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+		const reference = await newPage(), copy = await newPage();
 		const html = `<style>body{margin:0}.track{width:300vw}.slide{position:relative;float:left;width:100vw;height:30px}.slide:not(.active){opacity:0}</style><div class="track">${ [ 0, 1, 2 ].map( index => `<div class="slide ${ index === 2 ? 'active' : '' }" data-phase="${ index }" style="left:${ -index * 1440 }px">Phase ${ index }</div>` ).join( '' ) }</div>
 			<script>const update=()=>document.querySelectorAll('.slide').forEach((node,index)=>node.style.left=(-index*innerWidth*(innerWidth<=768?1:0.5))+'px');addEventListener('resize',update);update();</script>`;
 		try {
@@ -414,8 +424,8 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		} finally { await page.close(); await reference.close(); await copy.close(); }
 	}, 20_000 );
 
-	it.each( [ false, true ] )( 'restores baseline source geometry and viewport around ordered preparation callbacks (reject: %s)', async reject => {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+	it.for( [ false, true ] )( 'restores baseline source geometry and viewport around ordered preparation callbacks (reject: %s)', { timeout: 20_000 }, async (reject, { newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
 			await page.setContent( `<div id="item" style="position:relative;width:720px!important;left:144px"></div><div id="untagged"></div>
 				<script>addEventListener('resize',()=>{document.querySelector('#item').style.setProperty('width',innerWidth/2+'px','important');document.querySelector('#item').style.left=innerWidth/10+'px';document.querySelector('#untagged').style.height=innerWidth/3+'px'});</script>` );
@@ -450,11 +460,11 @@ describe( 'learnAndApplyFluidGeometry', () => {
 				expect( await page.locator( '[data-blocks-engine-capture-fluid-segment],style[data-blocks-engine-capture-fluid-rules]' ).count() ).toBe( 0 );
 			}
 		} finally { await page.close(); }
-	}, 20_000 );
+	} );
 
-	it( 'preserves fractional constant typography through learning and static serialization', async () => {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
-		const copy = await browser.newPage();
+	it( 'preserves fractional constant typography through learning and static serialization', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+		const copy = await newPage();
 		try {
 			await page.setContent( '<p id="copy" style="font-family:serif;font-size:17.94px;line-height:1.2">A long editorial text run must keep its original subpixel font metrics.</p>' );
 			const measure = async ( target: typeof page ) => target.locator( '#copy' ).evaluate( element => {
@@ -473,8 +483,8 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		} finally { await page.close(); await copy.close(); }
 	} );
 
-	it( 'preserves minimum sizing and blank paragraph typography without a width sweep', async () => {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'preserves minimum sizing and blank paragraph typography without a width sweep', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
 			await page.setContent( `<p id="blank" style="font-size:12px;line-height:normal;margin:0;min-height:14px"><br></p>
 				<div style="min-width:100px;max-width:500px;min-height:20px"></div>
@@ -492,8 +502,8 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		}
 	} );
 
-	it( 'neither counts nor sweeps for a non-pixel custom property beside pixel geometry', async () => {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'neither counts nor sweeps for a non-pixel custom property beside pixel geometry', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
 			// `--edge` and `--tint` are never pixels at any width; they are observed only
 			// because they share an inline style with the pixel `--inset` and `width`.
@@ -506,8 +516,8 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		} finally { await page.close(); }
 	}, 30_000 );
 
-	it( 'still learns runtime-sized text, generated glyphs, and explicit blank spacers', async () => {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'still learns runtime-sized text, generated glyphs, and explicit blank spacers', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
 			await page.setContent( `<style>#glyph::before{content:'★'}</style>
 				<p id="text" style="font-size:18px">Text<br></p>
@@ -529,8 +539,8 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		}
 	} );
 
-	it( 'never learns a top offset: anchor targets move with their section instead', async () => {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'never learns a top offset: anchor targets move with their section instead', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		await page.setContent( `
 			<section id="feature-section" style="position:relative;height:400px"><span id="features" data-blocks-engine-capture-anchor-target="features" data-blocks-engine-capture-anchor-source-id="feature-section" style="position:absolute;width:0;height:0"></span></section>
 			<div id="ordinary" style="position:absolute;top:144px;width:100px;height:100px"></div>
@@ -546,8 +556,8 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await page.close();
 	} );
 
-	it( 'keeps container-derived heights definite after runtime removal', async () => {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'keeps container-derived heights definite after runtime removal', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		await page.setContent( `
 			<div id="runtime-parent"><div id="canvas" style="height:720px"></div></div>
 			<script>
@@ -574,14 +584,14 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await page.close();
 	} );
 
-	it( 'never collapses a shrink-to-fit tile and follows sampled sizes when its container fit cannot be verified', async () => {
+	it( 'never collapses a shrink-to-fit tile and follows sampled sizes when its container fit cannot be verified', async ({ newPage }) => {
 		// One shrink-to-fit fixture verifies both the rejected percentage and
 		// preservation of each observed size after runtime removal.
 		const sizes: Record< number, [ number, number ] > = {
 			390: [ 390, 900 ], 600: [ 600, 900 ], 768: [ 768, 582 ], 1024: [ 447, 789 ],
 			1280: [ 558, 761 ], 1440: [ 628, 744 ], 1920: [ 698, 726 ],
 		};
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		await page.setContent( `
 			<div style="position:relative">
 				<div id="item" style="position:absolute;top:0;left:0"><div id="shrink">
@@ -614,7 +624,7 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			document.querySelectorAll( 'script' ).forEach( ( script ) => script.remove() );
 			return document.documentElement.outerHTML;
 		} );
-		const copy = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		const copy = await newPage( { viewport: { width: 1440, height: 900 } } );
 		await copy.setContent( html );
 		for ( const [ width, [ expectedWidth, expectedHeight ] ] of Object.entries( sizes ) ) {
 			await copy.setViewportSize( { width: Number( width ), height: 900 } );
@@ -630,8 +640,8 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await page.close();
 	}, 20_000 );
 
-	it( 'keeps a gallery image fluid through a zero-width picture parent', async () => {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'keeps a gallery image fluid through a zero-width picture parent', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		await page.setContent( `
 			<div id="item" style="width:412px;height:412px"><picture><img id="image" style="width:412px;height:412px"></picture></div>
 			<script>
@@ -653,7 +663,7 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			document.querySelectorAll( 'script' ).forEach( ( script ) => script.remove() );
 			return document.documentElement.outerHTML;
 		} );
-		const copy = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		const copy = await newPage( { viewport: { width: 1440, height: 900 } } );
 		await copy.setContent( html );
 		for ( const [ width, expected ] of [ [ 390, 294 ], [ 768, 281 ], [ 1440, 412 ], [ 1600, 460 ], [ 1728, 498 ] ] ) {
 			await copy.setViewportSize( { width, height: 900 } );
@@ -664,8 +674,8 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await page.close();
 	}, 30_000 );
 
-	it( 'retains gallery grid positions written as absolute inset coordinates', async () => {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'retains gallery grid positions written as absolute inset coordinates', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		await page.setContent( `
 			<div style="position:relative"><div id="first" style="position:absolute;inset:0px auto auto 0px;width:412px;height:412px"></div>
 			<div id="second" style="position:absolute;inset:0px auto auto 442px;width:412px;height:412px"></div>
@@ -690,7 +700,7 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			document.querySelectorAll( 'script' ).forEach( ( script ) => script.remove() );
 			return document.documentElement.outerHTML;
 		} );
-		const copy = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		const copy = await newPage( { viewport: { width: 1440, height: 900 } } );
 		await copy.setContent( html );
 		for ( const [ width, step ] of [ [ 390, 324 ], [ 768, 311 ], [ 1440, 442 ], [ 1600, 490 ], [ 1728, 528 ] ] ) {
 			await copy.setViewportSize( { width, height: 900 } );
@@ -704,8 +714,8 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await page.close();
 	}, 30_000 );
 
-	it( 'keeps a fluid tile wrapper sized when its intermediate parent shrink-wraps it', async () => {
-		const page = await browser.newPage( { viewport: { width: 980, height: 900 } } );
+	it( 'keeps a fluid tile wrapper sized when its intermediate parent shrink-wraps it', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 980, height: 900 } } );
 		await page.setContent( `
 			<div style="position:relative;width:100vw">
 				<div id="item" style="position:absolute;top:0;left:0;width:253px;height:253px">
@@ -732,7 +742,7 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			document.querySelectorAll( 'script' ).forEach( ( script ) => script.remove() );
 			return document.documentElement.outerHTML;
 		} );
-		const copy = await browser.newPage( { viewport: { width: 980, height: 900 } } );
+		const copy = await newPage( { viewport: { width: 980, height: 900 } } );
 		await copy.setContent( html );
 		for ( const [ width, expected ] of [ [ 390, 253 ], [ 768, 253 ], [ 1440, 407 ], [ 1600, 460 ], [ 1728, 503 ] ] ) {
 			await copy.setViewportSize( { width, height: 900 } );
@@ -745,8 +755,8 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await page.close();
 	}, 30_000 );
 
-	it( 'preserves responsive wrapper reflow across desktop regimes', async () => {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'preserves responsive wrapper reflow across desktop regimes', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		await page.setContent( `
 			<div id="wrapper" style="width:321px;height:180px"><img src="about:blank" style="display:block;width:100%;height:100%"></div>
 			<script>
@@ -767,7 +777,7 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			document.querySelectorAll( 'script' ).forEach( ( script ) => script.remove() );
 			return document.documentElement.outerHTML;
 		} );
-		const copy = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		const copy = await newPage( { viewport: { width: 1440, height: 900 } } );
 		await copy.setContent( html );
 		for ( const [ width, expected ] of [ [ 1440, 321 ], [ 1600, 358 ], [ 1680, 358 ], [ 1728, 358 ] ] as const ) {
 			await copy.setViewportSize( { width, height: 900 } );
@@ -778,8 +788,8 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await page.close();
 	}, 30_000 );
 
-	it( 'learns runtime-written fluid font sizes', async () => {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'learns runtime-written fluid font sizes', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		await page.setContent( `
 			<h1 id="portfolio" style="font-size: 10px">PORTFOLIO</h1>
 			<script>
@@ -805,7 +815,7 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await page.close();
 	} );
 
-	it( 'reuses a swept series on a later route only when its element answers the probe widths identically', async () => {
+	it( 'reuses a swept series on a later route only when its element answers the probe widths identically', async ({ newPage }) => {
 		// A script-sized banner repeats on every route; the article beside it differs.
 		const route = ( ratio: number, article: string ) => `
 			<section id="banner" style="height: 10px"></section><article><p>${ article }</p></article>
@@ -818,7 +828,7 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		const learned: Array< [ number, string | null ] > = [];
 		// The second route reuses the first's sweep; the third's banner differs, so it sweeps and learns its own rule.
 		for ( const html of [ route( 0.1754, 'First' ), route( 0.1754, 'Second, longer article' ), route( 0.2, 'Third' ) ] ) {
-			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 			await page.setContent( html );
 			const result = await learnAndApplyFluidGeometry( page, { document: 'desktop', settleMs: 50, memo } );
 			await page.setViewportSize( { width: 390, height: 900 } );
@@ -833,12 +843,12 @@ describe( 'learnAndApplyFluidGeometry', () => {
 	}, 60_000 );
 
 	// Two local browser routes (~8s): one full sweep, then only the memo probes, even with new constant content.
-	it( 'reuses shared header series despite new constant content, duplicate ids, root state classes and identity-scale origins', async () => {
+	it( 'reuses shared header series despite new constant content, duplicate ids, root state classes and identity-scale origins', async ({ newPage }) => {
 		const memo: FluidSeriesMemo = new Map();
 		const lookup = vi.spyOn( memo, 'get' );
 		const learned = [];
 		for ( const [ index, height ] of [ 200, 600 ].entries() ) {
-			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 			try {
 				await page.setContent( `
 					<!doctype html><html class="runtime-${ index }"><body class="cookiebot-theme ${ index ? 'has-action-bar' : 'show-all-popups' }">
@@ -883,8 +893,8 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		expect( second!.header ).toEqual( first!.header );
 	}, 60_000 );
 
-	it( 'learns the ceiling when the widest sample is capped', async () => {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'learns the ceiling when the widest sample is capped', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		await page.setContent( `
 			<h1 id="portfolio" style="font-size: 10px">PORTFOLIO</h1>
 			<script>
@@ -908,8 +918,8 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await page.close();
 	}, 20_000 );
 
-	it( 'ships one rule per regime when the container share changes at the mobile breakpoint', async () => {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'ships one rule per regime when the container share changes at the mobile breakpoint', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		await page.setContent( `
 			<style>
 				#scaled-container { width: 88vw; }
@@ -964,8 +974,8 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await page.close();
 	}, 20_000 );
 
-	it( 'keeps segmented rules authoritative when the source runtime writes pixels after learning', async () => {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'keeps segmented rules authoritative when the source runtime writes pixels after learning', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		await page.setContent( `
 			<style>
 				#scaled-container { width: 88vw; }
@@ -1003,8 +1013,8 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await page.close();
 	}, 20_000 );
 
-	it( 'keeps mixed-unit image height responsive and intrinsic width aligned after serialization', async () => {
-		const source = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'keeps mixed-unit image height responsive and intrinsic width aligned after serialization', async ({ newPage }) => {
+		const source = await newPage( { viewport: { width: 1440, height: 900 } } );
 		await source.setContent( `
 			<style>
 				#frame { position: relative; width: 420px; height: 228px; left: 84px }
@@ -1041,7 +1051,7 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			document.querySelectorAll( 'script' ).forEach( ( script ) => script.remove() );
 			return document.documentElement.outerHTML;
 		} );
-		const copy = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		const copy = await newPage( { viewport: { width: 1440, height: 900 } } );
 		await copy.setContent( html );
 		for ( const width of [ 390, 600, 1600, 1728 ] ) {
 			await copy.setViewportSize( { width, height: 900 } );
@@ -1058,9 +1068,9 @@ describe( 'learnAndApplyFluidGeometry', () => {
 	}, 30_000 );
 
 	// #1414: px, `100%` and px regimes each stay bounded to the widths they were observed at.
-	it( 'bounds runtime custom-property regimes that switch between px and 100%', async () => {
-		const source = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
-		const copy = await browser.newPage();
+	it( 'bounds runtime custom-property regimes that switch between px and 100%', async ({ newPage }) => {
+		const source = await newPage( { viewport: { width: 1440, height: 900 } } );
+		const copy = await newPage();
 		const expected = ( width: number ) => width < 700 ? `${ width * 0.3256 }px` : width < 768 ? '100%' : `${ width * 0.3 + 30 }px`;
 		try {
 			await source.setContent( `<style>body{margin:0}#frame{height:400px}#box{height:var(--h)}</style>
@@ -1084,9 +1094,9 @@ describe( 'learnAndApplyFluidGeometry', () => {
 	}, 30_000 );
 
 	// One sweep (~3s): all siblings retain both coordinates across a row wrap.
-	it( 'carries every translated grid item through shared wrap bands', async () => {
-		const source = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
-		const copy = await browser.newPage();
+	it( 'carries every translated grid item through shared wrap bands', async ({ newPage }) => {
+		const source = await newPage( { viewport: { width: 1440, height: 900 } } );
+		const copy = await newPage();
 		try {
 			await source.setContent( `<style>body{margin:0}.grid{position:relative}.item{position:absolute;left:0;top:0;width:25vw;height:100px}@media(max-width:767px){.item{width:50vw}}</style>
 				<div class="grid"><div class="item"></div><div class="item"></div><div class="item"></div><div class="item"></div></div>
@@ -1113,8 +1123,8 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		}
 	}, 20_000 );
 
-	it( 'learns a translated positioned image owner across independent widths', async () => {
-		const source = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'learns a translated positioned image owner across independent widths', async ({ newPage }) => {
+		const source = await newPage( { viewport: { width: 1440, height: 900 } } );
 		await source.setContent( `
 			<style>body { margin: 0 }</style>
 			<div id="frame" style="position: relative; width: 100vw; height: 300px">
@@ -1139,7 +1149,7 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			document.querySelectorAll( 'script' ).forEach( ( script ) => script.remove() );
 			return document.documentElement.outerHTML;
 		} );
-		const copy = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		const copy = await newPage( { viewport: { width: 1440, height: 900 } } );
 		await copy.setContent( html );
 		for ( const width of [ 1600, 1728 ] ) {
 			await copy.setViewportSize( { width, height: 900 } );
@@ -1151,8 +1161,8 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await source.close();
 	}, 30_000 );
 
-	it( 'keeps an inactive responsive slide offstage through the tablet range', async () => {
-		const source = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'keeps an inactive responsive slide offstage through the tablet range', async ({ newPage }) => {
+		const source = await newPage( { viewport: { width: 1440, height: 900 } } );
 		await source.setContent( `
 			<style>body{margin:0}#track{position:relative;width:100vw;height:180px;overflow:hidden}#slide{position:absolute;width:320px;height:160px}</style>
 			<div id="track"><div id="slide" style="transform:matrix(1,0,0,1,1402,0)">Inactive testimonial</div></div>
@@ -1172,7 +1182,7 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			document.querySelectorAll( 'script' ).forEach( script => script.remove() );
 			return document.documentElement.outerHTML;
 		} );
-		const copy = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		const copy = await newPage( { viewport: { width: 1440, height: 900 } } );
 		await copy.setContent( html );
 		for ( const width of [ 390, 768, 1440 ] ) {
 			await copy.setViewportSize( { width, height: 900 } );
@@ -1185,8 +1195,8 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await source.close();
 	}, 30_000 );
 
-	it( 'handles measured wrappers removed at the last sweep and restored capture width without waiting', async () => {
-		const page = await browser.newPage( { viewport: { width: 390, height: 900 } } );
+	it( 'handles measured wrappers removed at the last sweep and restored capture width without waiting', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 390, height: 900 } } );
 		// Missing nodes must be read immediately, not through locator auto-wait.
 		page.setDefaultTimeout( 500 );
 		try {
@@ -1225,8 +1235,8 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		}
 	}, 15_000 );
 
-	it( 'preserves authored non-translation matrices and rejects scale or rotation introduced at sweep or viewport restore', async () => {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'preserves authored non-translation matrices and rejects scale or rotation introduced at sweep or viewport restore', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
 			await page.setContent( `
 				<div id="authored-scale" style="transform: matrix(2, 0, 0, 2, 40, 0)"></div>
@@ -1274,14 +1284,14 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		}
 	}, 20_000 );
 
-	it( 'learns a runtime-written header offset as media-scoped padding rules', async () => {
+	it( 'learns a runtime-written header offset as media-scoped padding rules', async ({ newPage }) => {
 		// A fixed header's clearance is written onto the first section as
 		// inline pixels: mobile padding is 12vw of chrome plus 37.5px of
 		// header content; desktop is chrome content the sweep cannot formula
 		// (given here exactly as the live site reported it at the sampled
 		// widths). The learned rules must reproduce both regimes and leave
 		// the unfittable desktop tail at the value it observed.
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		// The site also offsets the section from a more specific author rule
 		// reading a runtime variable that is only measured at load, as real
 		// platforms do. The runtime's inline pixels outranked that rule; the
@@ -1344,8 +1354,8 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await page.close();
 	}, 20_000 );
 
-	it( 'learns runtime padding on ordinary rendered geometry without platform markers', async () => {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+	it( 'learns runtime padding on ordinary rendered geometry without platform markers', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		await page.setContent( `
 			<style>html { scroll-behavior:smooth } body { min-height:2400px }.hero { height: 180px; }</style>
 			<main><div id="hero" class="hero" style="padding-top:178.781px"></div><div id="closed-menu" style="display:none;padding-top:240px"></div></main>
@@ -1387,11 +1397,11 @@ describe( 'learnAndApplyFluidGeometry', () => {
 	// into Array.prototype: 1.6 turns `entries()` into a plain copy of the array,
 	// 1.7 deletes it. Learning runs in the page's main world, so its in-page code
 	// must not depend on the page keeping the native Array methods.
-	it.each( [
+	it.for( [
 		[ 'returns a copy of the array (Prototype 1.6)', 'Array.prototype.entries = function () { return this.slice(); };' ],
 		[ 'is deleted (Prototype 1.7)', 'delete Array.prototype.entries;' ],
-	] )( 'learns on a page whose library replaced Array.prototype.entries: %s', async ( _case, patch ) => {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+	] )( 'learns on a page whose library replaced Array.prototype.entries: %s', async ( [ _case, patch ], { newPage } ) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
 			await page.setContent( `<script>${ patch }</script>
 				<p id="text" style="font-size:18px">Text<br></p>

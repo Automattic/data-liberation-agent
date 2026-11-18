@@ -12,7 +12,7 @@ import { isRouteDrift, navigationDocumentUrl, matchClientErrorShell } from '../s
 import { applyCaptureRemovals } from '../screenshot/apply-removals.js';
 import { installImageReachability, observePageTraffic, settleDocument, waitForImages, type TelemetryRequest } from '../screenshot/page-helpers.js';
 import type { CleanupPolicy } from '../source-cleanup.js';
-import { captureViewportScreenshot } from './viewport-screenshot.js';
+import { captureFullPageScreenshot, captureViewportScreenshot } from './viewport-screenshot.js';
 import { navigateSourceDocument, storeExternalBoundary, boundaryIdentity, type ExternalBoundary } from '../source-navigation.js';
 import { lockMainFrameNavigation } from '../screenshot/probe-guards.js';
 import { replayBrowserIdentity, type CaptureProfile } from '../screenshot/capture-profiles.js';
@@ -21,6 +21,8 @@ import { watchSourceRuntimeErrors } from '../source-readiness.js';
 
 /** Upper bound for in-flight source images to settle before the reference is frozen. */
 const MEDIA_READY_TIMEOUT_MS = 10_000;
+/** Upper bound for images whose successful response is still streaming its body. */
+const MEDIA_STREAM_TIMEOUT_MS = 60_000;
 
 export interface ReferenceCollectorOptions {
 	initializePage?: (page: Page) => Promise<void>;
@@ -63,6 +65,7 @@ export interface ReferenceEntry {
 	readiness: { ready: boolean; reasons: string[]; diagnostics?: string[]; cleanup?: CleanupReport; mediaReady?: boolean; fontsReady?: boolean; sourceBrokenImages?: Array<{ url: string; status: number }> };
 	observation?: ReferenceArtifact;
 	screenshot?: ReferenceArtifact;
+	fullPageScreenshot?: ReferenceArtifact;
 	document?: ReferenceArtifact;
 }
 export interface FidelityReference {
@@ -224,21 +227,30 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						// A response alone is insufficient: its body may still fail in transit.
 						const imageStatuses = new WeakMap<Request, number>();
 						const brokenImages = new Map<string, number>();
+						// A successful response whose body is still arriving is progress,
+						// not failure: large images on slow origins outlast the base window.
+						const streamingImages = new Set<string>();
 						const imageRequested = ( request: Request ) => { if ( request.resourceType() === 'image' ) brokenImages.delete( request.url() ); };
 						const imageResponse = ( response: Response ) => {
-							if ( response.request().resourceType() === 'image' ) imageStatuses.set( response.request(), response.status() );
+							if ( response.request().resourceType() !== 'image' ) return;
+							imageStatuses.set( response.request(), response.status() );
+							if ( response.status() < 400 ) streamingImages.add( response.request().url() );
 						};
 						const imageFinished = ( request: Request ) => {
+							if ( request.resourceType() === 'image' ) streamingImages.delete( request.url() );
 							const status = imageStatuses.get( request );
 							if ( status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 429 ) brokenImages.set( request.url(), status );
 						};
+						const imageFailed = ( request: Request ) => { if ( request.resourceType() === 'image' ) streamingImages.delete( request.url() ); };
 						referencePage.on( 'request', imageRequested );
 						referencePage.on( 'response', imageResponse );
 						referencePage.on( 'requestfinished', imageFinished );
+						referencePage.on( 'requestfailed', imageFailed );
 						stopImageRequests = () => {
 							referencePage!.off( 'request', imageRequested );
 							referencePage!.off( 'response', imageResponse );
 							referencePage!.off( 'requestfinished', imageFinished );
+							referencePage!.off( 'requestfailed', imageFailed );
 						};
 						await options.initializePage?.(referencePage);
 						runtimeErrors = await watchSourceRuntimeErrors( referencePage );
@@ -247,7 +259,9 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						if ( url !== 'about:blank' ) {
 							const navigation = options.routeScope || options.initializePage ? await navigateSourceDocument( referencePage, url, { publicUrlsOnly: options.publicUrlsOnly, routeScope: options.routeScope } ) : undefined;
 							if ( navigation?.boundary || navigation?.redirectedTo ) throw new Error( 'Reference document changed its route ownership or identity' );
-							const response = navigation ? navigation.response : await referencePage.goto( url, { waitUntil: 'load', timeout: 60_000 } );
+							// Match capture navigation: bounded layout, media and font checks
+							// below own readiness, not the load event of every resource.
+							const response = navigation ? navigation.response : await referencePage.goto( url, { waitUntil: 'domcontentloaded', timeout: 60_000 } );
 							if ( response && ! response.ok() ) throw new Error( `Reference navigation HTTP ${ response.status() }` );
 							navigationUrl = navigationDocumentUrl( url, response?.url() ?? url, Boolean( response?.request().redirectedFrom() ) );
 						}
@@ -286,9 +300,12 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 								return ! ( rect.width <= 50 || rect.height <= 50 || unreachable( image ) || ( image.complete && ( image.naturalWidth > 0 || broken.some( item => item.url === ( image.currentSrc || image.src ) ) ) ) );
 							} ).map( image => ( { url: image.currentSrc || image.getAttribute( 'src' )?.trim() || image.getAttribute( 'srcset' )?.trim() || '', alt: image.alt } ) );
 						}, { key: reachabilityKey, broken: [ ...brokenImages ].map( ( [ url, status ] ) => ( { url, status } ) ) } );
-						const mediaDeadline = Date.now() + MEDIA_READY_TIMEOUT_MS;
+						// Only images whose download is visibly progressing earn the
+						// longer bound; unstarted, failed and stalled ones keep the base window.
+						const mediaStart = Date.now();
+						const streaming = ( images: { url: string }[] ) => images.some( image => image.url ) && images.every( image => ! image.url || streamingImages.has( image.url ) );
 						let unsettled = await unsettledImages();
-						while ( unsettled.length && Date.now() < mediaDeadline ) {
+						while ( unsettled.length && Date.now() < mediaStart + ( streaming( unsettled ) ? MEDIA_STREAM_TIMEOUT_MS : MEDIA_READY_TIMEOUT_MS ) ) {
 							await referencePage.waitForTimeout( 250 );
 							unsettled = await unsettledImages();
 						}
@@ -296,7 +313,9 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						const mediaReady = ! pending.length;
 						if ( ! mediaReady ) {
 							entry.readiness.reasons.push( 'source images pending or failed' );
-							entry.readiness.diagnostics = [ ...entry.readiness.diagnostics ?? [], ...pending.slice( 0, 10 ).map( image => `source image pending or failed: ${ image.url }` ) ];
+							entry.readiness.diagnostics = [ ...entry.readiness.diagnostics ?? [], ...pending.slice( 0, 10 ).map( image => streamingImages.has( image.url )
+								? `source image still downloading after ${ MEDIA_STREAM_TIMEOUT_MS / 1000 }s: ${ image.url }`
+								: `source image pending or failed: ${ image.url }` ) ];
 						}
 						entry.readiness.mediaReady = mediaReady;
 						const sourceBrokenImages = await referencePage.evaluate( broken => broken.filter( item => [ ...document.images ].some( image => image.complete && image.naturalWidth === 0 && ( image.currentSrc || image.src ) === item.url ) ), [ ...brokenImages ].map( ( [ url, status ] ) => ( { url, status } ) ) );
@@ -308,13 +327,18 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						entry.observation = store( `${ stem }.json`, JSON.stringify( observation ) );
 						const stability = await settleDocument( referencePage, 'reference-admission', { quietMs: 500, timeoutMs: 5_000, animations: true } );
 						if ( stability.reason !== 'quiet' ) entry.readiness.reasons.push( 'source document did not settle' );
+						if ( stability.excludedMotion?.length ) entry.readiness.diagnostics = [ ...entry.readiness.diagnostics ?? [], ...stability.excludedMotion.map( selector => `source perpetual motion excluded: ${ selector }` ) ];
 						const html = await referencePage.content();
 						const shell = matchClientErrorShell( html, options.clientErrorShellSelectors );
 						if ( shell ) entry.readiness.reasons.push( `source client error shell: ${ shell }` );
 						if ( isRouteDrift( referencePage.url(), navigationUrl ) && ! entry.readiness.reasons.includes( 'source route drift' ) ) entry.readiness.reasons.push( 'source route drift' );
 						entry.document = store( `${ stem }.html`, html );
 						entry.screenshot = store( `${ stem }.png`, await captureViewportScreenshot( referencePage ) );
+						// CDP's beyond-viewport capture can temporarily change the mobile
+						// layout viewport. Bind startup evidence to the measured baseline,
+						// not the screenshot compositor's transient canvas.
 						await collectViewportEntranceStartup( referencePage, page );
+						entry.fullPageScreenshot = store( `${ stem }-full.png`, await captureFullPageScreenshot( referencePage, stability.excludedMotion ) );
 						recordRuntimeErrors();
 						entry.readiness.ready = entry.readiness.reasons.length === 0;
 					} catch ( error ) {
@@ -372,7 +396,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 	};
 }
 
-export function readFrozenObservation( directory: string, entry: ReferenceEntry ): { observation: LayoutObservation; png: Buffer } {
+export function readFrozenObservation( directory: string, entry: ReferenceEntry ): { observation: LayoutObservation; png: Buffer; fullPagePng?: Buffer } {
 	const readiness = entry.readiness;
 	if ( ! readiness.ready || readiness.reasons.length || ! readiness.mediaReady || ! readiness.fontsReady || ! readiness.cleanup || readiness.cleanup.failures.length || readiness.cleanup.residual || ! entry.observation || ! entry.screenshot || ! entry.document ) throw new Error( `Source evidence unready: ${ readiness.reasons.join( ', ' ) }` );
 	readReferenceArtifact( directory, entry.document );
@@ -381,5 +405,7 @@ export function readFrozenObservation( directory: string, entry: ReferenceEntry 
 	const png = readReferenceArtifact( directory, entry.screenshot );
 	const dimensions = PNG.sync.read( png );
 	if ( entry.viewportHeight !== 900 || dimensions.width !== entry.viewport || dimensions.height !== entry.viewportHeight ) throw new Error( 'Source screenshot viewport mismatch' );
-	return { observation, png };
+	const fullPagePng = entry.fullPageScreenshot ? readReferenceArtifact( directory, entry.fullPageScreenshot ) : undefined;
+	if ( fullPagePng && PNG.sync.read( fullPagePng ).width !== entry.viewport ) throw new Error( 'Source full-page screenshot viewport mismatch' );
+	return { observation, png, fullPagePng };
 }

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, vi, afterEach } from 'vitest';
+import { it } from '../../test/browser.js';
 import type { PlatformAdapter } from '../types.js';
 
 const state = vi.hoisted(() => ({ runtime: false, redirected: false, multiple: false, body: undefined as string | undefined }));
@@ -81,10 +82,27 @@ afterEach(() => {
 });
 
 describe('orchestrated HTTP review capture', () => {
+	it.each([undefined, false, true])('keeps HTTP template-cluster behavior for %s with structured content', async (templateClusters) => {
+		const enumerate = vi.fn(async () => ({ entries: [], diagnostics: [] }));
+		const platform = { ...adapter(), structuredContent: {
+			enumerate, bodyEquivalent: () => false, memberDocument: () => undefined,
+			termArchiveUrl: () => url, termName: () => undefined,
+		} };
+		const run = captureWebsite({ url, outputDir: directory(), acquisition: 'http', templateClusters }, { findAdapter: () => platform });
+		if (templateClusters === true) {
+			await expect(run).rejects.toThrow('templateClusters applies to browser acquisition only');
+		} else {
+			const result = await run;
+			const receipt = JSON.parse(readFileSync(result.captureReceiptPath, 'utf8'));
+			expect(receipt.templateClustersDecision).toEqual({ enabled: false, source: templateClusters === false ? 'explicit' : 'default' });
+			expect(receipt.templateClusters).toBeUndefined();
+		}
+		expect(enumerate).not.toHaveBeenCalled();
+		expect(browserCapture).not.toHaveBeenCalled();
+	});
 	it.each([
 		['https://author.github.io/project/', ['/project'], false],
 		['https://author.github.io/project/guide/', ['/project'], false],
-		['https://author.github.io/', undefined, true],
 		['https://author.github.io.evil.test/project/', undefined, true],
 		['https://example.test/project/', undefined, true],
 	] as const)('scopes shared-host project routes for %s', async (sourceUrl, prefixes, includesSibling) => {
@@ -139,6 +157,33 @@ describe('orchestrated HTTP review capture', () => {
 			expect(receipt.duplicateRoutes).toEqual([{ url: alias, canonicalUrl: canonical, path: route.path }]);
 			expect(existsSync(join(outputDir, 'website/archive/post/index.html'))).toBe(false);
 			expect(readFileSync(join(outputDir, 'website/index.html'), 'utf8')).toContain('href="/articles/post/index.html"');
+		} finally {
+			vi.mocked(safeFetch).mockImplementation(originalFetch);
+		}
+	});
+	it('keeps distinct rendered routes when an SPA shell gives both the homepage canonical', async () => {
+		const { captureWebsite: capture } = await import('../index.js');
+		const outputDir = directory();
+		const about = `${url}about`;
+		const originalFetch = vi.mocked(safeFetch).getMockImplementation()!;
+		vi.mocked(safeFetch).mockImplementation(async target => ({
+			finalUrl: target, status: 200,
+			headers: new Headers({ 'content-type': 'text/html' }),
+			body: Buffer.from(`<html><head><title>Static shell</title><link rel="canonical" href="/"><meta property="og:url" content="${url}"></head><body><nav><a href="/">Home</a><a href="/about">About</a></nav><main><h1>${target === url ? 'Home' : 'About'}</h1></main></body></html>`),
+		}));
+		const platform = adapter();
+		platform.discover = async () => ({ urls: [url, about].map(url => ({ url })) });
+		try {
+			const result = await capture({ url, outputDir, acquisition: 'http' }, { findAdapter: () => platform });
+			const receipt = JSON.parse(readFileSync(result.captureReceiptPath, 'utf8'));
+			expect(receipt.routes.map((route: { url: string }) => route.url)).toEqual([url, about]);
+			expect(receipt.duplicateRoutes).toEqual([]);
+			const homepage = readFileSync(join(outputDir, 'website/index.html'), 'utf8');
+			const aboutPage = readFileSync(join(outputDir, 'website/about/index.html'), 'utf8');
+			expect(homepage).toContain('<h1>Home</h1>');
+			expect(homepage).toContain('href="/about/index.html"');
+			expect(aboutPage).toContain('<h1>About</h1>');
+			expect(aboutPage).toContain('href="/index.html"');
 		} finally {
 			vi.mocked(safeFetch).mockImplementation(originalFetch);
 		}
@@ -286,7 +331,7 @@ describe('orchestrated HTTP review capture', () => {
 		expect(browserCapture).not.toHaveBeenCalled();
 	});
 
-	it('projects declared DOM and selected/document state with runtime CSS through the real orchestration and offline browser', async () => {
+	it('projects declared DOM and selected/document state with runtime CSS through the real orchestration and offline browser', async ({ newPage }) => {
 		state.runtime = true;
 		const outputDir = directory();
 		const result = await captureWebsite(
@@ -299,11 +344,11 @@ describe('orchestrated HTTP review capture', () => {
 		expect(html).toContain('class="js"');
 		const { chromium } = await import('playwright');
 		const { serveCapture } = await import('./serve-capture.js');
-		const browser = await chromium.launch();
+
 		const server = await serveCapture(outputDir);
 		try {
 			for (const width of [390, 768, 1440]) {
-				const page = await browser.newPage({ viewport: { width, height: 900 } });
+				const page = await newPage({ viewport: { width, height: 900 } });
 				await page.route('**/*', (route) =>
 					new URL(route.request().url()).origin === new URL(server.url).origin ? route.continue() : route.abort()
 				);
@@ -318,7 +363,7 @@ describe('orchestrated HTTP review capture', () => {
 			}
 		} finally {
 			await server.close();
-			await browser.close();
+
 		}
 		expect(result.complete).toBe(false);
 	});

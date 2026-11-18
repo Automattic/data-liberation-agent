@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mergeViewportEntranceStates, VIEWPORT_ENTRANCE_ATTRIBUTE } from './viewport-entrances.js';
 import * as cheerio from 'cheerio';
+import { readDocument } from './parsed-documents.js';
 import postcss from 'postcss';
 import selectorParser from 'postcss-selector-parser';
 import type { AnyNode, Element } from 'domhandler';
@@ -9,6 +10,7 @@ import { appendScrollDrivenAnimations } from './scroll-driven-animations.js';
 import { cssIdentifier, parseCss, parseSelectorList, projectStylesheet, scopeCss, type UnparseableStylesheetSink } from './replicate/css-scope.js';
 import { FLUID_RULES_STYLE_ATTRIBUTE } from './screenshot/fluid-capture.js';
 import { documentElementTags } from './screenshot/document-integrity.js';
+import { VIEWPORT_CLASS_PREFIX, VIEWPORT_CLASS_RULES_ATTRIBUTE } from './screenshot/viewport-class-states.js';
 import { isElementNode, isYuiRuntimeId } from './html-nodes.js';
 import { CONSENT_OVERLAY_DIALOG_SELECTOR, CONSENT_VENDOR_RE, isConsentOverlayRoot } from './consent-overlay.js';
 import {
@@ -71,8 +73,40 @@ function middleVariant( index: number ): { key: string; className: string } {
 	return { key, className: `data-blocks-engine-capture-${ key }-document` };
 }
 
+/**
+ * Intersect query lists, keeping media types before conditions. `undefined`
+ * requests separate gates: appending to `not print` would negate the width too,
+ * and distinct media types cannot share one query. Callers must retain both
+ * queries (a style media attribute plus an inner @media), never drop either.
+ */
+export function combineMediaQueries( left: string, right: string ): string | undefined {
+	const queries: string[] = [];
+	for ( const a of postcss.list.comma( left.trim() || 'all' ) ) {
+		for ( const b of postcss.list.comma( right.trim() || 'all' ) ) {
+			if ( /^all$/i.test( a ) ) { queries.push( b ); continue; }
+			if ( /^all$/i.test( b ) ) { queries.push( a ); continue; }
+			if ( /^not\b/i.test( a ) || /^not\b/i.test( b ) ) return undefined;
+			const parse = ( query: string ) => {
+				const type = /^(?:(only)\s+)?([a-z][\w-]*)(?:\s+and\s+|$)/i.exec( query );
+				const condition = type ? query.slice( type[ 0 ].length ).trim() : query;
+				return { type: type?.[ 2 ]?.toLowerCase(), only: Boolean( type?.[ 1 ] ), condition };
+			};
+			const x = parse( a );
+			const y = parse( b );
+			const types = [ x.type, y.type ].filter( type => type && type !== 'all' );
+			if ( new Set( types ).size > 1 ) return undefined;
+			const type = types[ 0 ] ?? ( x.only || y.only ? 'all' : undefined );
+			const conditions = [ x.condition, y.condition ].filter( Boolean ).map( condition =>
+				condition.startsWith( '(' ) && ! /\bor\b/i.test( condition ) ? condition : `(${ condition })`
+			);
+			queries.push( [ ...( type ? [ `${ x.only || y.only ? 'only ' : '' }${ type }` ] : [] ), ...conditions ].join( ' and ' ) );
+		}
+	}
+	return queries.join( ', ' );
+}
+
 function middleMedia( range: { minWidth: number; maxWidth: number } ): string {
-	return `(min-width:${ range.minWidth }px) and (max-width:${ range.maxWidth }px)`;
+	return combineMediaQueries( `(min-width:${ range.minWidth }px)`, `(max-width:${ range.maxWidth }px)` )!;
 }
 
 const RESPONSIVE_DOCUMENT_CSS = `.${ MOBILE_DOCUMENT_CLASS }{display:none!important}`;
@@ -192,7 +226,7 @@ export function documentsDiffer( desktopHtml: string, mobileHtml: string ): bool
 	const desktopBody = documentElement( desktopHtml, 'body' )?.content;
 	const mobileBody = documentElement( mobileHtml, 'body' )?.content;
 	if ( desktopBody === undefined || mobileBody === undefined ) return false;
-	return responsiveBodySignature( desktopBody ) !== responsiveBodySignature( mobileBody );
+	return responsiveBodySignature( desktopBody, desktopHtml + mobileHtml ) !== responsiveBodySignature( mobileBody, desktopHtml + mobileHtml );
 }
 
 /**
@@ -274,8 +308,8 @@ function mobileBodyClassGatesDesktopCss(
  * responsive reconciliation would need to relocate those declarations.
  */
 function requiresNativeInlineCascade( desktopHtml: string, mobileHtml: string ): boolean {
-	const desktop = cheerio.load( desktopHtml );
-	const mobile = cheerio.load( mobileHtml );
+	const desktop = readDocument( desktopHtml );
+	const mobile = readDocument( mobileHtml );
 	const inlineStyles = ( $: cheerio.CheerioAPI ) => $( 'body [style],body[style]' )
 		.map( ( _, element ) => $( element ).attr( 'style' ) ?? '' ).get();
 	if ( JSON.stringify( inlineStyles( desktop ) ) === JSON.stringify( inlineStyles( mobile ) ) ) return false;
@@ -330,7 +364,8 @@ function discoverIdentityAttributes( desktop: cheerio.CheerioAPI, mobile: cheeri
 		const attributes = new Map< string, { values: Map< string, number >; count: number } >();
 		for ( const element of $( 'body *' ).toArray().filter( isElementNode ) ) {
 			for ( const [ name, value ] of Object.entries( element.attribs ) ) {
-				if ( name === 'id' || name === 'class' || name === 'style' || ! value.trim() ) continue;
+				// Capture IDs bind one document's evidence, not authored identity across documents.
+				if ( name === 'data-blocks-engine-node-id' || name === 'id' || name === 'class' || name === 'style' || ! value.trim() ) continue;
 				const entry = attributes.get( name ) ?? { values: new Map< string, number >(), count: 0 };
 				entry.values.set( value, ( entry.values.get( value ) ?? 0 ) + 1 );
 				entry.count++;
@@ -468,7 +503,6 @@ export function identitySubsetMerge(
 	$d( '[class]' ).each( ( _index, node ) =>
 		( $d( node ).attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean ).forEach( ( token ) => desktopClassTokens.add( token ) )
 	);
-	let unsafeClassAlias = false;
 	const retainedClassTokens = new Set<string>();
 	const desktopClassAliases = new Map<string, string>();
 	const desktopStyledClasses = new Set( [ ...styleBlocks( desktopHtml ).join( '' ).matchAll( /\.(-?[_a-zA-Z][\w-]*)/g ) ].map( match => match[ 1 ] as string ) );
@@ -479,7 +513,7 @@ export function identitySubsetMerge(
 	const desktopBodyClasses = new Set( bodyClasses( desktopHtml ) );
 	for ( const token of deviceKey ? [] : bodyClasses( mobileHtml ) ) {
 		if ( desktopBodyClasses.has( token ) ) continue;
-		if ( desktopClassTokens.has( token ) ) unsafeClassAlias = true;
+		if ( desktopClassTokens.has( token ) ) retainedClassTokens.add( token );
 		classAliases.set( token, `${ RESPONSIVE_PROJECTION_CLASS_PREFIX }class-${ createHash( 'sha256' ).update( token ).digest( 'hex' ).slice( 0, 12 ) }` );
 	}
 	const mobileOnlyIds: string[] = [];
@@ -753,8 +787,9 @@ export function identitySubsetMerge(
 			let selector: string;
 			if ( id && isIdentityId( id ) ) selector = `#${ id }`;
 			else {
+				// Equal hooks must project equal rules, independent of document order.
 				const hook = `${ RESPONSIVE_PROJECTION_CLASS_PREFIX }${ createHash( 'sha256' )
-					.update( path )
+					.update( JSON.stringify( [ switchWidth, desktopStyle, projectedMobileStyle ] ) )
 					.digest( 'hex' )
 					.slice( 0, 12 ) }`;
 				d.addClass( hook );
@@ -797,9 +832,11 @@ export function identitySubsetMerge(
 		}
 		// A styled token only the desktop rendering carries must not meet the
 		// phone side: a content-hashed rule the two captures share would size
-		// the phone rendering like the desktop one.
+		// the phone rendering like the desktop one. Width-sweep aliases already
+		// have their own presence ranges; renaming them loses learned states.
 		const desktopOnly = deviceKey ? [] : desktopClasses.filter( token =>
-			! mobileClasses.includes( token ) && desktopStyledClasses.has( token ) && ! token.startsWith( RESPONSIVE_PROJECTION_CLASS_PREFIX ) );
+			! mobileClasses.includes( token ) && desktopStyledClasses.has( token ) &&
+			! token.startsWith( RESPONSIVE_PROJECTION_CLASS_PREFIX ) && ! token.startsWith( VIEWPORT_CLASS_PREFIX ) );
 		if ( desktopOnly.length > 0 ) {
 			const renamed = new Map( desktopOnly.map( token => {
 				const alias = desktopClassAliases.get( token ) ?? `${ RESPONSIVE_PROJECTION_CLASS_PREFIX }desktop-class-${ createHash( 'sha256' ).update( token ).digest( 'hex' ).slice( 0, 12 ) }`;
@@ -920,7 +957,6 @@ export function identitySubsetMerge(
 		if ( mobileElement ) projectPair( $d( desktopElement ), $m( mobileElement ), id );
 	}
 	if ( incompatibleEntrance ) return cannotMerge( 'Viewport entrance evidence is invalid or incompatible across device documents' );
-	if ( unsafeClassAlias ) return cannotMerge( 'Class projection would change the authored cascade' );
 	deviceInlineRestores.forEach( restore => restore() );
 	const divergedComponents = splitDivergedComponents( $d, $m, divergedRoots, desktopIds, mobileIds, deviceKey, identityOf );
 	if ( divergedComponents === undefined ) return cannotMerge( 'Divergent component anchor identity or placement cannot be preserved' );
@@ -1066,8 +1102,9 @@ function equivalentInlineProjection(
 			let selector: string;
 			if ( id && isStableIdentityId( id ) && idCounts.get( id ) === 1 ) selector = `#${ id }`;
 			else {
+				// Equal hooks must project equal rules, independent of document order.
 				const hook = `${ RESPONSIVE_PROJECTION_CLASS_PREFIX }${ createHash( 'sha256' )
-					.update( path )
+					.update( JSON.stringify( [ switchWidth, desktopStyle, projectedMobileStyle ] ) )
 					.digest( 'hex' )
 					.slice( 0, 12 ) }`;
 				d.addClass( hook );
@@ -1220,16 +1257,19 @@ function aliasResponsiveClasses( css: string, aliases: ReadonlyMap<string, strin
 	try {
 		const root = postcss.parse( css );
 		root.walkRules( ( rule ) => {
-			let keepsOriginal = false;
 			const aliased = selectorParser( ( selectors ) => {
 				selectors.walkClasses( ( node ) => {
 					const alias = aliases.get( node.value );
 					if ( ! alias ) return;
-					if ( retained.has( node.value ) ) keepsOriginal = true;
-					node.value = alias;
+					if ( retained.has( node.value ) ) {
+						// Match either spelling at each position, including mixed
+						// selectors such as .state .state. :is keeps specificity.
+						const either = selectorParser().astSync( `:is(.${ cssIdentifier( node.value ) },.${ cssIdentifier( alias ) })` ).first!.first!;
+						node.replaceWith( either.clone() );
+					} else node.value = alias;
 				} );
 			} ).processSync( rule.selector );
-			rule.selector = keepsOriginal ? `${ rule.selector },${ aliased }` : aliased;
+			rule.selector = aliased;
 		} );
 		return root.toString();
 	} catch {
@@ -1708,12 +1748,29 @@ export function projectResponsiveSvgCss( css: string, ids: ReadonlySet<string> )
 		ids.has( id ) ? `var(--capture-svg-${ Buffer.from( id ).toString( 'hex' ) }, ${ match })` : match );
 }
 
+/**
+ * Each maximal run of characters other than `{`, `}` and `;` that opens a
+ * block, with its `{`, joined by newlines: the matches of `/[^{};]+\{/g`.
+ * One linear pass; the regular expression rescans every start position of a
+ * long run (a data URI, say) that does not open a block.
+ */
+export function blockPreludes( css: string ): string {
+	const preludes: string[] = [];
+	let start = 0;
+	for ( let index = 0; index < css.length; index++ ) {
+		const code = css.charCodeAt( index );
+		if ( code !== 123 && code !== 125 && code !== 59 ) continue;
+		if ( code === 123 && index > start ) preludes.push( css.slice( start, index + 1 ) );
+		start = index + 1;
+	}
+	return preludes.join( '\n' );
+}
+
 export function projectResponsiveIdentityCss( source: string, renamed: ReadonlyMap<string, string | readonly string[]>, namedAliases: boolean ): string {
 	// Do not parse unrelated source CSS just because another stylesheet owns
 	// a responsive anchor. Browsers may accept useful rules around a malformed
 	// declaration; identity-free styles need no rewriting or recovery here.
-	const preludes = source.replace( /\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, '' )
-		.match( /[^{};]+\{/g )?.join( '\n' ) ?? '';
+	const preludes = blockPreludes( source.replace( /\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, '' ) );
 	if ( ! preludes.includes( '#' ) && ! /\[\s*id\s*=/i.test( preludes ) && ( ! namedAliases || ! /\[\s*name\b/i.test( preludes ) ) ) return source;
 	// CSS accepts legacy HTML-comment wrappers; PostCSS rejects the closing CDC.
 	// Strip only outer tokens, preserving quoted content inside the stylesheet.
@@ -2309,6 +2366,14 @@ function resolveResponsivePair(
 	if ( /data-blocks-engine-capture-native-effects=/.test( desktopHtml + mobileHtml ) ) {
 		return { role, missingBody: false, dual: true, evidence: { ...dualStructuralEvidence( undefined ), reason: 'Native view timelines retain profile-scoped target and subject identities.' } };
 	}
+	// Root-mutating interactions were captured against each profile's native
+	// class list. A collapsed body with aliased phone flags cannot replay that
+	// contract faithfully; retain the two roots rather than guessing state.
+	const rootClasses = ( html: string ) => ( readDocument( html )( 'body' ).attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean ).sort().join( ' ' );
+	if ( rootClasses( desktopHtml ) !== rootClasses( mobileHtml ) &&
+		/(?:data-blocks-engine-capture-dialog-ancestor-state|aria-expanded)=/.test( desktopHtml + mobileHtml ) ) {
+		return { role, missingBody: false, dual: true, evidence: { ...dualStructuralEvidence( undefined ), reason: 'Profile-specific root classes with ancestor-state interactions retain native document roots.' } };
+	}
 	if ( requiresNativeInlineCascade( desktopHtml, mobileHtml ) ) {
 		return {
 			role,
@@ -2320,7 +2385,7 @@ function resolveResponsivePair(
 			},
 		};
 	}
-	if ( responsiveBodySignature( desktopBody ) === responsiveBodySignature( mobileBody ) ) {
+	if ( responsiveBodySignature( desktopBody, desktopHtml + mobileHtml ) === responsiveBodySignature( mobileBody, desktopHtml + mobileHtml ) ) {
 		const projection = equivalentInlineProjection( desktopHtml, mobileHtml, switchWidth );
 		return {
 			role,
@@ -2354,13 +2419,17 @@ function resolveResponsivePair(
 
 /**
  * Stylesheet content visible to the responsive assembly. Style blocks the
- * capture generated itself (fluid learning rules) are not source styles: the
+ * capture generated itself (fluid and viewport-class rules) are not source styles: the
  * collapse compares what the source served to each viewport, and viewport
  * scoping must never narrow a rule that carries its own media conditions.
  */
+function isWidthConditionedCaptureStyle( attributes: string ): boolean {
+	return FLUID_RULES_STYLE_ATTRIBUTE.test( attributes ) || attributes.includes( VIEWPORT_CLASS_RULES_ATTRIBUTE );
+}
+
 function styleBlocks( html: string ): string[] {
 	return [ ...html.matchAll( /<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi ) ]
-		.filter( ( match ) => ! FLUID_RULES_STYLE_ATTRIBUTE.test( match[ 1 ] ) )
+		.filter( ( match ) => ! isWidthConditionedCaptureStyle( match[ 1 ] ) )
 		.map( ( match ) => match[ 2 ].trim() );
 }
 
@@ -2470,11 +2539,11 @@ function responsiveMobileStyles(
 		.filter( Boolean );
 	// Learned rules already carry their width conditions and document-specific
 	// identities. Keep them intact alongside the scoped source styles.
-	const fluidRules = [ ...mobileHtml.matchAll( /<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi ) ]
-		.filter( match => FLUID_RULES_STYLE_ATTRIBUTE.test( match[ 1 ] ?? '' ) )
+	const learnedRules = [ ...mobileHtml.matchAll( /<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi ) ]
+		.filter( match => isWidthConditionedCaptureStyle( match[ 1 ] ?? '' ) )
 		.map( match => match[ 0 ] )
 		.join( '' );
-	return fluidRules + styleBlocks( mobileHtml )
+	return learnedRules + styleBlocks( mobileHtml )
 		.filter( ( style ) => style !== '' && ( ! skip.has( style ) || classAliases.size > 0 ) )
 		.map(
 			( original ) => {
@@ -2531,7 +2600,7 @@ function scopedStyles(
 			// Capture-generated rules carry their own media conditions and are
 			// width-independent by construction; narrowing them to one side of
 			// the switch would strand the other regime's rule.
-			if ( FLUID_RULES_STYLE_ATTRIBUTE.test( attributes ) ) return match;
+			if ( isWidthConditionedCaptureStyle( attributes ) ) return match;
 			const runs = skip instanceof SharedStyles ? skip.desktop.get( css.trim() ) : undefined;
 			if ( runs ) {
 				return runs.map( run =>
@@ -2541,7 +2610,9 @@ function scopedStyles(
 			if ( skip.has( css.trim() ) ) return `<style${ attributes }>${ css }</style>`;
 			const existingMedia = /\bmedia\s*=\s*(["'])(.*?)\1/i.exec( attributes );
 			if ( ! existingMedia ) return `<style${ attributes } media="${ media }">${ css }</style>`;
-			const combined = `${ media } and (${ existingMedia[ 2 ] })`;
+			const combined = combineMediaQueries( media, existingMedia[ 2 ]! );
+			// Independent gates preserve whole-query negation, including query lists.
+			if ( combined === undefined ) return `<style${ attributes }>@media ${ media }{${ css }}</style>`;
 			const scopedAttributes = attributes.replace(
 				existingMedia[ 0 ],
 				`media=${ existingMedia[ 1 ] }${ combined }${ existingMedia[ 1 ] }`
@@ -2551,7 +2622,11 @@ function scopedStyles(
 	);
 }
 
-function responsiveBodySignature( body: string ): string {
+function responsiveBodySignature( body: string, stylesHtml: string ): string {
+	// A styled state token changes rendering even when the element tree agrees.
+	// Ignore unstyled runtime markers, but send presentation differences through
+	// correspondence so each viewport keeps its captured classes.
+	const styledClasses = new Set( [ ...styleBlocks( stylesHtml ).join( '' ).matchAll( /\.(-?[_a-zA-Z][\w-]*)/g ) ].map( match => match[ 1 ] as string ) );
 	const $ = cheerio.load( `<body>${ body }</body>` );
 	$( 'script,style,noscript,iframe' ).remove();
 	// Consent managers lay out their own chrome per viewport; it is not the page.
@@ -2579,7 +2654,11 @@ function responsiveBodySignature( body: string ): string {
 	$( '*' ).each( ( _index, element ) => {
 		const node = $( element );
 		for ( const attribute of Object.keys( 'attribs' in element ? element.attribs : {} ) ) {
-			if ( ! STRUCTURAL_SIGNATURE_ATTRIBUTES.has( attribute ) ) node.removeAttr( attribute );
+			if ( attribute === 'class' ) {
+				const tokens = ( node.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( token => styledClasses.has( token ) ).sort();
+				if ( tokens.length ) node.attr( 'class', tokens.join( ' ' ) );
+				else node.removeAttr( 'class' );
+			} else if ( ! STRUCTURAL_SIGNATURE_ATTRIBUTES.has( attribute ) ) node.removeAttr( attribute );
 		}
 		for ( const attribute of [ 'id', 'name' ] ) {
 			const value = node.attr( attribute );

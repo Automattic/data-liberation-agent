@@ -7,11 +7,11 @@ import { isIntegrityError } from './failure-class.js';
 import type { SourceRequestGovernors } from './source-request-governor.js';
 
 /** Read client-rendered chrome before a count budget can omit its destinations. */
-export async function renderedEntryNavigation(url: string, governors: SourceRequestGovernors): Promise<string[]> {
+export async function renderedEntryNavigation(url: string, governors: SourceRequestGovernors, sourceTelemetry?: import('../platform/types.js').Platform['sourceTelemetry']): Promise<string[]> {
 	let browser: Awaited<ReturnType<typeof connectBrowser>> | undefined;
 	try {
 		browser = await connectBrowser({});
-		const context = await createSourceContext(browser, await sourceContextOptions(browser, url, { publicUrlsOnly: true }), { governors, sourceUrl: url });
+		const context = await createSourceContext(browser, await sourceContextOptions(browser, url, { publicUrlsOnly: true }), { governors, sourceUrl: url, sourceTelemetry });
 		const page = await context.newPage();
 		await page.route('**/*', async route => {
 			try { assertPublicHttpUrl(route.request().url()); }

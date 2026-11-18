@@ -1,4 +1,5 @@
 import type { Page } from 'playwright';
+import { orElse } from '../failure-class.js';
 
 export const SOURCE_BEHAVIOR_SCHEMA = 'blocks-engine-capture/source-behavior/v1';
 
@@ -192,7 +193,7 @@ export async function captureSourceBehavior( page: Page, url: string, options: {
 	// so a slow machine does not truncate a sequence and a fast page is not over-waited.
 	const quietMs = Math.min( startupMs, Math.max( 500, options.quietMs ?? 3000 ) );
 	await page.waitForTimeout( Math.min( startupMs, 1000 ) );
-	await page.waitForFunction( ( quiet ) => ( window as unknown as { __dlaBehavior: { idle: () => number } } ).__dlaBehavior.idle() > quiet, quietMs, { timeout: Math.max( 1, startupMs - 1000 ), polling: 100 } ).catch( () => undefined );
+	await page.waitForFunction( ( quiet ) => ( window as unknown as { __dlaBehavior: { idle: () => number } } ).__dlaBehavior.idle() > quiet, quietMs, { timeout: Math.max( 1, startupMs - 1000 ), polling: 100 } ).catch( orElse( undefined ) );
 	const startup = await snapshot( page );
 	const clockSamples = await page.evaluate( () => {
 		const now = new Date();
@@ -228,7 +229,7 @@ export async function captureSourceBehavior( page: Page, url: string, options: {
 		// remain owned by the established interaction capture primitives.
 		if ( await target.evaluate( ( element ) => !! element.closest( 'a[href],form' ) ) ) continue;
 		// Start each replay from a settled page so earlier phases do not leak into its trace.
-		await page.waitForFunction( () => ( window as unknown as { __dlaBehavior: { idle: () => number } } ).__dlaBehavior.idle() > 700, null, { timeout: replayMs } ).catch( () => undefined );
+		await page.waitForFunction( () => ( window as unknown as { __dlaBehavior: { idle: () => number } } ).__dlaBehavior.idle() > 700, null, { timeout: replayMs } ).catch( orElse( undefined ) );
 		await page.evaluate( () => ( window as unknown as { __dlaBehavior: { reset: () => void } } ).__dlaBehavior.reset() );
 		await target.click( { force: true, timeout: 3000 } );
 		await page.waitForTimeout( replayMs );

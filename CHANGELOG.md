@@ -15,6 +15,460 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.35.49] - 2026-11-18
+
+### Changed
+- regenerate plugin bundles
+- give carousel exploration browser passes an explicit timeout
+
+### Fixed
+- await late-mounting footer media within readiness bound
+- remove late consent banners before serialization
+
+## [0.35.48] - 2026-11-18
+
+### Changed
+- regenerate plugin bundles
+- Let streaming source images outlast the base media-ready window
+
+## [0.35.47] - 2026-11-18
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- keep a fixed-width consent panel's width per breakpoint
+
+## [0.35.46] - 2026-11-18
+
+### Changed
+- regenerate plugin bundles
+- Key viewport entrances by rendered text
+- Settle viewport entrances visible when their CSS binding is lost
+
+### Fixed
+- fail unresolved copy anchors only when the copy does worse than the source
+- port App Market map widgets that name their location to a Google Maps embed
+- keep canonical instance ids stable when export re-canonicalizes a route
+- keep every referenced oversized crop of one family
+- report unavailable derivation sources instead of template failures
+- admit routes under a provisional memory estimate while the reference route calibrates
+
+## [0.35.45] - 2026-11-18
+
+### Changed
+- regenerate plugin bundles
+- settle the relative-slide fixture well inside readiness bounds
+- stop gating later widths on an image that never finishes
+
+### Fixed
+- freeze source references at DOMContentLoaded instead of load
+
+## [0.35.44] - 2026-11-17
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- freeze source references at DOMContentLoaded instead of load
+
+## [0.35.43] - 2026-11-17
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- make shared navigation route-neutral so every route shares one header
+
+## [0.35.42] - 2026-11-17
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- stop admitting routes once the source stops answering navigations
+
+## [0.35.41] - 2026-11-17
+
+### Changed
+- regenerate plugin bundles
+- use shared page fixture in media-settling serialization test
+- measure per-document sweep costs
+
+### Fixed
+- preserve distinct SPA routes sharing a canonical URL
+- leave script-driven transforms live during fluid learning
+- preserve viewport entrance repeat sides
+
+## [0.35.40] - 2026-11-17
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- export URL embeds using their declared destination
+
+## [0.35.39] - 2026-11-17
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- keep shared chrome headers route-stable and keep headers after a hidden first sibling
+
+## [0.35.38] - 2026-11-17
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- capture shared img placeholders with their own bytes
+
+## [0.35.37] - 2026-11-17
+
+### Changed
+- regenerate plugin bundles
+- Treat focusable-link wrappers as navigation, not choices
+
+### Fixed
+- preserve mobile startup evidence before full-page screenshots
+- carry the mobile viewport in box-tree sidecars for single-document pages
+
+## [0.35.36] - 2026-11-17
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- keep distinct srcset images separate from shared placeholders
+
+## [0.35.35] - 2026-11-17
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- use virtual-root paths in box-tree sidecars and stop listing them as receipt reports
+
+## [0.35.34] - 2026-11-17
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- bind box-tree evidence to final website documents
+
+## [0.35.33] - 2026-11-17
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- require successful entry documents before platform detection
+- drop unsafe non-entry route paths during export allocation
+
+## [0.35.32] - 2026-11-17
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- normalize dialog panel replay serialization across routes
+- exclude project sites from GitHub Pages user-site capture
+
+## [0.35.31] - 2026-11-17
+
+### Changed
+- regenerate plugin bundles
+- extract route rendering and portable website projection
+
+## [0.35.30] - 2026-11-16
+
+### Changed
+- regenerate plugin bundles
+- Capture settled scroll-state values and probe them before per-control probes
+- re-land shared browser fixtures with ordered server teardown
+- decide the 0ms cross-site navigation refusal from an awaited event
+
+### Fixed
+- await slow root-class viewport resizes
+- bound width-class alias projection growth
+- prevent abandoned profiles from resurrecting browsers
+- serialize every route at its initial scroll state
+
+## [0.35.29] - 2026-11-16
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- exclude observed entrance toggles from width classes
+
+## [0.35.28] - 2026-11-16
+
+### Changed
+- regenerate plugin bundles
+- stabilize finite CSS startup lifecycle assertion
+
+## [0.35.27] - 2026-11-16
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- accept Node timeout variants in connection-budget test
+- keep box-tree node ids out of viewport entrance attribute diffs
+
+## [0.35.26] - 2026-11-16
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- settle viewport restoration before class learning
+
+## [0.35.25] - 2026-11-16
+
+### Changed
+- regenerate plugin bundles
+- cook candidate
+
+## [0.35.24] - 2026-11-16
+
+### Changed
+- regenerate plugin bundles
+- skip the device-check retry for confirmed identity differences; drop Squarespace census beacons
+
+### Fixed
+- record stored JPEG dimensions before EXIF orientation
+- isolate failed collection controls from coverage
+- update src/lib/capture-vocabulary.ts and 4 more files
+
+## [0.35.23] - 2026-11-16
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- do not bind carousel slides to unrelated dialog triggers
+- observe runtime fills for escalated template members
+
+## [0.35.22] - 2026-11-15
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- scope viewport class aliases to matching elements
+
+## [0.35.21] - 2026-11-15
+
+### Changed
+- regenerate plugin bundles
+- extract route collection, media candidates and route links
+
+### Fixed
+- resolve Base44 image renditions and scope export failures
+- ship a capture refused after its entrypoint as a partial site
+- avoid freezing attribute-mapped image aspect ratios
+
+## [0.35.20] - 2026-11-15
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- settle discovery and provision engine Chromium
+
+## [0.35.19] - 2026-11-15
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- preserve scroll-listener viewport reveals
+
+## [0.35.18] - 2026-11-15
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- tolerate slow TCP connections in Node source requests
+
+## [0.35.17] - 2026-11-15
+
+### Changed
+- regenerate plugin bundles
+- Keep proven perpetual motion excluded through main-thread stalls
+
+### Fixed
+- let a captured member stand in for a template-cluster representative that failed capture
+- admit server-rendered Dawn-family products
+- exclude spontaneous carousel changes from dialog probes
+- preserve source identity for srcset width probes
+
+## [0.35.16] - 2026-11-15
+
+### Changed
+- regenerate plugin bundles
+- Revert "test: share one Chromium per Vitest worker (#1854)"
+- Template clusters: members ship every representative document, deferred style media, and clock-stable verification
+
+### Fixed
+- deduplicate tracking-parameter routes
+
+## [0.35.15] - 2026-11-15
+
+### Changed
+- regenerate plugin bundles
+- consolidate capture-export fixtures and browser setup
+
+### Fixed
+- pin browser image negotiation and verify captured renditions
+
+## [0.35.14] - 2026-11-15
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- reject timer-driven viewport class contracts
+- keep viewport-class sweep sheets unscoped in responsive assembly
+- preserve width-scoped aliases in captured component states
+- correct Shopify product sub-cluster derivation
+- gate unsafe runtime mount derivation
+
+## [0.35.13] - 2026-11-14
+
+### Changed
+- regenerate plugin bundles
+- share one website inventory across post-render consumers
+
+### Fixed
+- preserve verified fonts despite stale CSS format hints
+
+## [0.35.12] - 2026-11-14
+
+### Changed
+- regenerate plugin bundles
+- Admit references past layout-neutral perpetual motion
+- Template clusters: derived members show their own featured image where the representative's rendered
+
+### Fixed
+- remove hosted comment and Followers runtime elements
+
+## [0.35.11] - 2026-11-14
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- collapse listing pagination into canonical routes
+
+## [0.35.10] - 2026-11-14
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- record Vary secondary keys from the request's full headers
+- derive per adapter-declared member shape
+- treat nested duplicate ids as one anchor target
+- rethrow integrity errors from screenshot fallbacks
+
+## [0.35.9] - 2026-11-14
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- read every robots.txt sitemap, gzip sitemaps and RSS/Atom feeds
+
+## [0.35.8] - 2026-11-14
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- recognize entrypoint-proven canonical host aliases
+
+## [0.35.7] - 2026-11-14
+
+### Changed
+- regenerate plugin bundles
+- declare the baseline capture as one step list
+
+### Fixed
+- emit one canonical term archive per term
+- ignore one-sided runtime-injected inline styles in cluster verification
+- transplant differing body style text into derived members
+- collect painted text in the measurement rest pose
+- score a shared cross-origin embed by its document host
+- treat text before the document scroll origin as unpainted
+- block adapter-declared source telemetry
+- preserve viewport-specific state classes in responsive assembly
+
+## [0.35.6] - 2026-11-13
+
+### Changed
+- regenerate plugin bundles
+- cook candidate
+
+### Fixed
+- ignore runtime-filled mounts when anchoring template slots
+- rewrite 7.1 item dates and pagination during derivation
+
+## [0.35.5] - 2026-11-13
+
+### Changed
+- regenerate plugin bundles
+- move the source load into load-baseline.ts
+
+### Fixed
+- preserve valid stylesheet media in responsive assembly
+- stabilize responsive projection hooks across pages
+- ignore whitespace in entrance transition identity
+- exclude client-routed soft-404s by nonce-sibling render match
+- record device-check loads for replay
+
+## [0.35.4] - 2026-11-13
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- resolve attribute-only template slots without text equality
+
+## [0.35.3] - 2026-11-13
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- fall back to the declared organization name when JSON-LD has no WebSite node
+
+## [0.35.2] - 2026-11-13
+
+### Changed
+- regenerate plugin bundles
+- Template clusters: retry a failed prefetched member document inline
+
+### Fixed
+- preserve sampled heights when content wrapping defeats fluid fitting
+- treat text under a transparent ancestor as unpainted
+
+## [0.35.1] - 2026-11-13
+
+### Changed
+- regenerate plugin bundles
+- faster probes, export and parallel profiles
+- share parsed route documents across stages (-19% on Wix, byte-identical)
+
+### Fixed
+- replay shared resources in collection and device probes
+- default template clusters for structured-content adapters
+
 ## [0.35.0] - 2026-11-13
 
 ### Added

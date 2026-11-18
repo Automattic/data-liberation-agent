@@ -9,6 +9,12 @@ export class IntegrityError extends Error {
 	}
 }
 
+/** `.catch( orElse( fallback ) )`: operational failures yield the fallback; integrity errors still throw. */
+export const orElse = <T>( fallback: T ) => ( error: unknown ): T => {
+	if ( isIntegrityError( error ) ) throw error; // failure-class: integrity
+	return fallback;
+};
+
 /**
  * Whether `error` must fail the capture rather than degrade the unit that raised
  * it: declared integrity errors and programmer errors. Any other error is

@@ -14,8 +14,8 @@ it('does not verify placeholders or unknown downloads from an extension or respo
  }
 });
 
-it('verifies query variants before merging and rejects font format mismatches without image fallback', async () => {
- const font = readFileSync('test/fixtures/resource-assets/roboto-latin-400-normal.woff');
+it('verifies query variants and font bytes regardless of format hints without image fallback', async () => {
+ const font = readFileSync('test/fixtures/resource-assets/roboto-latin-400-normal.woff2');
  const server = createServer((req, res) => {
   res.end(req.url!.startsWith('/font') ? font : Buffer.from(`%PDF-1.4\n${req.url!.includes('different') ? 'different' : 'same'}\n%%EOF`));
  });
@@ -25,14 +25,19 @@ it('verifies query variants before merging and rejects font format mismatches wi
  const root = mkdtempSync(join(process.cwd(), '.tmp-test/resource-aliases-'));
  // Seed capture evidence so this test still exercises font byte verification.
  mkdirSync(join(root, 'resources'));
- writeFileSync(join(root, 'resources/font.woff'), font);
- writeFileSync(join(root, 'resources/manifest.json'), JSON.stringify({resources:{[`${url}font`]:{path:'resources/font.woff', contentType:'font/woff'}}}));
+ writeFileSync(join(root, 'resources/font.ttf'), font);
+ writeFileSync(join(root, 'resources/not-font.ttf'), '<html>not a font</html>');
+ writeFileSync(join(root, 'resources/manifest.json'), JSON.stringify({resources:{
+  [`${url}font`]:{path:'resources/font.ttf', contentType:'font/ttf'},
+  [`${url}not-font`]:{path:'resources/not-font.ttf', contentType:'font/ttf'},
+ }}));
  try {
-  const records = await runWithTrustedOrigins([url], () => captureAssets(root, [{url, html:'<a href="/terms.pdf?a">A</a><a href="/terms.pdf?b">B</a><a href="/terms.pdf?different">C</a><style>@font-face{src:url(/font) format("woff2")}</style>'}]));
-  expect(records).toHaveLength(3);
-  expect(records.filter(r=>r.original)).toHaveLength(2);
+  const records = await runWithTrustedOrigins([url], () => captureAssets(root, [{url, html:'<a href="/terms.pdf?a">A</a><a href="/terms.pdf?b">B</a><a href="/terms.pdf?different">C</a><style>@font-face{src:url(/font) format("truetype")}@font-face{src:url(/not-font) format("truetype")}</style>'}]));
+  expect(records).toHaveLength(4);
+  expect(records.filter(r=>r.original)).toHaveLength(3);
   expect(records.find(r=>r.source_urls.length === 2)!.references).toHaveLength(2);
-  expect(records.find(r=>r.kind === 'font')).toMatchObject({original:null, error:expect.stringContaining('declared format')});
+  expect(records.find(r=>r.resolved_original === `${url}font`)).toMatchObject({original:{content_type:'font/woff2'}, local_path:expect.stringMatching(/\.woff2$/)});
+  expect(records.find(r=>r.resolved_original === `${url}not-font`)).toMatchObject({original:null, error:expect.stringContaining('unverified resource bytes')});
  } finally {
   server.closeAllConnections(); await new Promise<void>(resolve=>server.close(()=>resolve()));
   rmSync(root,{recursive:true,force:true});
@@ -50,7 +55,7 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('non-image public captu
  it('records only the used family from a three-family font catalog (~15s)', async () => {
   const font = readFileSync('test/fixtures/resource-assets/roboto-latin-400-normal.woff2');
   const requests: string[] = [];
-  const css = ['Used', 'Unused', 'Other'].map(family => `@font-face{font-family:${family};src:url(/${family}.woff2) format('woff2')}`).join('');
+  const css = ['Used', 'Unused', 'Other'].map(family => `@font-face{font-family:${family};src:url(/${family}.woff2) format('truetype')}`).join('');
   const server = createServer((req, res) => {
    requests.push(req.url!);
    if (req.url === '/catalog.css') { res.setHeader('content-type', 'text/css'); res.end(css); }
@@ -74,6 +79,9 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('non-image public captu
    expect(exportedCss).not.toMatch(/(?:Unused|Other)\.woff2/);
    const sources = [...exportedCss.matchAll(/url\(["']?([^"')]+)["']?\)/g)].map(match=>match[1]);
    expect(sources).toHaveLength(1);
+   expect(exportedCss).toMatch(/url\([^)]+\)\s*format\(["']woff2["']\)/);
+   expect(exportedCss).not.toContain('truetype');
+   expect(sources[0]).toMatch(/\/?media\/[^/]+\.woff2$/);
    expect(resourceContentType(readFileSync(join(root, 'website', sources[0])), 'font')).toBe('font/woff2');
   } finally {
    server.closeAllConnections(); await new Promise<void>(resolve=>server.close(()=>resolve()));

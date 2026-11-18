@@ -1,7 +1,7 @@
-import { createServer } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { expect, it } from 'vitest';
+import { expect } from 'vitest';
+import { it } from '../../../test/browser.js';
 import { captureScreenshots } from './screenshotter.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 import { mergeConsentLayouts } from '../consent-banner-layout.js';
@@ -46,13 +46,33 @@ it('keeps otherwise identical layouts distinct when message margins differ', () 
   ]);
 });
 
+it('keeps fixed panel widths per breakpoint but merges a panel that follows the viewport', () => {
+  // A centered card that is 350px wide up to a breakpoint and 406px beyond it.
+  expect(mergeConsentLayouts([
+    { min_width: 1440, max_width: 1440, direction: 'column', span: 'inset', inline: 'center', width: 406 },
+    { min_width: 768, max_width: 768, direction: 'column', span: 'inset', inline: 'center', width: 350 },
+    { min_width: 1023, max_width: 1023, direction: 'column', span: 'inset', inline: 'center', width: 350 },
+    { min_width: 1024, max_width: 1024, direction: 'column', span: 'inset', inline: 'center', width: 406 },
+  ])).toEqual([
+    { max_width: 1023, direction: 'column', span: 'inset', inline: 'center', width: 350 },
+    { min_width: 1024, direction: 'column', span: 'inset', inline: 'center', width: 406 },
+  ]);
+  // Widths on one line across viewports (constant gutters, a share of the
+  // viewport) are one fluid layout.
+  for (const widths of [[342, 867, 1392], [351, 824, 1296]]) {
+    expect(mergeConsentLayouts([390, 915, 1440].map((viewport, i) => (
+      { min_width: viewport, max_width: viewport, direction: 'row' as const, span: 'inset' as const, inline: 'center' as const, width: widths[i] }
+    )))).toEqual([{ direction: 'row', span: 'inset', inline: 'center' }]);
+  }
+});
+
 // A consent platform (Usercentrics) renders its banner in the shadow tree of
 // an empty host placed after the page content: nothing is parked off-screen.
-it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a shadow-hosted banner without waiting for an entrance', async () => {
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a shadow-hosted banner without waiting for an entrance', async ({ newPage }) => {
   const { chromium } = await import('playwright');
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+
+  {
+    const page = await newPage({ viewport: { width: 1440, height: 900 } });
     await page.setContent(`<main style="min-height:1200px"><h1>Page title</h1></main><aside id="usercentrics-cmp-ui"></aside><script>document.querySelector('aside').attachShadow({ mode: 'open' }).innerHTML = '<div style="position:fixed;left:0;right:0;bottom:0;height:240px;padding:24px;background:#fff"><p>This site uses cookies to analyse traffic.</p><button onclick="this.getRootNode().host.remove()">Accept All</button></div>'</script>`);
     // Count entrance-loop checks in the browser instead of timing protocol
     // round trips, which also include unrelated worker/Chromium scheduling.
@@ -67,19 +87,17 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a shadow-hosted banner without 
     expect(dismissed.map(item => [item.kind, item.selector])).toEqual([['consent', 'aside#usercentrics-cmp-ui']]);
     // A zero-area host must not enter the requestAnimationFrame settle loop.
     expect(await page.evaluate(() => (window as typeof window & { entranceChecks: number }).entranceChecks)).toBe(1);
-  } finally {
-    await browser.close();
   }
 });
 
 // Regression for builder card banners (GoDaddy): a heading title above block-flow
 // prose, a stretched control, and a card that slides in by transform to rest at
 // one edge on desktop but spans the viewport on mobile.
-it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a titled card banner with its resting edge, width and stretched control', async () => {
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a titled card banner with its resting edge, width and stretched control', async ({ newPage }) => {
   const { chromium } = await import('playwright');
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+
+  {
+    const page = await newPage({ viewport: { width: 1440, height: 900 } });
     await page.setContent(`<style>.banner{position:fixed;right:0;bottom:-500px;width:400px;margin:24px;box-sizing:border-box;padding:24px;background:#898989;border-radius:7px;box-shadow:0 2px 6px rgba(0,0,0,.3);color:#000;transition:transform .3s}.banner.in{transform:translateY(-500px)}.banner h4{margin:0;padding-bottom:8px;font-size:22px;line-height:27.5px}.banner p{margin:0 0 16px;font-size:16px}.banner button{display:block;width:100%;min-height:40px;margin:24px 0 4px;font-weight:700;letter-spacing:1px}@media (max-width:767px){.banner{left:0;width:auto;margin:0;border-radius:0}}</style><main style="min-height:1200px"><h1>Page title</h1></main><div class="banner" id="cookie-banner"><h4>This website uses cookies.</h4><p>We use cookies to analyze website traffic.</p><button onclick="this.parentNode.remove()">ACCEPT</button></div><script>requestAnimationFrame(() => requestAnimationFrame(() => document.querySelector('.banner').classList.add('in')))</script>`);
     const dismissed = await dismissOverlays(page, { consentViewports: [{ width: 390, height: 844 }] });
     const banner = dismissed.find(item => item.consentBanner)?.consentBanner;
@@ -91,8 +109,6 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a titled card banner with its r
       expect.objectContaining({ direction: 'column', button_align: 'stretch', span: 'full', edge_offset: '0px' }),
       expect.objectContaining({ direction: 'column', button_align: 'stretch', span: 'inset', inline: 'end', width: 400, inline_offset: 24, edge_offset: '24px', border_radius: '7px' }),
     ]);
-  } finally {
-    await browser.close();
   }
 });
 
@@ -100,11 +116,11 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a titled card banner with its r
 // body copy, a screen-reader legend, category toggles, a logo link and several
 // opt-in buttons. The message is the heading and body, set in the body's type;
 // "Accept all" is the accept control and the logo is not a policy link.
-it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a multi-level consent dialog as its message and accept-all control', async () => {
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a multi-level consent dialog as its message and accept-all control', async ({ newPage }) => {
   const { chromium } = await import('playwright');
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+
+  {
+    const page = await newPage({ viewport: { width: 1440, height: 900 } });
     await page.setContent(`<style>#CookieDialog{position:fixed;top:200px;left:220px;width:1000px;z-index:1000;background:#fff;font:15px Arial,sans-serif;border-radius:16px}
       h2{font:23px Georgia,serif;margin:0}.body{font-size:14px}.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}</style>
       <main><h1>Page title</h1><p>${'Ordinary page copy. '.repeat(60)}</p></main>
@@ -121,18 +137,16 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a multi-level consent dialog as
     expect(banner?.accept_label).toBe('Accept all');
     expect(banner?.reject_label).toBe('Decline');
     expect(banner?.policy_link).toBeUndefined();
-  } finally {
-    await browser.close();
   }
 });
 
 // One Chromium session (~1 second): a transparent full-viewport wrapper must not
 // obscure the painted panel, and inline links must remain part of the prose.
-it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a painted panel inside a transparent wrapper and preserves inline link labels', async () => {
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a painted panel inside a transparent wrapper and preserves inline link labels', async ({ newPage }) => {
   const { chromium } = await import('playwright');
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+
+  {
+    const page = await newPage({ viewport: { width: 1440, height: 900 } });
     const fixture = readFileSync(new URL('./fixtures/consent-panel.html', import.meta.url), 'utf8');
     await page.setContent(fixture.replace('</style>', '#cs-banner .cs-panel{background:rgb(3,26,78)}#cs-banner .cs-text{color:#f8f8f8}</style>'));
     const dismissed = await dismissOverlays(page);
@@ -146,17 +160,15 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a painted panel inside a transp
     expect(banner?.colors?.text).toBe('rgb(248, 248, 248)');
     expect(banner?.accept_label).toBe('Accept');
     expect(banner?.reject_label).toBe('Reject');
-  } finally {
-    await browser.close();
   }
 });
 
 // One Chromium session (~1 second), through the real readConsentBanner path.
-it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads consent controls independently of their language and anchor fragments', async () => {
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads consent controls independently of their language and anchor fragments', async ({ newPage }) => {
   const { chromium } = await import('playwright');
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+
+  {
+    const page = await newPage({ viewport: { width: 1440, height: 900 } });
     // A real document URL matters: on about:blank, fragment anchors do not
     // resolve to HTTP(S), so the original misclassification would go unnoticed.
     await page.route('https://example.com/page', route => route.fulfill({ body: '<main>Page title</main>', contentType: 'text/html' }));
@@ -186,17 +198,15 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads consent controls independently 
       expect(banner?.accept_label).toBe(fixture.accept);
       expect(banner?.policy_link).toEqual(fixture.policy);
     }
-  } finally {
-    await browser.close();
   }
 });
 
 // One Chromium session (~1 second) covers border omission, gaps and margin-only bisection.
-it.skipIf(process.env.SKIP_BROWSER_TESTS)('omits invisible borders and bisects margin-only layout changes', async () => {
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('omits invisible borders and bisects margin-only layout changes', async ({ newPage }) => {
   const { chromium } = await import('playwright');
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const page = await browser.newPage({ viewport: { width: 768, height: 900 } });
+
+  {
+    const page = await newPage({ viewport: { width: 768, height: 900 } });
     const fixture = readFileSync(new URL('./fixtures/consent-banner.html', import.meta.url), 'utf8');
     for (const [border, gap, expectedGap] of [
       ['none', 'normal', '0px'],
@@ -223,24 +233,60 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('omits invisible borders and bisects m
         { min_width: 415, direction: 'row', align_items: 'center', button_align: 'end', text_margin: '0px 15px 0px 0px', edge_offset: '0px', span: 'full' },
       ]);
     }
-  } finally {
-    await browser.close();
   }
 });
 
+// A modal card (a custom HTML embed) with a fixed width that steps at a breakpoint.
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('bisects the breakpoint where a fixed-width card changes width', async ({ newPage }) => {
+  const page = await newPage({ viewport: { width: 1440, height: 900 } });
+  const popup = (card: string) => `<style>body{margin:0}#cookiePopup{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:2147483647}.backdrop{position:absolute;inset:0;background:rgba(0,0,0,.75)}
+    .card{position:relative;width:336px;padding:50px 35px 30px;border-radius:40px;background:#fff;display:flex;flex-direction:column;align-items:center}
+    ${card}</style>
+    <main style="min-height:1200px"><h1>Page title</h1><p>${'Page content that is not part of the popup. '.repeat(8)}</p></main>
+    <div id="cookiePopup"><div class="backdrop"></div><div class="card"><h2>These are no cookie settings.</h2><p>This is our attitude towards cookies.</p><button onclick="document.getElementById('cookiePopup').remove()">Accept all</button></div></div>`;
+  await page.setContent(popup('@media (max-width:1023px){.card{width:280px}}'));
+  const dismissed = await dismissOverlays(page, { consentViewports: [{ width: 768, height: 900 }] });
+  const banner = dismissed.find(item => item.consentBanner)?.consentBanner;
+  expect(banner?.position).toBe('center');
+  expect(banner?.presentation?.layout?.map(({ min_width, max_width, span, inline, width }) => ({ min_width, max_width, span, inline, width }))).toEqual([
+    { min_width: undefined, max_width: 1023, span: 'inset', inline: 'center', width: 350 },
+    { min_width: 1024, max_width: undefined, span: 'inset', inline: 'center', width: 406 },
+  ]);
+  // A card sized by the viewport stays one fluid layout.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.setContent(popup('.card{width:calc(80% - 70px)}'));
+  const fluid = (await dismissOverlays(page, { consentViewports: [{ width: 768, height: 900 }] })).find(item => item.consentBanner)?.consentBanner;
+  expect(fluid?.presentation?.layout?.map(({ min_width, max_width, width }) => ({ min_width, max_width, width }))).toEqual([
+    { min_width: undefined, max_width: undefined, width: undefined },
+  ]);
+});
+
 // One real capture/export pass (~15 seconds), no mocked browser or export seams.
-it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports consent intent before a click removes the banner, but never banner DOM', async () => {
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports consent facts but removes late, differing consent regions and their backdrops', async ({ serve }) => {
   const fixture = readFileSync(new URL('./fixtures/consent-banner.html', import.meta.url), 'utf8');
-  const server = createServer((req, res) => {
+  const { server } = await serve((req, res) => {
+    if (req.url?.includes('liberation-absent-')) { res.writeHead(404); res.end(); return; }
     res.setHeader('content-type', 'text/html');
     res.end(req.url === '/other' ? fixture.replace('This website uses cookies for analytics.', 'This website uses cookies for preferences.') : fixture);
   });
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
   mkdirSync('.tmp-test', { recursive: true });
   const outputDir = mkdtempSync(join(process.cwd(), '.tmp-test/consent-'));
   try {
-    const result = await captureScreenshots({ urls: [url, `${url}other`, `${url}privacy`], primaryUrl: url, outputDir, concurrency: 1, deviceMode: 'dual', viewports: [
+    const result = await captureScreenshots({ urls: [url, `${url}other`, `${url}privacy`], primaryUrl: url, outputDir, concurrency: 1, deviceMode: 'dual',
+      // Mount after load-time dismissal, immediately before serialization. The
+      // accept handler hides the region without removing its authored DOM.
+      beforeSerialize: async (page, ctx) => {
+        if (ctx.url !== `${url}other`) return;
+        await page.evaluate(() => {
+          document.body.insertAdjacentHTML('beforeend', `<div id="late-backdrop" class="overlay-mask" style="position:fixed;inset:0;background:#0004"></div>
+            <section id="late-notice" role="region" style="position:fixed;bottom:0;left:0;right:0;background:white;padding:12px">
+              <p>This page uses cookies for preferences.</p><a href="/privacy">Privacy policy</a>
+              <button onclick="this.parentElement.style.display='none';document.getElementById('late-backdrop').style.display='none'">Accept</button>
+            </section>`);
+        });
+      }, viewports: [
       { id: 'desktop', width: 1440, height: 900 }, { id: 'mobile', width: 390, height: 844 },
     ] });
     expect(result.failed).toBe(0);
@@ -266,7 +312,11 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports consent intent before a click
       source_selector: 'div.cc-window.cc-banner',
     });
     for (const route of ['index.html', 'other/index.html', 'privacy/index.html']) {
-      expect(readFileSync(join(outputDir, 'website', route), 'utf8')).not.toContain('This website uses cookies');
+      const html = readFileSync(join(outputDir, 'website', route), 'utf8');
+      expect(html).not.toContain('This website uses cookies');
+      expect(html).not.toContain('This page uses cookies');
+      expect(html).not.toContain('id="late-backdrop"');
+      expect(html).toContain('Community garden');
     }
     const receipt = JSON.parse(readFileSync(join(outputDir, 'capture-receipt.json'), 'utf8'));
     expect(receipt.discoveryDiagnostics).toContainEqual(expect.objectContaining({ code: 'consent_banner_differs', url: `${url}other` }));
@@ -274,6 +324,13 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports consent intent before a click
     const manifestPath = join(outputDir, 'screenshots/manifest.json');
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
     expect(manifest.entries[url].dismissed[0].kind).toBe('consent');
+    expect(manifest.entries[`${url}other`].dismissed).toContainEqual(expect.objectContaining({
+      selector: 'section#late-notice', kind: 'consent',
+      consentBanner: expect.objectContaining({ text: expect.stringContaining('This page uses cookies for preferences.'), accept_label: 'Accept' }),
+    }));
+    const evidence = JSON.stringify(manifest.entries[`${url}other`]);
+    expect(evidence).toContain('dismissed_overlay_removed');
+    expect(evidence).toContain('consent dismissed by close-click (section#late-notice)');
     // The same export keeps an uncaptured policy URL absolute.
     const uncapturedPolicyUrl = `${url}uncaptured-policy`;
     for (const entry of Object.values(manifest.entries) as Array<{ dismissed: Array<{ consentBanner?: { policy_link?: { href: string } } }> }>) {
@@ -289,7 +346,7 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports consent intent before a click
     exportSite();
     expect(existsSync(join(outputDir, 'website/consent-banner.json'))).toBe(false);
   } finally {
-    await new Promise<void>(resolve => server.close(() => resolve()));
+
     rmSync(outputDir, { recursive: true, force: true });
   }
 }, 60_000);

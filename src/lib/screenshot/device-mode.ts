@@ -3,6 +3,7 @@ import { load } from 'cheerio';
 import { createHash } from 'node:crypto';
 import { documentsDiffer } from '../responsive-assembly.js';
 import { CONSENT_OVERLAY_DIALOG_SELECTOR, CONSENT_VENDOR_RE, isConsentOverlayRoot, type ConsentOverlayElement } from '../consent-overlay.js';
+import { orElse } from '../failure-class.js';
 
 /**
  * Whether a capture renders the phone profile as its own document.
@@ -108,8 +109,8 @@ export async function resampleSiteServerHtml(
 	if ( first !== 'different' ) return { serverHtml: first };
 	// Start both requests together. A failed re-sample cannot disprove the first difference.
 	const [ desktop, phone ] = await Promise.all( [
-		fetchDesktop().catch( () => undefined ),
-		fetchPhone().catch( () => undefined ),
+		fetchDesktop().catch( orElse( undefined ) ),
+		fetchPhone().catch( orElse( undefined ) ),
 	] );
 	return {
 		serverHtml: desktop === undefined || phone === undefined ? first : compareServerHtml( desktop, phone ),
@@ -470,6 +471,8 @@ export interface RouteDeviceDecision {
 	structure?: StructureComparison;
 	/** The first reading differed, so both pages were read again after settling. */
 	rechecked?: boolean;
+	/** Dual because the phone identity still renders its own body classes after the recheck. */
+	identityConfirmed?: boolean;
 	/**
 	 * Dual route only: the stylesheet width boundary (a `max-width` value, or
 	 * one below a `min-width` value) just above which the phone identity stops
@@ -723,14 +726,19 @@ export class RouteDeviceEvidence {
 	record( url: string, scripts: readonly string[], inlineHash: string ): void { this.passed.set( url, { scripts, inlineHash } ); }
 }
 
-/** Retry errors and degraded/differing rendered loads once, in fresh contexts. */
+/**
+ * Retry errors and degraded/differing rendered loads once, in fresh contexts.
+ * A retry can only turn `dual` into `reflow-only`; an identity difference the
+ * recheck already confirmed (`identityConfirmed`) is final, so it costs no
+ * second pair of source loads.
+ */
 export async function retryRouteDeviceCheck( check: () => Promise< RouteDeviceDecision > ): Promise< RouteDeviceDecision > {
 	let result: RouteDeviceDecision = { mode: 'dual', reason: 'check unavailable' };
 	for ( let attempt = 1; attempt <= 2; attempt++ ) {
 		try { result = await check(); }
 		catch ( error ) { result = { mode: 'dual', reason: `the phone check failed: ${ String( error ) }` }; }
 		result.attempts = attempt;
-		if ( result.mode === 'reflow-only' ) break;
+		if ( result.mode === 'reflow-only' || result.identityConfirmed ) break;
 	}
 	return result;
 }

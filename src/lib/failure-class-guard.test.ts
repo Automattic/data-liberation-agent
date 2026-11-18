@@ -182,6 +182,30 @@ function collectSites( file: string, source: ts.SourceFile, heritage: Map<string
 	return { sites, malformed };
 }
 
+/** Browser callbacks are serialized into the page and cannot use Node's orElse. */
+const BROWSER_CALLBACK_METHODS = new Set( [ 'evaluate', 'waitForFunction', 'addInitScript', 'evaluateAll', 'evaluateHandle', '$eval', '$$eval' ] );
+
+function bareCatchSites( source: ts.SourceFile ): string[] {
+	const sites: string[] = [];
+	const visit = ( node: ts.Node ) => {
+		if ( ( ts.isArrowFunction( node ) || ts.isFunctionExpression( node ) ) && ts.isCallExpression( node.parent ) && node.parent.arguments[ 0 ] === node && ts.isPropertyAccessExpression( node.parent.expression ) && BROWSER_CALLBACK_METHODS.has( node.parent.expression.name.text ) ) return;
+		if ( ts.isCallExpression( node ) && ts.isPropertyAccessExpression( node.expression ) && node.expression.name.text === 'catch' ) {
+			const callback = node.arguments[ 0 ];
+			if ( callback && ts.isArrowFunction( callback ) && callback.parameters.length === 0 ) {
+				const body = callback.body;
+				// Work-bearing handlers (logging, diagnostics, state changes) remain explicit.
+				if ( ! ts.isBlock( body ) || body.statements.length === 0 || ( body.statements.length === 1 && ts.isReturnStatement( body.statements[ 0 ] ) ) ) {
+					const line = source.getLineAndCharacterOfPosition( callback.getStart( source ) ).line + 1;
+					sites.push( `${ source.fileName }:${ line } use .catch( orElse( fallback ) )` );
+				}
+			}
+		}
+		ts.forEachChild( node, visit );
+	};
+	visit( source );
+	return sites;
+}
+
 type Baseline = Record<string, Record<string, number>>;
 
 function tally( sites: Site[] ): Baseline {
@@ -194,6 +218,27 @@ function tally( sites: Site[] ): Baseline {
 }
 
 describe( 'failure-class guard', () => {
+	it( 'requires orElse for Node-side bare catch fallbacks in screenshot code', () => {
+		const sites = scopeFiles().filter( file => file.startsWith( 'src/lib/screenshot/' ) ).flatMap( file => bareCatchSites( sourceFile( file, readFileSync( join( ROOT, file ), 'utf8' ) ) ) );
+		expect( sites ).toEqual( [] );
+	} );
+
+	it( 'finds bare fallbacks but skips browser callback bodies, not other call arguments', () => {
+		const browser = [ ...BROWSER_CALLBACK_METHODS ].flatMap( method => [
+			`page.${ method }( () => animation.finished.catch( () => {} ), task.catch( () => false ) );`,
+			`page.${ method }( function () { animation.finished.catch( () => undefined ); } );`,
+		] );
+		const source = sourceFile( 'fixture.ts', [
+			'promise.catch( () => false );',
+			'promise.catch( () => {} );',
+			'promise.catch( () => { return null; } );',
+			'promise.catch( orElse( false ) );',
+			'promise.catch( () => { log(); state = false; } );',
+			...browser,
+		].join( '\n' ) );
+		expect( bareCatchSites( source ) ).toHaveLength( 3 + BROWSER_CALLBACK_METHODS.size );
+	} );
+
 	it( 'classifies sites by error class and by annotation, and reports malformed annotations', () => {
 		const text = [
 			'class Contained extends IntegrityError {}',

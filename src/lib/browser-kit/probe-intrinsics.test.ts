@@ -1,30 +1,31 @@
-import { afterAll, beforeAll, expect, it } from 'vitest';
+import { expect, beforeAll, afterAll } from 'vitest';
+import { it as browserTest } from '../../../test/browser.js';
 import { createServer, type Server } from 'node:http';
 import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { captureScreenshots } from '../screenshot/screenshotter.js';
 import { createReferenceCollector, type FidelityReference } from '../fidelity/reference.js';
-import { chromium, type Browser } from 'playwright';
+
 import { createSourceContext } from './source-identity.js';
 import { learnAndApplyFluidGeometry } from '../screenshot/fluid-capture.js';
 import { captureNativeViewTimelines } from '../screenshot/native-view-timelines.js';
 
-let browser: Browser;
-let server: Server;
-let url: string;
-beforeAll(async () => {
-  browser = await chromium.launch();
-  server = createServer((_req, res) => {
+const it = browserTest.extend<{ sourceServer: void }>({ sourceServer: [async ({ serve }, use) => {
+
+  ({ server } = await serve((_req, res) => {
     res.setHeader('Content-Type', 'text/html');
     res.end(readFileSync(new URL('../screenshot/fixtures/clobbered-builtins.html', import.meta.url)));
-  });
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  }));
+
   url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
-});
-afterAll(async () => { await browser?.close(); await new Promise<void>(resolve => server?.close(() => resolve())); });
+
+{ await use(); }
+}, { auto: true }] });
+let server: Server;
+let url: string;
 
 // One real fluid sweep (~2s). No source globals are repaired by the probe.
-it('protects page, locator and retained-handle probes across navigation', async () => {
+it('protects page, locator and retained-handle probes across navigation', async ({ browser }) => {
   const context = await createSourceContext(browser);
   const page = await context.newPage();
   const errors: string[] = [];

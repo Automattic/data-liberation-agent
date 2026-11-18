@@ -3,6 +3,7 @@ import { chromium } from 'playwright';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fetchSitemapWithDiagnostics } from './sitemap.js';
 import { discoverWebflow } from '../../adapters/webflow/discover.js';
+import { sourceRequestContext, SourceRequestGovernors } from '../source-request-governor.js';
 
 // Transport real bodies/statuses locally without disabling the URL guard.
 const origin = 'http://fixture.test';
@@ -26,6 +27,23 @@ async function fixture(handler: (request: IncomingMessage, response: ServerRespo
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('bounded linked-page fallback', () => {
+  it('settles a capture-governed crawl at concurrency one instead of acquiring a second slot', async () => {
+    const f = await fixture((req, res) => {
+      res.statusCode = req.url === '/' || req.url === '/child' ? 200 : 404;
+      res.setHeader('content-type', 'text/html');
+      res.end(req.url === '/' ? '<a href="/child">Child</a>' : 'done');
+    });
+    try {
+      const governors = new SourceRequestGovernors({ concurrency: 1 });
+      const result = await sourceRequestContext.run(governors, () => fetchSitemapWithDiagnostics(`${origin}/`, {
+        entryHtml: '<a href="/child">Child</a>',
+      }));
+      expect(result.urls).toContain(`${origin}/child`);
+      expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: 'fallback_link_closure' }));
+      expect(f.requests.filter(path => path === '/child')).toHaveLength(1);
+    } finally { await f.close(); }
+  }, 3000);
+
   it('merges sitemap slash variants with page links, preferring only a same-route canonical', async () => {
     const f = await fixture((req, res) => {
       if (req.url === '/sitemap.xml') {
@@ -64,7 +82,7 @@ describe('bounded linked-page fallback', () => {
       const result = await fetchSitemapWithDiagnostics(`${origin}/`);
       // Platform-looking path names are candidates; responses decide their outcome.
       expect(result.urls).toEqual(['/blog', '/group//entry', '/group/entry', '/edition?lang=en', '/edition?lang=fr', '/cart', '/legal', '/post/deep', '/', '/post/deeper'].map(path => origin + path));
-      expect(f.requests.slice(3)).toEqual(['/', '/blog', '/group//entry', '/group/entry', '/edition?lang=en', '/edition?lang=fr', '/cart', '/legal', '/post/deep', '/post/deeper']);
+      expect(f.requests.slice(3).filter(path => !['/feed', '/feed/', '/atom.xml', '/rss.xml'].includes(path))).toEqual(['/', '/blog', '/group//entry', '/group/entry', '/edition?lang=en', '/edition?lang=fr', '/cart', '/legal', '/post/deep', '/post/deeper']);
       expect(result.diagnostics).toEqual([
         expect.objectContaining({ code: 'sitemap_absent', reason: expect.stringContaining('HTTP 404') }),
         expect.objectContaining({ code: 'fallback_link_closure', reason: expect.stringContaining('10/100 HTTP requests') }),
@@ -123,7 +141,7 @@ describe('bounded linked-page fallback', () => {
     try {
       const result = await fetchSitemapWithDiagnostics(origin);
       expect(result.urls).toHaveLength(103);
-      expect(f.requests.slice(3)).toHaveLength(100);
+      expect(f.requests.slice(3).filter(path => !['/feed', '/feed/', '/atom.xml', '/rss.xml'].includes(path))).toHaveLength(100);
       expect(result.diagnostics.filter(row => row.code === 'fallback_budget_omitted')).toEqual([99, 100, 101].map(i => ({ code: 'fallback_budget_omitted', url: `${origin}/page-${i}`, reason: 'request budget exhausted (100)' })));
       expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: 'fallback_link_coverage', reason: expect.stringContaining('3 queued documents unvisited') }));
     } finally { await f.close(); }

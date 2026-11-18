@@ -205,7 +205,7 @@ function resolvedSet( values: Array< string | undefined >, baseUrl: string, norm
  * One server document's inline `<style>` blocks, as attributes and text, in
  * document order.
  */
-function styleBlocks( $: cheerio.CheerioAPI ): TemplateStyleBlock[] {
+export function styleBlocks( $: cheerio.CheerioAPI ): TemplateStyleBlock[] {
 	return $( 'style' ).toArray().flatMap( element => {
 		if ( ! isElement( element ) ) return [];
 		return [ { id: element.attribs.id ?? null, attributes: { ...element.attribs }, text: $( element ).text() } ];
@@ -482,6 +482,61 @@ export async function extendTemplateGroups( report: TemplateGroupsReport, input:
 	report.coverage.unfingerprinted -= resolved.length;
 	report.coverage.groups = report.groups.length;
 	report.coverage.singletons = report.groups.filter( group => group.size === 1 ).length;
+}
+
+/** One derivation unit: a whole template group, or one member-shape sub-cluster of it. */
+export interface TemplateClusterUnit {
+	id: string;
+	key: string;
+	representative: string;
+	size: number;
+	members: string[];
+	/** Template group id, when this unit is a member-shape sub-cluster of it. */
+	parent?: string;
+	/** Adapter-declared member shape shared by every member of the sub-cluster. */
+	shape?: string;
+}
+
+/**
+ * Partition a template group by adapter-declared member shape (#1805). A
+ * group whose shaped members span two or more shapes becomes one unit per
+ * shape with at least two members, largest first (then first inventory
+ * position); each keeps the group's representative when it has that shape,
+ * else its first member in inventory order. Members of a singleton shape, and
+ * members without a shape, are `unclustered`: no unit can derive them. A
+ * group with at most one shape, or no `shapeOf`, is returned unchanged.
+ */
+export function templateClusterUnits( group: Pick< TemplateGroup, 'id' | 'key' | 'representative' | 'size' | 'members' >, shapeOf?: ( url: string ) => string | undefined ): { units: TemplateClusterUnit[]; unclustered: string[] } {
+	const whole = { units: [ { id: group.id, key: group.key, representative: group.representative, size: group.size, members: group.members } ], unclustered: [] };
+	if ( ! shapeOf || group.size < 2 ) return whole;
+	const buckets = new Map< string, string[] >();
+	const unshaped: string[] = [];
+	for ( const url of group.members ) {
+		const shape = shapeOf( url );
+		if ( shape === undefined ) unshaped.push( url );
+		else buckets.set( shape, [ ...buckets.get( shape ) ?? [], url ] );
+	}
+	if ( buckets.size < 2 ) return whole;
+	const position = new Map( group.members.map( ( url, index ) => [ url, index ] ) );
+	const ordered = [ ...buckets ].sort( ( [ , a ], [ , b ] ) => b.length - a.length || position.get( a[ 0 ]! )! - position.get( b[ 0 ]! )! );
+	const units = ordered.filter( ( [ , members ] ) => members.length >= 2 ).map( ( [ shape, members ], index ) => ( {
+		id: `${ group.id }.${ index + 1 }`, key: group.key, parent: group.id, shape,
+		representative: members.includes( group.representative ) ? group.representative : members[ 0 ]!,
+		size: members.length, members,
+	} ) );
+	const clustered = new Set( units.flatMap( unit => unit.members ) );
+	return { units, unclustered: group.members.filter( url => ! clustered.has( url ) ) };
+}
+
+/**
+ * Every group as the clusters route ranking should seed: shape sub-clusters
+ * replace a partitioned group, and its unclustered members stand alone.
+ */
+export function templateClusterRankingGroups( groups: readonly TemplateGroup[], shapeOf?: ( url: string ) => string | undefined ): Array< Pick< TemplateGroup, 'size' | 'representative' | 'members' > > {
+	return groups.flatMap( group => {
+		const { units, unclustered } = templateClusterUnits( group, shapeOf );
+		return [ ...units, ...unclustered.map( url => ( { size: 1, representative: url, members: [ url ] } ) ) ];
+	} );
 }
 
 /**

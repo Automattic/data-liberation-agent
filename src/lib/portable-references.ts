@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import { readDocument, releaseDocument, serializedDocument } from './parsed-documents.js';
 import { mapMetadataImages, metadataImageReferences } from './identity-resources.js';
 import { isInlineUrl } from './self-contain.js';
 import { isAudioLink, isDocumentDownloadLink, svgUseDocumentReferences } from './screenshot/resource-capture.js';
@@ -178,7 +179,7 @@ export function dependencyReferences(
 	const linkedFiles: string[] = [];
 	const svgUseDocuments: string[] = [];
 	if ( ! cssOnly ) {
-		const $ = cheerio.load( html );
+		const $ = readDocument( html );
 		$( 'iframe[src]' ).each( ( _, element ) => { const source = $( element ).attr( 'src' ) ?? ''; if ( embeddedSources.has( source ) ) linkedFiles.push( source ); } );
 		$( 'a[href],area[href]' ).each( ( _, element ) => {
 			const href = $( element ).attr( 'href' ) ?? '';
@@ -478,24 +479,21 @@ export function stripExcludedRenditionReferences(
 
 export function removeDanglingResourceReference( html: string, reference: string ): string {
 	const normalizedReference = reference.replace( /&amp;/g, '&' );
-	const $ = cheerio.load( html );
-	$( 'link' ).each( ( _, element ) => {
+	const $ = readDocument( html );
+	const links = $( 'link' ).filter( ( _, element ) => {
 		const link = $( element );
 		const relations = ( link.attr( 'rel' ) ?? '' ).toLowerCase().split( /\s+/ );
 		const href = ( link.attr( 'href' ) ?? '' ).replace( /&amp;/g, '&' );
-		if (
-			href === normalizedReference &&
+		return href === normalizedReference &&
 			( relations.includes( 'preload' ) ||
 				relations.includes( 'stylesheet' ) ||
-				relations.some( ( value ) => /(?:^|-)icon$/.test( value ) ) )
-		) {
-			link.remove();
-		}
+				relations.some( ( value ) => /(?:^|-)icon$/.test( value ) ) );
 	} );
-	$( 'script' ).each( ( _, element ) => {
-		const script = $( element );
-		const src = ( script.attr( 'src' ) ?? '' ).replace( /&amp;/g, '&' );
-		if ( src === normalizedReference ) script.remove();
-	} );
+	const scripts = $( 'script' ).filter( ( _, element ) => ( $( element ).attr( 'src' ) ?? '' ).replace( /&amp;/g, '&' ) === normalizedReference );
+	// Unchanged, the result is the shared tree's serialization.
+	if ( ! links.length && ! scripts.length ) return serializedDocument( html, $ );
+	releaseDocument( html, $ );
+	links.remove();
+	scripts.remove();
 	return $.html();
 }

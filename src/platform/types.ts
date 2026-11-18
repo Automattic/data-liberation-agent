@@ -82,6 +82,9 @@ export interface Platform {
 	routeScope?( sourceUrl: string ): SiteRouteScope;
 	/** Segment-bounded path prefixes on the source origin that are runtime, never site documents. */
 	runtimePaths?: string[];
+	/** Source-origin telemetry to abort before network admission. Strings are pathname prefixes;
+	 * regular expressions match the pathname only (not query or origin). */
+	sourceTelemetry?: Array<string | RegExp>;
 	/** Automatic-detection signals owned by this platform. */
 	detection?: PlatformDetection;
 	/** Resolves a link this platform owns but does not serve the site from (an
@@ -137,6 +140,8 @@ export interface StructuredContentEntry {
 	author: string;
 	/** Source taxonomy terms (Blogger labels, tags, categories). */
 	terms: string[];
+	/** The item's featured image URL, when the source declares one. */
+	image?: string;
 }
 
 export interface StructuredContentEnumeration {
@@ -162,6 +167,14 @@ export interface StructuredContentSource {
 	memberDocument( representativeHtml: string, representative: StructuredContentEntry, member: StructuredContentEntry, options?: { governors: import( '../lib/source-request-governor.js' ).SourceRequestGovernors } ): string | undefined | Promise<string | undefined>;
 	/** Per-member head elements, fetched by the adapter and transplanted by identity. */
 	memberHeadSlotSelector?: string;
+	/**
+	 * The entry's member shape: the content cardinalities `memberDocument`
+	 * requires a representative to share (e.g. gallery size, price shape).
+	 * When declared, a template cluster whose members span several shapes is
+	 * derived as one sub-cluster per shape, each with a representative of that
+	 * shape; members of a singleton shape use ordinary acquisition.
+	 */
+	memberShape?( entry: StructuredContentEntry ): string | undefined;
 	/** The source URL of a term's archive. */
 	termArchiveUrl( term: string, sourceUrl: string ): string;
 	/** The term named by a term-archive URL, or undefined for other routes. */

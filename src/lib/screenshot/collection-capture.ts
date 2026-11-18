@@ -1,3 +1,4 @@
+import { installResourceReplay, type CapturedResourceStore } from './resource-capture.js';
 import type { Page } from 'playwright';
 import type { CapturedComponent } from './component-states.js';
 
@@ -6,6 +7,8 @@ export interface CollectionEvidence {
 	members: CollectionMember[];
 	states: Array<{ id: string; trigger?: { selector: string; action: 'click' | 'fill' | 'select'; value?: string }; members: string[] }>;
 	controls: string[];
+	/** Controls whose action still failed on a fresh document; never replay these selectors. */
+	failedControls?: string[];
 	coverage: 'complete' | 'partial';
 	limits: { pages: number; members: number; controls: number };
 	replay: 'unsupported';
@@ -48,10 +51,11 @@ export async function collectionRegions(page: Page, skip?: string): Promise<Arra
  * Probe a disposable document: exploratory state can never overwrite the initial route tree.
  * Every control click is exploratory, so the probe page only ever sends read-only requests.
  */
-export async function captureCollections(page: Page, skip?: string, record?: (diagnostic: { code: 'interaction_request_blocked'; reason: string }) => void): Promise<CapturedComponent[]> {
+export async function captureCollections(page: Page, skip?: string, record?: (diagnostic: { code: 'interaction_request_blocked'; reason: string }) => void, resourceStore?: CapturedResourceStore): Promise<CapturedComponent[]> {
 	const regions = await collectionRegions(page, skip);
 	if (!regions.length) return [];
 	const probe = await page.context().newPage();
+	if (resourceStore) await installResourceReplay(probe, resourceStore);
 	await probe.route('**/*', async route => {
 		const request = route.request();
 		if (['GET', 'HEAD', 'OPTIONS'].includes(request.method())) { await route.fallback(); return; }
@@ -117,7 +121,10 @@ export async function captureCollections(page: Page, skip?: string, record?: (di
 					const button = probe.locator(next.selector);
 					if (!await button.isVisible() || !await button.isEnabled() || await button.getAttribute('aria-disabled') === 'true') break;
 					if (index === limits.pages - 1 || Date.now() > deadline) { evidence.coverage = 'partial'; break; }
-					await button.click({ timeout: 1_000 }); await probe.waitForTimeout(300);
+					try {
+						await button.click({ timeout: 1_000 }); await probe.waitForTimeout(300);
+					} catch { evidence.coverage = 'partial'; break; }
+					if (new URL(probe.url()).pathname !== new URL(page.url()).pathname) { evidence.coverage = 'partial'; break; }
 				}
 				evidence.states.push({ id: id === 'initial' ? 'all-pages' : id, ...(trigger ? { trigger } : {}), members: union });
 			};
@@ -131,25 +138,42 @@ export async function captureCollections(page: Page, skip?: string, record?: (di
 				if (/^(?:next(?: page)?|previous(?: page)?|prev|load more|show more|older|›|»|→|‹|«|←)$/i.test(control.label.trim())) continue;
 				const values = control.tag === 'SELECT' ? control.options : control.tag === 'INPUT' ? [evidence.members[0]?.text.split(/\s+/)[0] ?? '', '__capture_no_matching_record__', ''] : [undefined];
 				for (const [variant, value] of values.entries()) {
-					if (reset) await probe.goto(page.url(), { waitUntil: 'load', timeout: 15_000 });
-					reset = false;
-					const target = probe.locator(control.selector);
-					if (!await target.isVisible()) {
-						const opener = probe.locator(region.owner).getByRole('button', { name: /^filters?$/i }).first();
-						if (await opener.isVisible()) await opener.click({ timeout: 1_000 });
+					let failed = false;
+					for (let attempt = 0; attempt < 2; attempt++) {
+						if (Date.now() > deadline) { evidence.coverage = 'partial'; break; }
+						if (reset || attempt > 0) await probe.goto(page.url(), { waitUntil: 'load', timeout: 15_000 });
+						reset = false;
+						const target = probe.locator(control.selector);
+						const action = control.tag === 'INPUT' ? 'fill' : control.tag === 'SELECT' ? 'select' : 'click';
+						try {
+							if (!await target.isVisible()) {
+								const opener = probe.locator(region.owner).getByRole('button', { name: /^filters?$/i }).first();
+								if (await opener.isVisible()) await opener.click({ timeout: 1_000 });
+							}
+							if (action === 'fill') await target.fill(value!, { timeout: 1_000 });
+							else if (action === 'select') await target.selectOption(value!, { timeout: 1_000 });
+							else await target.click({ timeout: 1_000 });
+							await probe.waitForTimeout(300);
+							if (new URL(probe.url()).pathname !== new URL(page.url()).pathname) { evidence.coverage = 'partial'; reset = true; break; }
+							const stateStart = evidence.states.length;
+							await exhaust(`control-${index}-${variant}`, { selector: control.selector, action, ...(value !== undefined ? { value } : {}) });
+							reset = JSON.stringify(await observe()) !== initialMembers;
+							changed ||= evidence.states.slice(stateStart).some(state => JSON.stringify(state.members) !== initialMembers);
+							break;
+						} catch {
+							// An action may have mutated the document before throwing. Retry
+							// once from the route, never from that uncertain state.
+							reset = true;
+							if (new URL(probe.url()).pathname !== new URL(page.url()).pathname) evidence.coverage = 'partial';
+							if (attempt === 1) failed = true;
+						}
 					}
-					const action = control.tag === 'INPUT' ? 'fill' : control.tag === 'SELECT' ? 'select' : 'click';
-					try {
-						if (action === 'fill') await target.fill(value!, { timeout: 1_000 });
-						else if (action === 'select') await target.selectOption(value!, { timeout: 1_000 });
-						else await target.click({ timeout: 1_000 });
-						await probe.waitForTimeout(300);
-						if (new URL(probe.url()).pathname !== new URL(page.url()).pathname) { evidence.coverage = 'partial'; reset = true; continue; }
-						const stateStart = evidence.states.length;
-						await exhaust(`control-${index}-${variant}`, { selector: control.selector, action, ...(value !== undefined ? { value } : {}) });
-						reset = JSON.stringify(await observe()) !== initialMembers;
-						changed ||= evidence.states.slice(stateStart).some(state => JSON.stringify(state.members) !== initialMembers);
-					} catch { evidence.coverage = 'partial'; reset = true; }
+					if (failed) {
+						(evidence.failedControls ??= []).push(control.selector);
+						// A partly observed select/search is not safe to replay either.
+						evidence.states = evidence.states.filter(state => state.trigger?.selector !== control.selector);
+						break;
+					}
 				}
 			}
 			if (!changed) continue;

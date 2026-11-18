@@ -15,6 +15,10 @@
 //   Wix's "App Unavailable" page, and the token (which carries the owner's site
 //   and account ids) would be published with the copy.
 //
+// Some App Market map widgets (Wix Events' venue map) are app iframes too,
+// but their URL already names the location (`lat`/`lng` query parameters), so
+// they are pointed at a Google Maps embed rather than replaced by a note.
+//
 // While the live page still has its runtime, a map is pointed at an ordinary
 // Google Maps embed of the location the wrapper drew, and an app widget is
 // replaced by a visible note the same size, so the gap is honest, not white.
@@ -88,6 +92,22 @@ export function wixAppInstance( src: string, base?: string ): { appDefId: string
 	} catch {
 		return null;
 	}
+}
+
+/**
+ * The location an App Market map widget names in its own URL: an app iframe
+ * whose path is a map page and whose query carries `lat` and `lng`
+ * (Wix Events: `events.wixapps.net/events-server/html/google-map-v2?lat=..&lng=..`).
+ */
+export function wixAppMapView( src: string, base?: string ): MapView | null {
+	const url = parseUrl( src, base );
+	if ( ! url || ! wixAppInstance( src, base ) || ! /map/i.test( url.pathname ) ) return null;
+	const coordinate = ( name: string ) => {
+		const value = url.searchParams.get( name ) ?? '';
+		return /^-?\d+(?:\.\d+)?$/.test( value ) ? Number( value ) : Number.NaN;
+	};
+	const zoom = coordinate( 'zoom' );
+	return validMapView( { lat: coordinate( 'lat' ), lng: coordinate( 'lng' ), ...( Number.isFinite( zoom ) ? { zoom } : {} ) } );
 }
 
 /** Read a map view from Google's own "Open this area in Google Maps" link (`maps?ll=<lat>,<lng>&z=<zoom>`). */
@@ -274,6 +294,11 @@ export async function portWixRuntimeEmbeds( page: Page ): Promise< void > {
 			const embed = view ? googleMapsEmbedUrl( view, language ) : null;
 			if ( embed ) await pointAtGoogleMap( handle, embed );
 			else await handle.evaluate( installWixEmbedNote, { note: wixEmbedNote( title || 'Google Maps' ), attribute: WIX_UNPORTED_EMBED_ATTRIBUTE } );
+		} else if ( wixAppMapView( src, page.url() ) ) {
+			const url = parseUrl( src, page.url() );
+			const language = ( url?.searchParams.get( 'locale' ) || url?.searchParams.get( 'language' ) ) ?? undefined;
+			const embed = googleMapsEmbedUrl( wixAppMapView( src, page.url() )!, language );
+			if ( embed ) await pointAtGoogleMap( handle, embed );
 		} else if ( wixAppInstance( src, page.url() ) ) {
 			if ( await handle.evaluate( ( frame, selector ) => Boolean( frame.closest( selector ) ), WIX_PINNED_CHAT_SELECTOR ).catch( () => false ) ) continue;
 			await handle.evaluate( installWixEmbedNote, { note: wixEmbedNote( title ), attribute: WIX_UNPORTED_EMBED_ATTRIBUTE } );

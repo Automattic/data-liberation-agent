@@ -1,8 +1,9 @@
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { chromium } from 'playwright';
-import { describe, expect, it } from 'vitest';
+
+import { describe, expect } from 'vitest';
+import { it } from '../../test/browser.js';
 import {
 	isRemoteAssetUrl,
 	selfContainWebsite,
@@ -98,16 +99,16 @@ describe( 'self-contain', () => {
 		expect( html ).toContain( `srcset="${ url.replaceAll( ' ', '%20' ) } 1x"` );
 	} );
 
-	it( 'keeps a descriptorless picture rendition with commas loadable at every breakpoint', async () => {
-		const browser = await chromium.launch();
-		try {
+	it( 'keeps a descriptorless picture rendition with commas loadable at every breakpoint', async ({ newPage }) => {
+
+		{
 			const gif = Buffer.from( 'R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=', 'base64' );
 			const renditions = [ 390, 768, 1440 ].map( ( width ) => `/media/photo/:/rs=w:${ width },h:240.gif` );
 			const html = stripRemoteAssetRequests(
 				`<picture><source media="(min-width: 1200px)" srcset="${ renditions[ 2 ] }"><source media="(min-width: 600px)" srcset="${ renditions[ 1 ] }"><img src="${ renditions[ 0 ] }"></picture>`
 			);
 			for ( const [ width, expected ] of [ [ 390, renditions[ 0 ] ], [ 768, renditions[ 1 ] ], [ 1440, renditions[ 2 ] ] ] as const ) {
-				const page = await browser.newPage( { viewport: { width, height: 900 } } );
+				const page = await newPage( { viewport: { width, height: 900 } } );
 				await page.route( 'http://portable.test/**', ( route ) => {
 					const pathname = new URL( route.request().url() ).pathname;
 					if ( pathname === '/' ) return route.fulfill( { contentType: 'text/html', body: html } );
@@ -120,8 +121,6 @@ describe( 'self-contain', () => {
 				expect( image ).toEqual( { pathname: expected, width: 1 } );
 				await page.close();
 			}
-		} finally {
-			await browser.close();
 		}
 	} );
 
@@ -161,6 +160,13 @@ describe( 'self-contain', () => {
 			'.a{background:url("about:blank")}.b{background:url("/media/b.jpg")}'
 		);
 	} );
+
+	it.each( [ [ 'woff2', 'woff2' ], [ 'woff', 'woff' ], [ 'ttf', 'truetype' ], [ 'otf', 'opentype' ] ] )(
+		'aligns local font format hints with the verified .%s extension', ( extension, format ) => {
+			expect( stripRemoteCssUrls( `@font-face{src:url("/media/brand.${ extension }") format('stale')}` ) )
+				.toBe( `@font-face{src:url("/media/brand.${ extension }") format("${ format }")}` );
+		}
+	);
 
 	it( 'omits empty @font-face src sentinels so later woff/ttf sources remain usable', () => {
 		expect(

@@ -108,6 +108,8 @@ export interface LayoutObservation {
 	overflow: boolean;
 	/** Hosts the page requested that are not the local copy. */
 	externalHosts: string[];
+	/** Hosts of cross-origin <iframe> documents the page embeds. Absent in older evidence. */
+	embeddedFrames?: string[];
 	/** Same-page hash targets found on this document. */
 	hashTargets: HashTarget[];
 	/** Bounded candidate-local HTTP outcomes. Empty on the source. */
@@ -135,6 +137,9 @@ export interface HashTarget {
 	 *  picks the first, which is how a per-device copy sends a mobile anchor to
 	 *  the hidden desktop section. */
 	targets: number;
+	/** Whether any link to this fragment is rendered (has a box, not hidden).
+	 *  Missing on older stored observations, which count as rendered. */
+	rendered?: boolean;
 }
 
 export interface ViewportScore {
@@ -422,35 +427,44 @@ export function scoreViewport(
 		failures.push( `horizontal overflow at ${ liberated.docWidth }px in a ${ liberated.viewport }px viewport` );
 	}
 
-	if ( liberated.externalHosts.length > 0 ) {
+	// An embed the source carries too (the same map or video provider) is
+	// faithful, not an unlocalized dependency of the copy.
+	const sourceFrames = new Set( source.embeddedFrames ?? [] );
+	const externalHosts = liberated.externalHosts.filter( host => ! ( sourceFrames.has( host ) && liberated.embeddedFrames?.includes( host ) ) );
+	if ( externalHosts.length > 0 ) {
 		failures.push(
-			`copy requested ${ liberated.externalHosts.length } external host(s): ${ liberated.externalHosts
+			`copy requested ${ externalHosts.length } external host(s): ${ externalHosts
 				.slice( 0, 3 )
 				.join( ', ' ) }`
 		);
 	}
 
-	const copyUnresolved = liberated.hashTargets
-		.filter( ( target ) => ! target.resolved )
+	// An unresolved copy anchor fails only when the copy does worse than the
+	// source: a fragment the source resolves is lost, or the copy renders a
+	// dead link the source does not also carry unresolved.
+	const copyResolved = new Set(
+		liberated.hashTargets.filter( ( target ) => target.resolved ).map( ( target ) => target.fragment )
+	);
+	const sourceUnresolved = new Set(
+		source.hashTargets.filter( ( target ) => ! target.resolved ).map( ( target ) => target.fragment )
+	);
+	const lost = source.hashTargets
+		.filter( ( target ) => target.resolved && ! copyResolved.has( target.fragment ) )
 		.map( ( target ) => target.fragment );
-	if ( copyUnresolved.length > 0 ) {
+	const introduced = liberated.hashTargets
+		.filter(
+			( target ) =>
+				! target.resolved &&
+				target.rendered !== false &&
+				! sourceUnresolved.has( target.fragment ) &&
+				! lost.includes( target.fragment )
+		)
+		.map( ( target ) => target.fragment );
+	const missing = [ ...lost, ...introduced ];
+	if ( missing.length > 0 ) {
 		failures.push(
-			`nav ${ copyUnresolved.length } same-page anchor(s) missing: #${ copyUnresolved
-				.slice( 0, 3 )
-				.join( ' #' ) }`
+			`nav ${ missing.length } same-page anchor(s) missing: #${ missing.slice( 0, 3 ).join( ' #' ) }`
 		);
-	} else {
-		const copyResolved = new Set(
-			liberated.hashTargets.filter( ( target ) => target.resolved ).map( ( target ) => target.fragment )
-		);
-		const lost = source.hashTargets
-			.filter( ( target ) => target.resolved && ! copyResolved.has( target.fragment ) )
-			.map( ( target ) => target.fragment );
-		if ( lost.length > 0 ) {
-			failures.push(
-				`nav ${ lost.length } same-page anchor(s) missing: #${ lost.slice( 0, 3 ).join( ' #' ) }`
-			);
-		}
 	}
 
 	// Resolving is not the same as resolving correctly. A fragment that matches

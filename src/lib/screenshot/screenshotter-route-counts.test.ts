@@ -49,6 +49,7 @@ it.skipIf( skipBrowser )( 'counts routes, not failure records, across viewports 
 
 it.skipIf( skipBrowser )( 'counts a route whose HTML was saved as captured when a stage fails on it', async () => {
 	const server = createServer( ( request, response ) => {
+		if ( request.url?.includes( 'liberation-absent-' ) ) { response.writeHead( 404 ); response.end(); return; }
 		if ( request.url === '/degraded' && /Mobile/i.test( request.headers[ 'user-agent' ] ?? '' ) ) {
 			// The phone profile never loads, but the desktop document is saved.
 			response.writeHead( 503, { 'retry-after': '0' } );
@@ -83,6 +84,7 @@ it.skipIf( skipBrowser )( 'counts a route whose HTML was saved as captured when 
 it.skipIf( skipBrowser )( 'drops off-origin inventory URLs as findings and captures the rest', async () => {
 	const requested: string[] = [];
 	const server = createServer( ( request, response ) => {
+		if ( request.url?.includes( 'liberation-absent-' ) ) { response.writeHead( 404 ); response.end(); return; }
 		requested.push( `${ request.headers.host }${ request.url }` );
 		response.setHeader( 'content-type', 'text/html' );
 		response.end( '<!doctype html><title>Page</title><p>Page</p>' );

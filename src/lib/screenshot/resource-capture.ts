@@ -1,3 +1,4 @@
+import { attributeSourceReplay } from '../browser-kit/source-traffic.js';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -9,10 +10,11 @@ import { metadataImageReferences } from '../identity-resources.js';
 import { decodeCssUrl } from '../css-url-escapes.js';
 import { srcsetCandidates } from '../srcset.js';
 import { portableSrcsetRepresentative } from '../portable-media-limits.js';
-import { BROWSER_IMAGE_ACCEPT } from '../media-fetch/media.js';
-import { MAX_REDIRECTS, safeFetch, type SafeFetchResult } from '../media-fetch/safe-fetch.js';
+import { BROWSER_IMAGE_ACCEPT, createSourceContext } from '../browser-kit/source-identity.js';
+import { MAX_REDIRECTS, assertPublicHttpUrl, safeFetch, type SafeFetchResult } from '../media-fetch/safe-fetch.js';
 import { uniqueAssetPath } from '../portable-assets.js';
-import type { Page, Request, Response } from 'playwright';
+import type { BrowserContext, Page, Request, Response } from 'playwright';
+import { orElse } from '../failure-class.js';
 
 const CAPTURED_RESOURCE_TYPES = new Set( [
 	'script',
@@ -218,6 +220,17 @@ const HEURISTIC_FRESHNESS_FRACTION = 0.1;
 function cacheControlSeconds( cacheControl: string, directive: string ): number | undefined {
 	const match = cacheControl.match( new RegExp( `(?:^|,)\\s*${ directive }\\s*=\\s*"?(\\d+)`, 'i' ) );
 	return match ? Number( match[ 1 ] ) : undefined;
+}
+
+/**
+ * The request headers a Vary secondary key is recorded from. `headers()` omits
+ * headers the network stack adds (for example the `Accept` Chromium sends for
+ * images), while replay matches the routed request's full headers; record the
+ * same view, or nothing when it is unavailable so Vary'd responses fail closed.
+ */
+async function replayRequestHeaders( response: Response, headers: Record< string, string > ): Promise< Record< string, string > | undefined > {
+	if ( ! headers.vary ) return {};
+	return response.request().allHeaders().catch( orElse< Record< string, string > | undefined >( undefined ) );
 }
 
 /**
@@ -490,6 +503,9 @@ export class CapturedResourceStore {
 	// most MAX_CAPTURED_RENDER_CRITICAL_RESERVED_BYTES); media spends the rest.
 	private readonly mediaByteLimit: number;
 	private readonly resolvedSrcsetImages = new Set< string >();
+	// Like collectAssets, keep shared fallbacks out of unrelated srcset families.
+	// Ownership spans documents: a later route can invalidate an earlier alias.
+	private readonly imgFallbackRepresentatives = new Map< string, Set< string > >();
 
 	constructor(
 		outputDir: string,
@@ -528,14 +544,14 @@ export class CapturedResourceStore {
 		this.fetchMedia = fetchMedia;
 	}
 
-	observe( page: Page ): void {
+	observe( page: Page, options: { replayOnly?: boolean } = {} ): void {
 		const pending = new Set< Promise< void > >();
 		this.pageCaptures.set( page, pending );
 		const images = new Set< Response >();
 		this.pageImages.set( page, images );
 		const listener = ( response: Response ) => {
-			if ( response.request().resourceType() === 'image' ) images.add( response );
-			const capture = this.capture( response );
+			if ( ! options.replayOnly && response.request().resourceType() === 'image' ) images.add( response );
+			const capture = options.replayOnly ? this.captureForReplay( response ) : this.capture( response );
 			pending.add( capture );
 			void capture.finally( () => pending.delete( capture ) );
 		};
@@ -549,7 +565,7 @@ export class CapturedResourceStore {
 	}
 
 	/** Probe responsive slots at fidelity widths without Chromium's larger-image cache reuse. */
-	async captureSelectedSrcsets( page: Page ): Promise< void > {
+	async captureSelectedSrcsets( page: Page, contextOptions: Parameters<typeof createSourceContext>[1] = {}, traffic?: Parameters<typeof createSourceContext>[2] ): Promise< void > {
 		if ( ! await page.locator( 'img[srcset],picture img' ).count() ) return;
 		const original = page.viewportSize();
 		const browser = page.context().browser();
@@ -635,13 +651,13 @@ export class CapturedResourceStore {
 		const settled = await Promise.allSettled( probes.map( async ( { width, base, pending } ) => {
 			// A fresh context per width: a shared memory cache would serve the
 			// next width's renditions without the network responses capture records.
-			const context = await browser.newContext( { viewport: { width, height: original.height }, deviceScaleFactor: 1, storageState } );
+			const context = await createSourceContext( browser, { ...contextOptions, viewport: { width, height: original.height }, deviceScaleFactor: 1, storageState }, traffic );
 			try {
 				const probe = await context.newPage();
 				this.observe( probe );
 				await probe.setContent( `<base href="${ base.replaceAll( '&', '&amp;' ).replaceAll( '"', '&quot;' ) }"><meta name="viewport" content="width=device-width">${ pending.join( '' ) }` );
 				for ( const image of await probe.locator( 'img' ).all() ) {
-					await image.scrollIntoViewIfNeeded( { timeout: 2000 } ).catch( () => undefined );
+					await image.scrollIntoViewIfNeeded( { timeout: 2000 } ).catch( orElse( undefined ) );
 					await image.evaluate( image => Promise.race( [
 						( image as HTMLImageElement ).decode().catch( () => undefined ),
 						new Promise<void>( resolve => setTimeout( resolve, 2000 ) ),
@@ -760,8 +776,20 @@ export class CapturedResourceStore {
 				if ( target ) {
 					add( target, baseUrl, true );
 					const references = candidates.map( candidate => candidate.url );
-					// The img fallback is another rendition of this declared image.
-					if ( element.tagName === 'img' && node.attr( 'src' ) ) references.push( node.attr( 'src' )! );
+					// A fallback outside the candidate list is only a rendition while
+					// every img using it agrees on the representative. Shared lazy
+					// placeholders must retain their own bytes, even on later routes.
+					const fallback = element.tagName === 'img' && absolute( node.attr( 'src' ) ?? '', baseUrl );
+					if ( fallback && node.attr( 'src' ) && ! references.some( reference => absolute( reference, baseUrl ) === fallback ) ) {
+						const owners = this.imgFallbackRepresentatives.get( fallback ) ?? new Set< string >();
+						owners.add( target );
+						this.imgFallbackRepresentatives.set( fallback, owners );
+						if ( owners.size > 1 ) {
+							renditions.delete( fallback );
+							// add also removes any alias and omission seeded by an earlier document.
+							add( fallback, baseUrl, true, true );
+						} else references.push( fallback );
+					}
 					for ( const reference of references ) {
 						const url = absolute( reference, baseUrl );
 						if ( url && url !== target ) {
@@ -786,6 +814,12 @@ export class CapturedResourceStore {
 					else if ( url && ! this.manifest.resources[ url ] ) deferMedia( url );
 				}
 			} );
+			if ( deferMedia && ! cssOnly ) $( '[style]' ).each( ( _, element ) => {
+				for ( const match of ( $( element ).attr( 'style' ) ?? '' ).matchAll( /url\(\s*(?:["']([^"']+)["']|([^\s)'";]+))\s*\)/gi ) ) {
+					const url = absolute( decodeCssUrl( match[ 1 ] ?? match[ 2 ] ?? '' ), baseUrl );
+					if ( url && ! this.manifest.resources[ url ] ) deferMedia( url );
+				}
+			} );
 			for ( const reference of svgUseDocumentReferences( $, baseUrl ) ) add( reference, baseUrl, true );
 			$( 'link[href]' ).each( ( _, element ) => {
 				const node = $( element );
@@ -806,9 +840,11 @@ export class CapturedResourceStore {
 						...$( 'style' )
 							.map( ( _, element ) => $( element ).html() ?? '' )
 							.get(),
-						...$( '[style]' )
+						// Deferred mode: inline-style images (a per-member hero or
+						// thumbnail background) are media, queued like <img>.
+						...( deferMedia ? [] : $( '[style]' )
 							.map( ( _, element ) => $( element ).attr( 'style' ) ?? '' )
-							.get(),
+							.get() ),
 				  ].join( '\n' );
 			// A catalog declaration is not evidence that a face is used. Fonts
 			// already requested by the browser are stored by the response listener;
@@ -891,7 +927,8 @@ export class CapturedResourceStore {
 		// Explicit dependencies (metadata, CSS, another source) take precedence.
 		// Browser image responses alone are not independent declarations.
 		for ( const [ url, representative ] of renditions ) {
-			if ( this.manifest.resources[ url ] || this.explicitDependencies.has( url ) ) continue;
+			if ( this.manifest.resources[ url ] || this.explicitDependencies.has( url ) ||
+				( this.imgFallbackRepresentatives.get( url )?.size ?? 0 ) > 1 ) continue;
 			const resource = this.manifest.resources[ representative ];
 			if ( ! resource ) continue;
 			this.manifest.resources[ url ] = { ...resource };
@@ -1017,13 +1054,26 @@ export class CapturedResourceStore {
 		return capture;
 	}
 
+	/** Comparison pages warm the ephemeral cache, never portable resource ownership. */
+	private captureForReplay( response: Response ): Promise< void > {
+		const request = response.request();
+		const headers = request.headers();
+		if ( request.method() !== 'GET' || headers.range || headers.authorization ||
+			( ! REPLAYABLE_RESOURCE_TYPES.has( request.resourceType() ) && ! isPrefetch( request.resourceType(), headers ) ) ) return Promise.resolve();
+		try {
+			return this.captureReplayOnly( response, new URL( response.url() ) );
+		} catch {
+			return Promise.resolve();
+		}
+	}
+
 	private captureReplayOnly( response: Response, resourceUrl: URL ): Promise< void > {
 		const url = resourceUrl.href;
 		const existing = this.replayCaptures.get( url );
 		if ( existing ) return existing;
 		const capture = ( async () => {
 			const headers = response.headers();
-			const metadata = replayableResponseMetadata( response.status(), headers, response.request().headers?.() ?? {} );
+			const metadata = replayableResponseMetadata( response.status(), headers, await replayRequestHeaders( response, headers ) );
 			if ( ! metadata ) { this.markUncacheableReplay(url); return; }
 			const declaredBytes = Number( headers[ 'content-length' ] );
 			if (
@@ -1046,9 +1096,7 @@ export class CapturedResourceStore {
 				contentType: canonicalContentType( headers[ 'content-type' ] ?? '' ),
 			} );
 			this.replayMetadata.set( url, metadata );
-		} )().catch( () => {
-			// Ephemeral cache misses must not become portable artifact failures.
-		} );
+		} )().catch( orElse( undefined ) );
 		this.replayCaptures.set( url, capture );
 		return capture;
 	}
@@ -1188,7 +1236,7 @@ export class CapturedResourceStore {
 		}
 		this.storeBody( requestedUrl.href, body, relativePath, destination, contentType, renderCritical );
 		this.browserLoadedResources.add( requestedUrl.href );
-		const replayMetadata = replayableResponseMetadata( status, headers, fetched ? undefined : response.request().headers?.() ?? {} );
+		const replayMetadata = replayableResponseMetadata( status, headers, fetched ? undefined : await replayRequestHeaders( response, headers ) );
 		if ( replayMetadata ) this.replayMetadata.set( requestedUrl.href, replayMetadata );
 	}
 
@@ -1286,4 +1334,42 @@ export class CapturedResourceStore {
 		}
 		return { version: 1, resources: {}, failures: [] };
 	}
+}
+
+/** Install before blocking routes: later page routes must get first refusal. */
+export async function installResourceReplay( target: Page | BrowserContext, store: CapturedResourceStore, publicUrlsOnly = false ): Promise< void > {
+	const context = 'context' in target ? target.context() : target;
+	await target.route( '**/*', async ( route ) => {
+		const request = route.request();
+		try {
+			if ( publicUrlsOnly ) assertPublicHttpUrl( request.url() );
+		} catch {
+			await route.abort( 'blockedbyclient' );
+			return;
+		}
+		const requestHeaders = request.headers();
+		if ( request.resourceType() === 'image' ) requestHeaders.accept = BROWSER_IMAGE_ACCEPT;
+		// No cookie guard: a cookie-dependent response must declare `Vary: Cookie`, which the store already refuses.
+		if (
+			request.method() === 'GET' &&
+			! requestHeaders.range &&
+			! requestHeaders.authorization
+		) {
+			const replay = store.getReplayableResponse(
+				request.url(),
+				request.resourceType(),
+				requestHeaders,
+				outcome => { if (request.resourceType() !== 'document') attributeSourceReplay(context, request, outcome); }
+			);
+			if ( replay ) {
+				await route.fulfill( {
+					path: replay.path,
+					contentType: replay.contentType,
+					headers: replay.headers,
+				} );
+				return;
+			}
+		} else if (request.resourceType() !== 'document') attributeSourceReplay(context, request, 'miss:uncacheable');
+		await route.fallback( request.resourceType() === 'image' ? { headers: requestHeaders } : undefined );
+	} );
 }

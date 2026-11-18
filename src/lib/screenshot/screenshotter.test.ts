@@ -65,8 +65,11 @@ interface MockBrowser { newContext: (opts?: unknown) => Promise<MockContext>; cl
 
 function makeGoodPage(gotoStatus: number | ((url: string) => number) = 200) {
   let currentUrl = '';
-  const statusOf = (url: string) => typeof gotoStatus === 'function' ? gotoStatus(url) : gotoStatus;
+  // Unknown nonce routes are absent in this transport fixture, rather than
+  // reusing every real route's identical placeholder HTML as a soft-404.
+  const statusOf = (url: string) => url.includes('liberation-absent-') ? 404 : typeof gotoStatus === 'function' ? gotoStatus(url) : gotoStatus;
   return {
+    close: vi.fn().mockResolvedValue(undefined),
     route: vi.fn().mockResolvedValue(undefined),
     unroute: vi.fn().mockResolvedValue(undefined),
     mainFrame: vi.fn().mockReturnValue({}),
@@ -81,11 +84,11 @@ function makeGoodPage(gotoStatus: number | ((url: string) => number) = 200) {
     off: vi.fn(),
     goto: vi.fn().mockImplementation(async (url: string) => {
       currentUrl = url;
-      return { status: () => statusOf(currentUrl) };
+      return { status: () => statusOf(currentUrl), text: async () => '<html><body>hello</body></html>' };
     }),
     url: vi.fn().mockImplementation(() => currentUrl),
     addStyleTag: vi.fn().mockResolvedValue({ evaluate: vi.fn().mockResolvedValue(undefined), dispose: vi.fn().mockResolvedValue(undefined) }),
-    locator: vi.fn().mockReturnValue({ evaluateAll: vi.fn().mockResolvedValue([]) }),
+    locator: vi.fn().mockReturnValue({ count: vi.fn().mockResolvedValue(0), evaluateAll: vi.fn().mockResolvedValue([]) }),
     viewportSize: vi.fn().mockReturnValue({ width: 1440, height: 900 }),
     setViewportSize: vi.fn().mockResolvedValue(undefined),
     waitForTimeout: vi.fn().mockResolvedValue(undefined),
@@ -94,6 +97,10 @@ function makeGoodPage(gotoStatus: number | ((url: string) => number) = 200) {
     waitForLoadState: vi.fn().mockResolvedValue(undefined),
     evaluate: vi.fn().mockImplementation(async (fn: unknown) => {
       const s = String(fn);
+      // DOM-free fixture: no runtime viewport writes.
+      if (s.includes('viewportReactive')) return false;
+      // DOM-free fixture: there are no icon glyphs.
+      if (s.includes('glyphs.push')) return [];
       if (s.includes('document.documentElement.classList')) return { width: 1440, html: [], body: [] };
       // This transport fixture has no native animations; browser behavior is
       // exercised by native-view-timelines.test.ts with real Chromium.
@@ -125,7 +132,7 @@ function makeGoodPage(gotoStatus: number | ((url: string) => number) = 200) {
 function makeMockBrowser(pageFactory = () => makeGoodPage()): MockBrowser {
   return {
     newContext: vi.fn().mockImplementation(() => Promise.resolve({
-      newPage: vi.fn().mockResolvedValue(pageFactory()),
+      newPage: vi.fn().mockImplementation(async () => pageFactory()),
       addInitScript: vi.fn().mockResolvedValue(undefined),
       close: vi.fn().mockResolvedValue(undefined),
     } as MockContext)),
@@ -318,6 +325,7 @@ describe('captureScreenshots', () => {
 				await goto( url );
 				return {
 					status: () => 200,
+					text: async () => '<html><body>hello</body></html>',
 					url: () => navigation === 'client' ? requested : landed,
 					request: () => ( { redirectedFrom: () => navigation === 'client' ? null : {} } ),
 				};
@@ -383,14 +391,15 @@ describe('captureScreenshots', () => {
 		};
 
 		await expect(capturePageHtml(page as never)).resolves.toContain('<video autoplay muted>');
-		expect(page.evaluate).toHaveBeenCalledTimes(4);
-		expect(String(page.evaluate.mock.calls[0][0])).toContain('source.setAttribute(property');
-		expect(String(page.evaluate.mock.calls[0][0])).toContain('source.currentSrc || source.src');
-		expect(String(page.evaluate.mock.calls[0][0])).toContain('frame.getBoundingClientRect()');
-		expect(String(page.evaluate.mock.calls[1][0])).toContain('adoptedStyleSheets');
-		expect(String(page.evaluate.mock.calls[2][0])).toContain('document.documentElement.cloneNode');
-		expect(String(page.evaluate.mock.calls[2][0])).toContain('snapshot.outerHTML');
-		expect(String(page.evaluate.mock.calls[3][0])).toContain('frame.removeAttribute(attribute)');
+		const mediaCalls = page.evaluate.mock.calls.filter(([fn]) =>
+			/source\.setAttribute\(property|adoptedStyleSheets|snapshot\.outerHTML|frame\.removeAttribute\(attribute\)/.test(String(fn)));
+		expect(String(mediaCalls[0][0])).toContain('source.setAttribute(property');
+		expect(String(mediaCalls[0][0])).toContain('source.currentSrc || source.src');
+		expect(String(mediaCalls[0][0])).toContain('frame.getBoundingClientRect()');
+		expect(String(mediaCalls[1][0])).toContain('adoptedStyleSheets');
+		expect(String(mediaCalls[2][0])).toContain('document.documentElement.cloneNode');
+		expect(String(mediaCalls[2][0])).toContain('snapshot.outerHTML');
+		expect(String(mediaCalls[3][0])).toContain('frame.removeAttribute(attribute)');
 	});
 
 	it('synchronizes stylesheets once, after media settling rather than per retry', async () => {
@@ -410,12 +419,18 @@ describe('captureScreenshots', () => {
 	});
 
 	it('waits only while source-less video elements are pending runtime hydration', async () => {
+		let pending = true;
 		const page = {
-			evaluate: vi
-				.fn()
-				.mockResolvedValueOnce(true)
-				.mockResolvedValueOnce(false)
-				.mockResolvedValue({ html: '<html><video src="https://cdn.example.test/video.mp4"></video></html>', findings: [] }),
+			evaluate: vi.fn().mockImplementation(async (fn: unknown) => {
+				const s = String(fn);
+				if (s.includes('DOCTYPE')) return { html: '<html><video src="https://cdn.example.test/video.mp4"></video></html>', findings: [] };
+				if (s.includes('source.setAttribute(property')) {
+					const result = pending;
+					pending = false;
+					return result;
+				}
+				return false;
+			}),
 			waitForTimeout: vi.fn().mockResolvedValue(undefined),
 		};
 
@@ -726,6 +741,7 @@ describe('captureScreenshots', () => {
         const p = makeGoodPage();
         p.evaluate = vi.fn().mockImplementation(async (fn: unknown) => {
           const s = String(fn);
+          if (s.includes('glyphs.push')) return [];
           if (s.includes('DOCTYPE')) return { html: '<html><body>hello</body></html>', findings: [] };
           if (s.includes('__dlaCleanup')) return { url: 'https://example.com/short', viewport: 1440, removed: 0, records: [], truncated: false, failures: [], residual: 0 };
           if (s.includes('document.documentElement.classList')) return { width: 1440, html: [], body: [] };
@@ -833,7 +849,7 @@ describe('captureScreenshots', () => {
     page.goto.mockImplementation(async (url: string) => {
       await goto(url);
       if (probed) reloads++;
-      return { status: () => probed ? 403 : 200 };
+      return { status: () => probed ? 403 : 200, text: async () => '<html><body>hello</body></html>' };
     });
     (connectBrowser as ReturnType<typeof vi.fn>).mockResolvedValue(makeMockBrowser(() => page));
     try {

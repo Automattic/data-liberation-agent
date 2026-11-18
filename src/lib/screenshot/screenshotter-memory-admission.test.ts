@@ -10,6 +10,7 @@ const skipBrowser = Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( c
 
 it.skipIf( skipBrowser )( 'calibrates degraded captures and admits overlapping routes despite every phone profile failing', async () => {
 	const server = createServer( ( request, response ) => {
+		if ( request.url?.includes( 'liberation-absent-' ) ) { response.writeHead( 404 ); response.end(); return; }
 		if ( /Mobile/i.test( request.headers[ 'user-agent' ] ?? '' ) ) {
 			response.writeHead( 403 );
 			response.end();

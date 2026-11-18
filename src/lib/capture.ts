@@ -26,7 +26,7 @@ import { DEFAULT_CAPTURE_TIME_BUDGET_MS, ROUTE_OMITTED_BY_BUDGET, routeBudgetRea
 import type { RouteDiagnostic } from './capture-export-routes.js';
 import { ROUTE_ALIAS_CANONICAL, probeCanonicalRouteAliases } from './route-aliases.js';
 import { writeSourceFindings } from './source-findings.js';
-import { sourceRequestContext, SourceRequestGovernors } from './source-request-governor.js';
+import { sourceRequestContext, SourceRequestGovernors, THROTTLE_STATUSES } from './source-request-governor.js';
 import { completeSourceTlsChain } from './tls-aia.js';
 import { AssetAcquisitionQueue } from './asset-acquisition-queue.js';
 import { captureTimeBudgetWindow, validateTimeBudgetMs, validateRouteReserveMs, validateRouteDeadlineMs } from './capture-time-budget.js';
@@ -210,6 +210,7 @@ export interface CaptureOptions {
 	deviceMode?: import('./screenshot/device-mode.js').DeviceModeRequest;
 	/**
 	 * Template-clustered capture, phase 1 of #784 (browser acquisition only).
+	 * Defaults on when the adapter declares structuredContent; false opts out.
 	 * Implies `routeSelection: 'template-coverage'`, adds one verification
 	 * member per multi-member cluster to the budget, and derives every other
 	 * member of a verified cluster from the representative's captured document
@@ -467,22 +468,37 @@ async function runCaptureWebsite(
 		onProgress?.( timedEvent );
 	};
 
+	if ( options.acquisition !== 'http' ) await ( await import( './browser-kit/ensure-capture-browser.js' ) ).ensureCaptureBrowser();
 	const response = await fetchEntryDocument( await resolveEntryUrl( options.url ), sourceGovernors, { session: options.acquisition !== 'http' } );
-	const sourceUrl = response.finalUrl;
+	// The governor already waited out Retry-After; a still-throttled entry would
+	// detect from a throttle page. Other statuses keep their browser capture.
+	if ( THROTTLE_STATUSES.has( response.status ) ) {
+		throw new Error( `entry_document_throttled: Entry document ${ response.finalUrl } is still throttled (HTTP ${ response.status }) after Retry-After` ); // failure-class: operational
+	}
+	let sourceUrl = response.finalUrl;
 	const entryHtml = response.body && response.headers
 		? decodeHtml( new Uint8Array( response.body ), response.headers.get( 'content-type' ) ?? '', { fatal: false } )
 		: '';
 	const outputDir = options.outputDir;
 	const detection = await detect( sourceUrl, { headers: response.headers, html: entryHtml } );
+	process.stderr.write( `[capture] platform detection ${ JSON.stringify( { status: response.status, ...detection } ) }\n` );
 	const adapter = dependencies.findAdapter( detection.platform );
 	if ( ! adapter )
 		throw new UnsupportedCapturePlatformError(
 			`No adapter available for platform: ${ detection.platform }`
 		);
-	const routeScope = githubPagesRouteScope( sourceUrl ) ?? adapter.routeScope?.( sourceUrl );
+	const templateClusters = options.templateClusters ?? ( options.acquisition !== 'http' && !! adapter.structuredContent );
+	const templateClustersDecision = {
+		enabled: templateClusters,
+		source: options.templateClusters !== undefined ? 'explicit' : templateClusters ? 'adapter-structured-content' : 'default',
+	};
+	if ( options.templateClusters === true && options.acquisition === 'http' ) throw new Error( 'templateClusters applies to browser acquisition only' ); // failure-class: programmer
+	const scopeDiagnostics: NonNullable<CaptureInventory['diagnostics']> = [];
+	const routeScope = await githubPagesRouteScope( sourceUrl, scopeDiagnostics ) ?? adapter.routeScope?.( sourceUrl );
 	if ( routeScope ) {
 		validateRouteScope( routeScope );
 		if ( !routeInScope( sourceUrl, routeScope ) ) throw new Error( 'Source URL is outside its adapter route scope' );
+		sourceUrl = scopedRouteKey( sourceUrl, routeScope );
 	}
 	if ( options.acquisition === 'http' && ! adapter.acquisition ) throw new UnsupportedCapturePlatformError( `Platform ${ adapter.id } has no HTTP acquisition profile` );
 
@@ -494,11 +510,11 @@ async function runCaptureWebsite(
 	} ) ) as CaptureInventory;
 	process.stderr.write( `[timing] discovery ${ Date.now() - phaseStartedAt }ms\n` );
 	// Structured content (#1701) only feeds template-cluster derivation.
-	const contentSource = options.templateClusters === true ? adapter.structuredContent : undefined;
+	const contentSource = templateClusters ? adapter.structuredContent : undefined;
 	const structuredContent = contentSource ? await contentSource.enumerate( sourceUrl, { governors: sourceGovernors } ) : undefined;
 	const contentEntries = structuredContent?.entries ?? [];
 	if ( structuredContent ) process.stderr.write( `[timing] structured content ${ adapter.id }: ${ contentEntries.length } entries, ${ structuredContent.diagnostics.length } diagnostics, ${ Date.now() - phaseStartedAt }ms\n` );
-	inventory.diagnostics = [ ...( inventory.diagnostics ?? [] ), ...( structuredContent?.diagnostics ?? [] ) ];
+	inventory.diagnostics = [ ...scopeDiagnostics, ...( inventory.diagnostics ?? [] ), ...( structuredContent?.diagnostics ?? [] ) ];
 	const sourceRoute = documentRequestUrl( sourceUrl );
 	// Action URLs and declared runtime paths leave before the budget sees them, so they never
 	// spend, and never appear as omitted, failed or missing routes.
@@ -519,7 +535,7 @@ async function runCaptureWebsite(
 				if ( action ) excludedActions.set( action.url, action );
 				return ! action;
 			} ),
-	] );
+	].map( url => scopedRouteKey( url, routeScope ) ) );
 	// Structured content already declares each entry's canonical permalink. Do
 	// not fetch every entry merely to rediscover that identity before derivation.
 	const feedPermalinks = new Set( contentEntries.map( entry => entry.permalink ) );
@@ -537,24 +553,26 @@ async function runCaptureWebsite(
 		reason: `Route skipped before capture: its server-HTML rel=canonical resolves to ${ documentRequestUrl( canonicalUrl ) }, another inventory route`,
 		unit: 'route' as const,
 	} ) );
-	const templateClusters = options.templateClusters === true;
-	if ( templateClusters && options.acquisition === 'http' ) throw new Error( 'templateClusters applies to browser acquisition only' ); // failure-class: programmer
 	const routeSelection = options.routeSelection ?? ( templateClusters ? 'template-coverage' : undefined );
 	const templateGrouping = routeSelection === 'template-coverage'
 		? await groupInventoryTemplates( { contentEntries, sourceUrl, urls: prunedInventoryUrls, routeScope, styleNormalization: adapter.templateStyleNormalization, templateIdentity: adapter.templateIdentity, outputDir, timeBudgetMs, wholeInventory: options.routeLimit === 'all' || templateClusters, governors: sourceGovernors } )
 		: undefined;
 	const navigationTargets = new Set( extractNavigationLandmarkLinks( entryHtml, sourceUrl ).map( link => normalizedUrl( link.href ) ) );
+	// Shape sub-clusters (#1805) seed their own representative and verifier.
+	const clusterRankingGroups = templateGrouping?.report
+		? ( await import( './template-groups.js' ) ).templateClusterRankingGroups( templateGrouping.report.groups, structuredMemberShape( contentSource, contentEntries ) )
+		: [];
 	// Explicit count budgets select before capture observes the entry DOM. Only
 	// pay for an early render when server chrome cannot supply that priority.
 	if ( routeLimit !== undefined && prunedInventoryUrls.length > routeLimit && navigationTargets.size === 0 && options.acquisition !== 'http' ) {
 		const { renderedEntryNavigation } = await import( './entry-navigation.js' );
-		for ( const href of await renderedEntryNavigation( sourceUrl, sourceGovernors ) ) navigationTargets.add( normalizedUrl( href ) );
+		for ( const href of await renderedEntryNavigation( sourceUrl, sourceGovernors, adapter.sourceTelemetry ) ) navigationTargets.add( normalizedUrl( href ) );
 	}
 	const entryNavigationRoutes = prunedInventoryUrls.filter( url => navigationTargets.has( normalizedUrl( url ) ) );
 	// Cluster seeds unlock whole collections before navigation spends the window.
 	// Without clusters, preserve navigation-first selection and inventory spread.
 	const preferred = templateClusters
-		? rankTemplateClusterRoutes( prunedInventoryUrls, sourceUrl, templateGrouping?.report?.groups ?? [], navigationTargets, contentSource?.termName.bind( contentSource ) )
+		? rankTemplateClusterRoutes( prunedInventoryUrls, sourceUrl, clusterRankingGroups, navigationTargets, contentSource?.termName.bind( contentSource ) )
 		: [ ...entryNavigationRoutes, ...( templateGrouping?.representatives ?? [] ) ];
 	const { selected: urls, omitted } = selectRouteBudget( prunedInventoryUrls, routeLimit, preferred, timeBudget?.projectAdmission && ! options.checkpoint );
 	let templateGroups = templateGrouping?.report ? await recordTemplateSelection( outputDir, templateGrouping.report, urls, routeLimit ) : undefined;
@@ -570,7 +588,7 @@ async function runCaptureWebsite(
 	if ( omitted.length ) process.stderr.write( `[capture] route budget ${ routeLimit }: capturing ${ urls.length } of ${ urls.length + omitted.length } routes\n` );
 	progress( { phase: 'capturing', current: 0, total: urls.length } );
 	if ( options.acquisition === 'http' ) {
-		const result = await ( await import( './capture-http.js' ) ).captureHttpWebsite( { options, sourceUrl, platform: adapter, routeScope, urls, startedAt, progress, title: inventory.siteMeta?.title, discoveryDiagnostics, templateGroups, canonicalAliases: aliasProbe.aliases, governors: sourceGovernors } );
+		const result = await ( await import( './capture-http.js' ) ).captureHttpWebsite( { options, sourceUrl, platform: adapter, detection, routeScope, urls, startedAt, progress, title: inventory.siteMeta?.title, discoveryDiagnostics, templateGroups, templateClustersDecision, canonicalAliases: aliasProbe.aliases, governors: sourceGovernors } );
 		assertEntrypointHasContent( outputDir, options.url, sourceUrl );
 		if ( options.strict && ! result.complete ) throw new IncompleteCaptureError( result );
 		return result;
@@ -617,6 +635,7 @@ async function runCaptureWebsite(
 		urls,
 		routeScope,
 		runtimePaths: adapter.runtimePaths,
+		sourceTelemetry: adapter.sourceTelemetry,
 		outputDir,
 		linkedPages: options.linkedPages ?? {},
 		...( aliasProbe.aliases.length ? { linkedCanonicalAliases: aliasProbe.aliases } : {} ),
@@ -675,7 +694,7 @@ async function runCaptureWebsite(
 		} : {} ),
 		...( timeBudget?.projectAdmission || templateClusters ? {
 			prioritizePendingRoutes: ( pending: string[] ) => {
-				if ( templateClusters ) return rankTemplateClusterRoutes( pending, sourceUrl, templateGrouping?.report?.groups ?? [], navigationTargets, contentSource?.termName.bind( contentSource ) );
+				if ( templateClusters ) return rankTemplateClusterRoutes( pending, sourceUrl, clusterRankingGroups, navigationTargets, contentSource?.termName.bind( contentSource ) );
 				const pendingRoutes = new Set( pending );
 				const promoted = prunedInventoryUrls.filter( url => pendingRoutes.has( url ) && navigationTargets.has( normalizedUrl( url ) ) );
 				const promotedRoutes = new Set( promoted );
@@ -711,7 +730,7 @@ async function runCaptureWebsite(
 	);
 
 	// Phase 1 of #784: derive every ungated member of a verified multi-member
-	// cluster from its representative's captured document. Opt-in
+	// cluster from its representative's captured document. Enabled by
 	// (`templateClusters`), bounded by TEMPLATE_CLUSTER_LIMITS, and recorded in
 	// `template-clusters.json` next to `website/`. Derived entries become
 	// ordinary manifest entries before export, so export needs no second input
@@ -823,7 +842,9 @@ async function runCaptureWebsite(
 		};
 		writeFileSync( captureReceiptPath, `${ JSON.stringify( result, null, 2 ) }\n` );
 		progress( { phase: 'complete', current: screenshotResult.captured + screenshotResult.skipped, total: screenshotResult.urls.length } );
-		if ( blockedClient ) throw blockedClient; // failure-class: operational
+		// A refusal after the entrypoint truncates the capture like a spent
+		// budget: the receipt carries the evidence and the partial site ships.
+		if ( blockedClient && ! entrypointCaptured ) throw blockedClient; // failure-class: operational
 		return result;
 	}
 	const { exportWebsiteCapture } = await import( './capture-export.js' );
@@ -832,6 +853,7 @@ async function runCaptureWebsite(
 		outputDir,
 		sourceUrl,
 		platform: detection.platform,
+		canonicalizeHtml: adapter.liberation?.canonicalizeHtml?.bind( adapter.liberation ),
 		routeScope,
 		resolveDocumentSelection: adapter.liberation?.documentSelection,
 		...( screenshotResult.deviceMode ? { deviceMode: screenshotResult.deviceMode.mode } : {} ),
@@ -855,7 +877,9 @@ async function runCaptureWebsite(
 		preview = { status: 'failed', reason: error instanceof Error ? error.message : String( error ) };
 	}
 	const receipt = JSON.parse( readFileSync( captureReceiptPath, 'utf8' ) );
+	receipt.source.detection = detection;
 	receipt.preview = preview;
+	receipt.templateClustersDecision = templateClustersDecision;
 	if ( templateGroups ) receipt.templateGroups = templateGroups;
 	if ( derivedTemplateClusters ) {
 		receipt.templateClusters = derivedTemplateClusters.receiptSummary;
@@ -890,6 +914,7 @@ async function runCaptureWebsite(
 	process.stderr.write( `[timing] behavior-discovery ${ Date.now() - behaviorStartedAt }ms\n` );
 	const finalSummary = withExportDroppedRoutes( summary, receipt.discoveryDiagnostics );
 	const complete =
+		! blockedClient &&
 		finalSummary.routesFailed === 0 &&
 		! hasUncapturedProfiles( receipt.discoveryDiagnostics ) &&
 		! ( receipt.sourceProfile?.documentSelection?.routes ?? [] ).some( ( route: { missing?: string[] } ) => ( route.missing?.length ?? 0 ) > 0 ) &&
@@ -921,7 +946,6 @@ async function runCaptureWebsite(
 	reference.finalize( captureReceiptPath );
 	process.stderr.write( `[timing] reference-finalize ${ Date.now() - referenceStartedAt }ms\n` );
 	progress( { phase: 'complete', current: urls.length, total: urls.length } );
-	if ( blockedClient ) throw blockedClient; // failure-class: operational
 
 	if ( options.strict && ! complete ) throw new IncompleteCaptureError( result );
 	return result;
@@ -1005,6 +1029,16 @@ export async function groupInventoryTemplates( input: { contentEntries?: import(
 	}
 }
 
+/** An adapter's member shape keyed by route, when it declares one (#1805). */
+function structuredMemberShape( contentSource: import('../platform/types.js').StructuredContentSource | undefined, entries: readonly import('../platform/types.js').StructuredContentEntry[] | undefined ): ( ( url: string ) => string | undefined ) | undefined {
+	if ( ! contentSource?.memberShape || ! entries?.length ) return undefined;
+	const byUrl = new Map( entries.map( entry => [ normalizedUrl( entry.permalink ), entry ] ) );
+	return url => {
+		const entry = byUrl.get( normalizedUrl( url ) );
+		return entry ? contentSource.memberShape!( entry ) : undefined;
+	};
+}
+
 /**
  * Grouping bounds for a capture. Whole-inventory capture (`routeLimit: 'all'`,
  * or `templateClusters`, which can derive only fingerprinted members) makes
@@ -1072,10 +1106,10 @@ export interface TemplateClusterDerivation {
  * One cluster's failure degrades only that cluster (#761); a terminated
  * stage leaves the pre-derivation state (members stay budget-omitted).
  *
- * Derived routes are phase-1 desktop documents: the transplant copies the
- * representative's desktop profile and fluid evidence, and a dual-site
- * member without a derived phone document ships desktop-only. The mobile
- * transplant (§3.1 step 4) is remaining phase-1 work.
+ * A member derives every document the representative ships: desktop, phone
+ * and any middle width range, each from its representative counterpart, so
+ * export assembles members exactly as it assembles the representative. A
+ * failed derivation of any of them escalates the member.
  */
 export async function deriveTemplateClusterMembers( input: {
 	contentEntries?: import('../platform/types.js').StructuredContentEntry[];
@@ -1085,6 +1119,8 @@ export async function deriveTemplateClusterMembers( input: {
 	report: import('./template-groups.js').TemplateGroupsReport;
 	routeScope?: import('../platform/types.js').SiteRouteScope;
 	timeBudgetMs?: number;
+	/** Runtime-render stage budget; defaults to `runtimeRenderBudgetMs( timeBudgetMs )`. */
+	runtimeRenderBudgetMs?: number;
 	frontierUrls: string[];
 	governors: SourceRequestGovernors;
 	styleNormalization?: import('./template-groups.js').TemplateStyleNormalization;
@@ -1098,7 +1134,20 @@ export async function deriveTemplateClusterMembers( input: {
 } ): Promise< TemplateClusterDerivation > {
 	const { deriveMemberDocument, compareDerivedWithCapture, TEMPLATE_CLUSTER_LIMITS, writeTemplateClusters, TEMPLATE_CLUSTERS_FILE } =
 		await import( './template-clusters.js' );
-	const { safeFetch } = await import( './media-fetch/safe-fetch.js' );
+	const { templateClusterUnits } = await import( './template-groups.js' );
+	const memberShape = structuredMemberShape( input.contentSource, input.contentEntries );
+	// Derivation documents go through the run's source governors, as grouping
+	// does: throttles wait out Retry-After and retry (#1685). A failed or non-2xx
+	// answer is the source's unavailability, never template evidence.
+	const sourceDocument = async ( url: string ): Promise< { html: string } | { unavailable: string } > => {
+		try {
+			const response = await safeFetch( url, { governors: input.governors, timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs, attribution: { phase: 'template-clusters', url } } );
+			if ( response.status < 200 || response.status >= 300 ) return { unavailable: `HTTP ${ response.status }` };
+			return { html: response.body.toString( 'utf8' ) };
+		} catch ( error ) {
+			return { unavailable: error instanceof Error ? error.message : String( error ) };
+		}
+	};
 	const { CapturedResourceStore } = await import( './screenshot/resource-capture.js' );
 	const { ManifestQueue } = await import( './screenshot/manifest-queue.js' );
 	const { slugify } = await import( './url/index.js' );
@@ -1116,7 +1165,7 @@ export async function deriveTemplateClusterMembers( input: {
 	const derivedUrls: string[] = [];
 	let escalated = 0;
 	let unavailableCount = 0;
-	const escalations: Array< { url: string; gate: string; reason: string; slug?: string; clusterSize: number; record: import('./template-clusters.js').TemplateClusterRecord } > = [];
+	const escalations: Array< { url: string; gate: string; reason: string; runtimeAnchor?: import('./template-clusters.js').SlotAnchor; slug?: string; clusterSize: number; record: import('./template-clusters.js').TemplateClusterRecord } > = [];
 
 	// The capture released the manifest queue, so this stage is its single
 	// writer; a fresh queue loads the flushed file.
@@ -1189,22 +1238,66 @@ export async function deriveTemplateClusterMembers( input: {
 	}
 	if ( round === maxRounds ) break;
 	try {
-		for ( const group of input.report.groups ) {
-			if ( group.size < 2 ) continue;
-			const repEntry = capturedEntry( group.representative );
-			if ( ! repEntry?.html || repEntry.redirectedTo ) continue;
-			const repHtmlPath = resolve( input.outputDir, repEntry.html );
+		// A group whose members span several adapter-declared shapes derives
+		// one sub-cluster per shape (#1805): an outlier representative must not
+		// fail members its synthesized documents can never match.
+		const units = input.report.groups.flatMap( group => {
+			if ( group.size < 2 ) return [];
+			const { units, unclustered } = templateClusterUnits( group, memberShape );
+			if ( units.length === 1 && units[ 0 ]!.id === group.id ) return units;
+			let record = clusters.find( cluster => cluster.id === group.id );
+			if ( ! record ) {
+				record = { id: group.id, key: group.key, representative: group.representative, subClusters: units.map( unit => ( { id: unit.id, shape: unit.shape!, representative: unit.representative, size: unit.size } ) ), derived: [], escalated: [], unavailable: [] };
+				clusters.push( record );
+			}
+			// No sub-cluster can derive a singleton-shape or unshaped member: it
+			// takes ordinary acquisition (browser capture, else the HTTP fallback).
+			const attempted = new Set( record.escalated.map( member => member.url ) );
+			for ( const url of unclustered ) {
+				if ( isCaptured( url ) || attempted.has( url ) ) continue;
+				const gate = 'member_shape_unclustered';
+				const reason = 'member shape has no other member to derive it from';
+				record.escalated.push( { url, gate, reason } );
+				escalations.push( { url, gate, reason, slug: feedEntries.get( normalizedUrl( url ) )?.slug, clusterSize: group.size, record } );
+				escalated++;
+			}
+			return units;
+		} );
+		for ( const unit of units ) {
+			// A representative that failed capture (a timeout under throttling, a
+			// redirect) must not drop its cluster: a captured member stands in.
+			const usable = ( url: string ) => { const entry = capturedEntry( url ); return Boolean( entry?.html && ! entry.redirectedTo ) && ! derivedUrls.includes( url ); };
+			const representative = usable( unit.representative ) ? unit.representative
+				: unit.members.filter( url => url !== unit.representative && usable( url ) ).sort( ( a, b ) => a.localeCompare( b ) )[ 0 ];
+			if ( ! representative ) continue;
+			const group = { ...unit, representative };
+			const repEntry = capturedEntry( representative )!;
+			const repHtmlPath = resolve( input.outputDir, repEntry.html! );
 			if ( ! pathWithin( input.outputDir, repHtmlPath ) || ! existsSync( repHtmlPath ) ) continue;
 			let record = clusters.find( cluster => cluster.id === group.id );
 			if ( record?.verification && ! record.verification.equal ) continue;
 			if ( ! record ) {
-				record = { id: group.id, key: group.key, representative: group.representative, derived: [], escalated: [], unavailable: [] };
+				record = { id: group.id, key: group.key, representative: group.representative, ...( group.parent ? { parent: group.parent, shape: group.shape } : {} ), derived: [], escalated: [], unavailable: [] };
 				clusters.push( record );
 			}
 			const startedAt = Date.now();
 			try {
-				const repFetch = await safeFetch( group.representative, { timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs, governors: input.governors } );
-				const repServerHtml = repFetch.body.toString( 'utf8' );
+				const attempted = new Set( [ ...record.escalated, ...record.unavailable ].map( member => member.url ) );
+				const members = group.members
+					.filter( url => ! isCaptured( url ) && ! attempted.has( url ) )
+					.sort( ( a, b ) => a.localeCompare( b ) );
+				const sourceUnavailable = ( url: string, reason: string ) => {
+					const why = `source unavailable: ${ reason }`;
+					for ( const member of members ) record.unavailable.push( { url: member, reason: why } );
+					unavailableCount += members.length;
+					diagnostics.push( { code: ROUTE_TEMPLATE_ESCALATED, url, reason: `cluster ${ group.id } derivation ${ why }`, metrics: { clusterSize: group.size } } );
+				};
+				const repFetch = await sourceDocument( group.representative );
+				if ( 'unavailable' in repFetch ) {
+					sourceUnavailable( group.representative, `representative ${ repFetch.unavailable }` );
+					continue;
+				}
+				const repServerHtml = repFetch.html;
 				const repProcessedHtml = readFileSync( repHtmlPath, 'utf8' );
 				const repFeed = feedEntries.get( normalizedUrl( group.representative ) );
 				let feedVerified = Boolean( repFeed && feedBodyEquivalent( repProcessedHtml, repFeed ) );
@@ -1212,18 +1305,22 @@ export async function deriveTemplateClusterMembers( input: {
 				// the two, so each member is derived from both.
 				const repMobilePath = repEntry.mobileHtml ? resolve( input.outputDir, repEntry.mobileHtml ) : undefined;
 				const repProcessedMobileHtml = repMobilePath && pathWithin( input.outputDir, repMobilePath ) && existsSync( repMobilePath ) ? readFileSync( repMobilePath, 'utf8' ) : undefined;
+				// Further width-range documents (a middle layout, #1379) assemble
+				// with the other two at export; members derive them the same way, or
+				// the member's chrome assembles differently from the representative's.
+				const repWidthDocuments = repProcessedMobileHtml === undefined ? [] : Object.entries( repEntry.profiles ?? {} ).flatMap( ( [ key, profile ] ) => {
+					if ( key === 'desktop' || key === 'mobile' || ! profile.html ) return [];
+					const path = resolve( input.outputDir, profile.html );
+					return pathWithin( input.outputDir, path ) && existsSync( path ) ? [ { key, profile, html: readFileSync( path, 'utf8' ) } ] : [];
+				} );
 				const store = new CapturedResourceStore( input.outputDir, input.sourceUrl, undefined, input.maxTotalBytes );
 				let derivedInCluster = record.derived.length;
-				let clusterFailed = false;
+				let clusterFailure = { code: 'cluster_verification_missing', reason: 'cluster has no captured verification member' };
 
 				// Verification first (#784 §4.2): one member derived, then compared
 				// with its real capture, offline, on the six acceptance checks. A
 				// mismatch (or a missing verification capture) fails the cluster: no
 				// member of it is ever derived (§3.5).
-				const attempted = new Set( [ ...record.escalated, ...record.unavailable ].map( member => member.url ) );
-				const members = group.members
-					.filter( url => ! isCaptured( url ) && ! attempted.has( url ) )
-					.sort( ( a, b ) => a.localeCompare( b ) );
 				// A captured member is the stronger verification: its real capture
 				// exists on disk, so the derived-vs-real comparison is actually
 				// scored. Preferred verification members are already in the budget.
@@ -1243,31 +1340,51 @@ export async function deriveTemplateClusterMembers( input: {
 					const verificationFeed = feedEntries.get( normalizedUrl( verificationUrl ) );
 					feedVerified = feedVerified && Boolean( verificationFeed && feedBodyEquivalent( realHtml, verificationFeed ) );
 					const feedHtml = feedVerified && repFeed && verificationFeed ? await feedMemberDocument( repServerHtml, repFeed, verificationFeed ) : undefined;
-					const memberHtml = feedHtml ?? ( await safeFetch( verificationUrl, { timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs, governors: input.governors } ) ).body.toString( 'utf8' );
-					let derivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml: memberHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, ...( feedHtml ? { contentSlotSelector, memberHeadSlotSelector: contentSource?.memberHeadSlotSelector } : {} ) } );
-					if ( feedHtml && ( ! derivation.ok || ! compareDerivedWithCapture( { derivedHtml: derivation.html, realHtml, baseUrl: group.representative } ).equal ) ) {
+					const verificationFetch = feedHtml === undefined ? await sourceDocument( verificationUrl ) : { html: feedHtml };
+					if ( 'unavailable' in verificationFetch ) {
+						sourceUnavailable( verificationUrl, `verification member ${ verificationFetch.unavailable }` );
+						continue;
+					}
+					let memberHtml = verificationFetch.html;
+					let derivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml: memberHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, featuredImages: { representative: repFeed?.image, member: verificationFeed?.image }, ...( feedHtml ? { contentSlotSelector, memberHeadSlotSelector: contentSource?.memberHeadSlotSelector } : {} ) } );
+					if ( feedHtml && ( ! derivation.ok || ! compareDerivedWithCapture( { derivedHtml: derivation.html, realHtml, repServerHtml, memberServerHtml: memberHtml, styleNormalization: input.styleNormalization, baseUrl: group.representative } ).equal ) ) {
 						feedVerified = false;
 						diagnostics.push( { code: ROUTE_TEMPLATE_ESCALATED, url: verificationUrl, reason: 'feed template verification mismatch; using governed page acquisition for this cluster' } );
-						const fallback = await safeFetch( verificationUrl, { timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs, governors: input.governors } );
-						derivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml: fallback.body.toString( 'utf8' ), baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization } );
+						const fallback = await sourceDocument( verificationUrl );
+						if ( 'unavailable' in fallback ) {
+							sourceUnavailable( verificationUrl, `verification member ${ fallback.unavailable }` );
+							continue;
+						}
+						memberHtml = fallback.html;
+						derivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml: memberHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, featuredImages: { representative: repFeed?.image, member: verificationFeed?.image } } );
 					}
 					if ( derivation.ok ) {
-						const comparison = compareDerivedWithCapture( { derivedHtml: derivation.html, realHtml, baseUrl: group.representative } );
+						const comparison = compareDerivedWithCapture( { derivedHtml: derivation.html, realHtml, repServerHtml, memberServerHtml: memberHtml, styleNormalization: input.styleNormalization, baseUrl: group.representative } );
 						verificationRecord = { url: verificationUrl, captured: true, checks: { ...comparison.checks, ...( repFeed ? { feedBody: feedVerified } : {} ) }, equal: comparison.equal };
 						verified = comparison.equal;
 						if ( ! comparison.equal ) {
 							const failing = Object.entries( comparison.checks ).filter( ( [ , ok ] ) => ! ok ).map( ( [ name ] ) => name ).join( ', ' );
+							clusterFailure = { code: 'cluster_verification_mismatch', reason: `derived-vs-real comparison failed (${ failing })` };
 	diagnostics.push( { code: ROUTE_TEMPLATE_ESCALATED, url: verificationUrl, reason: `cluster verification failed its derived-vs-real comparison (${ failing })`, metrics: { clusterSize: group.size } } );
 						}
 					} else {
 						verificationRecord = { url: verificationUrl, captured: true };
+						clusterFailure = derivation.gate;
 						diagnostics.push( { code: ROUTE_TEMPLATE_ESCALATED, url: verificationUrl, reason: `cluster verification member failed the ${ derivation.gate.code } gate`, metrics: { clusterSize: group.size } } );
 					}
 				}
 				// The verdict is final here: record it so a failed cluster is visible
 				// in the receipt, not only in the diagnostics.
 				record.verification = verificationRecord;
-				if ( ! verified ) clusterFailed = true;
+				if ( ! verified ) {
+					for ( const url of members ) {
+						const { code: gate, reason } = clusterFailure;
+						record.escalated.push( { url, gate, reason } );
+						escalations.push( { url, gate, reason, runtimeAnchor: 'runtimeAnchor' in clusterFailure ? clusterFailure.runtimeAnchor as import('./template-clusters.js').SlotAnchor : undefined, slug: feedEntries.get( normalizedUrl( url ) )?.slug, clusterSize: group.size, record } );
+						escalated++;
+					}
+					continue;
+				}
 
 				// Member documents are governed HTTP work; keep the governor's
 				// concurrency busy ahead of the CPU-bound derivation.
@@ -1284,39 +1401,39 @@ export async function deriveTemplateClusterMembers( input: {
 					return memberDocuments.get( members[ index ]! );
 				};
 				for ( const [ index, url ] of members.entries() ) {
-					if ( clusterFailed || derivedInCluster >= Math.max( TEMPLATE_CLUSTER_LIMITS.maxDerivedRoutes, feedEntries.size ) ) break;
+					if ( derivedInCluster >= Math.max( TEMPLATE_CLUSTER_LIMITS.maxDerivedRoutes, feedEntries.size ) ) break;
 					const memberFeed = feedEntries.get( normalizedUrl( url ) );
 					phaseStart = Date.now();
-					const feedHtml = await memberDocument( index );
+					// A prefetched governed request can time out while derivation holds
+					// the event loop; retry it once inline before the raw-page fallback.
+					const feedHtml = await memberDocument( index ) ?? ( feedVerified && repFeed && memberFeed ? await Promise.resolve( feedMemberDocument( repServerHtml, repFeed, memberFeed ) ).catch( () => undefined ) : undefined );
 					memberDocuments.delete( url );
 					lap( 'memberDocument' );
-					const response = feedHtml ? { status: 200, body: Buffer.from( feedHtml ) } : await safeFetch( url, { timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs, governors: input.governors } ).catch( ( error: unknown ) => {
-						record.unavailable.push( { url, reason: String( ( error as Error ).message ?? error ) } );
-						unavailableCount++;
-						return undefined;
-					} );
-					if ( ! response ) continue;
-					if ( response.status < 200 || response.status >= 300 ) {
-						record.unavailable.push( { url, reason: `HTTP ${ response.status }` } );
+					const response = feedHtml ? { html: feedHtml } : await sourceDocument( url );
+					if ( 'unavailable' in response ) {
+						record.unavailable.push( { url, reason: response.unavailable } );
 						unavailableCount++;
 						continue;
 					}
-					const memberServerHtml = response.body.toString( 'utf8' );
+					const memberServerHtml = response.html;
 					// A synthesized member is the representative's template by
 					// construction: its key is compared outside the content slot.
 					const slotSelector = feedHtml ? { contentSlotSelector, memberHeadSlotSelector: contentSource?.memberHeadSlotSelector } : {};
-					const desktopDerivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, ...slotSelector } );
+					const desktopDerivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, featuredImages: { representative: repFeed?.image, member: memberFeed?.image }, ...slotSelector } );
 					const mobileDerivation = desktopDerivation.ok && repProcessedMobileHtml !== undefined
-						? deriveMemberDocument( { repServerHtml, repProcessedHtml: repProcessedMobileHtml, memberServerHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, ...slotSelector } )
+						? deriveMemberDocument( { repServerHtml, repProcessedHtml: repProcessedMobileHtml, memberServerHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, featuredImages: { representative: repFeed?.image, member: memberFeed?.image }, ...slotSelector } )
 						: undefined;
-					const derivation = mobileDerivation && ! mobileDerivation.ok ? mobileDerivation : desktopDerivation;
+					const widthDerivations = mobileDerivation?.ok
+						? repWidthDocuments.map( document => ( { ...document, derivation: deriveMemberDocument( { repServerHtml, repProcessedHtml: document.html, memberServerHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, featuredImages: { representative: repFeed?.image, member: memberFeed?.image }, ...slotSelector } ) } ) )
+						: [];
+					const derivation = [ mobileDerivation, ...widthDerivations.map( width => width.derivation ) ].find( candidate => candidate && ! candidate.ok ) ?? desktopDerivation;
 					lap( 'derive' );
 					if ( ! derivation.ok ) {
 						// A gate failure is an escalation, not a loss: the member falls
 						// back to HTTP acquisition after derivation, or keeps its
 						// budget-omission row with the gate named for the next run.
 						record.escalated.push( { url, gate: derivation.gate.code, reason: derivation.gate.reason } );
-						escalations.push( { url, gate: derivation.gate.code, reason: derivation.gate.reason, slug: memberFeed?.slug, clusterSize: group.size, record } );
+						escalations.push( { url, gate: derivation.gate.code, reason: derivation.gate.reason, runtimeAnchor: derivation.gate.runtimeAnchor, slug: memberFeed?.slug, clusterSize: group.size, record } );
 						escalated++;
 						continue;
 					}
@@ -1334,6 +1451,14 @@ export async function deriveTemplateClusterMembers( input: {
 						memberMobilePath = `screenshots/derived/${ slugify( url ) }.mobile.html`;
 						writeFileSync( resolve( input.outputDir, memberMobilePath ), mobileDerivation.html );
 					}
+					const widthProfiles: NonNullable< import('./screenshot/manifest-queue.js').ManifestEntry[ 'profiles' ] > = {};
+					for ( const { key, profile, derivation: widthDerivation } of widthDerivations ) {
+						if ( ! widthDerivation.ok ) continue;
+						await store.captureDomDependencies( widthDerivation.html, url, { deferMedia } );
+						const widthPath = `screenshots/derived/${ slugify( url ) }.${ key }.html`;
+						writeFileSync( resolve( input.outputDir, widthPath ), widthDerivation.html );
+						widthProfiles[ key ] = { ...profile, html: widthPath };
+					}
 					lap( 'dependencies' );
 					const slug = await queue.claimSlug( memberFeed?.slug ?? slugify( url ) );
 					const capturedAtNow = new Date().toISOString();
@@ -1344,7 +1469,7 @@ export async function deriveTemplateClusterMembers( input: {
 						html: memberPath,
 						...( memberMobilePath ? { mobileHtml: memberMobilePath } : {} ),
 						capturedAt: capturedAtNow,
-						...( repProfile ? { profiles: { desktop: { ...repProfile, html: memberPath }, ...( repMobileProfile ? { mobile: { ...repMobileProfile, html: memberMobilePath } } : {} ) } } : {} ),
+						...( repProfile ? { profiles: { desktop: { ...repProfile, html: memberPath }, ...( repMobileProfile ? { mobile: { ...repMobileProfile, html: memberMobilePath } } : {} ), ...widthProfiles } } : {} ),
 						...( memberMobilePath && repEntry.deviceMode ? { deviceMode: repEntry.deviceMode } : {} ),
 						...( memberMobilePath && repEntry.fluidMobile ? { fluidMobile: repEntry.fluidMobile } : {} ),
 						...( repEntry.fluid ? { fluid: repEntry.fluid } : {} ),
@@ -1391,16 +1516,19 @@ export async function deriveTemplateClusterMembers( input: {
 	// and ship as HTTP-captured routes; only a failed fallback stays omitted.
 	const httpAcquiredUrls: string[] = [];
 	const fallbackFailures = new Map< string, string >();
+	const runtimeResults = new Map< string, { observed: boolean; reason?: string } >();
 	if ( escalations.length && input.acquisition && ! input.governors.forOrigin( input.sourceUrl ).blockedClient ) {
-		const { acquireEscalatedMembers } = await import( './template-cluster-fallback.js' );
+		const { acquireEscalatedMembers, runtimeRenderBudgetMs } = await import( './template-cluster-fallback.js' );
 		const fallbackQueue = new ManifestQueue( manifestPath );
 		await fallbackQueue.init();
 		try {
 			const fallback = await acquireEscalatedMembers( {
 				outputDir: input.outputDir, sourceUrl: input.sourceUrl, routeScope: input.routeScope, profile: input.acquisition,
 				governors: input.governors, members: escalations, queue: fallbackQueue, maxTotalBytes: input.maxTotalBytes,
+				runtimeRenderBudgetMs: input.runtimeRenderBudgetMs ?? runtimeRenderBudgetMs( input.timeBudgetMs ),
 			} );
 			httpAcquiredUrls.push( ...fallback.acquired );
+			for ( const [ url, result ] of fallback.runtime ) runtimeResults.set( url, result );
 			for ( const [ url, reason ] of fallback.failed ) fallbackFailures.set( url, reason );
 			diagnostics.push( ...fallback.diagnostics );
 		} catch ( error ) {
@@ -1411,15 +1539,17 @@ export async function deriveTemplateClusterMembers( input: {
 	}
 	const acquiredSet = new Set( httpAcquiredUrls );
 	for ( const member of escalations ) {
-		const gate = `failed the ${ member.gate } gate: ${ member.reason }`;
+		const isRuntimeGate = member.gate === 'runtime_mount_member_keyed';
+		const runtime = runtimeResults.get( member.url ) ?? ( isRuntimeGate ? { observed: false, reason: `unobserved runtime mount: ${ member.reason }; runtime render unavailable` } : undefined );
+		const gate = `failed the ${ member.gate } gate: ${ member.reason }${ runtime && ! runtime.observed ? `; ${ runtime.reason }` : '' }`;
 		const entry = member.record.escalated.find( row => row.url === member.url );
 		if ( acquiredSet.has( member.url ) ) {
-			if ( entry ) entry.fallback = { acquired: true };
-			diagnostics.push( { code: ROUTE_TEMPLATE_ESCALATED, url: member.url, reason: `${ gate }; captured through governed HTTP acquisition (${ input.acquisition!.id })`, unit: 'route', severity: 'warning', metrics: { clusterSize: member.clusterSize } } );
+			if ( entry ) entry.fallback = { acquired: true, ...( runtime ? { reason: runtime.observed ? 'runtime mount observed through bounded browser render' : runtime.reason } : {} ) };
+			diagnostics.push( { code: ROUTE_TEMPLATE_ESCALATED, url: member.url, reason: `${ gate }; ${ runtime ? runtime.observed ? 'runtime mount observed through bounded browser render' : runtime.reason : `captured through governed HTTP acquisition (${ input.acquisition!.id })` }`, unit: 'route', severity: 'warning', metrics: { clusterSize: member.clusterSize } } );
 			continue;
 		}
 		const failure = input.acquisition ? fallbackFailures.get( member.url ) ?? 'source client blocked' : undefined;
-		if ( entry && failure ) entry.fallback = { acquired: false, reason: failure };
+		if ( entry && ( failure || runtime ) ) entry.fallback = { acquired: false, reason: [ failure, runtime?.reason ].filter( Boolean ).join( '; ' ) };
 		diagnostics.push( { code: ROUTE_TEMPLATE_ESCALATED, url: member.url, reason: failure ? `${ gate }; HTTP fallback failed: ${ failure }` : gate, metrics: { clusterSize: member.clusterSize } } );
 	}
 

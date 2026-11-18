@@ -6,7 +6,7 @@
 //
 import { existsSync, readFileSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import type { Page } from 'playwright';
+import type { Frame, Page, Request } from 'playwright';
 import { mapPool } from '../concurrency.js';
 import { resolveInteractionComponents, type ComponentPage } from '../captured-interactions.js';
 import * as cheerio from 'cheerio';
@@ -37,8 +37,8 @@ import { observeViewportEntrances } from '../viewport-entrances.js';
 import { validateMotionContract, verifyCandidateMotion, type MotionContract, type MotionEvidence } from './candidate-motion.js';
 import { probeDialogs } from './dialog-probe.js';
 import { checkInternalRoute, type InternalRouteOutcome } from './internal-route.js';
-import { writePixelEvidence } from './evidence.js';
-import { captureViewportScreenshot } from './viewport-screenshot.js';
+import { pixelRegionFailures, writePixelEvidence } from './evidence.js';
+import { captureFullPageScreenshot, captureViewportScreenshot } from './viewport-screenshot.js';
 import { checkSelfConsistency, type SelfConsistencyReport } from './self-consistency.js';
 import { REFERENCE_WIDTHS, readFrozenObservation, readReferenceArtifact, type FidelityReference, type FidelityStage } from './reference.js';
 import {
@@ -336,7 +336,23 @@ export async function observePage(
 	measurement: { runtimeEmoji?: boolean; navigate?: boolean } = {}
 ): Promise< LayoutObservation > {
 	const requests: Array<{ url: string; image: boolean }> = [];
-	const onRequest = ( request: { url: () => string; resourceType: () => string } ): void => {
+	// A cross-origin <iframe> (a map or video embed) is the embedding page's
+	// dependency only as a document: what that document loads is the
+	// provider's own traffic, identical whichever page embeds it.
+	const documentOrigin = ( () => { try { return new URL( url ).origin; } catch { return null; } } )();
+	const embeddedFrames = new Set<string>();
+	const onRequest = ( request: Request ): void => {
+		let frame: Frame | null = null;
+		try { frame = request.frame(); } catch { /* service-worker request: the page's own */ }
+		if ( frame && frame !== page.mainFrame() ) {
+			const frameUrl = request.isNavigationRequest() ? request.url() : frame.url();
+			let frameOrigin: string | null = null;
+			try { frameOrigin = new URL( frameUrl ).origin; } catch { /* about:blank, srcdoc */ }
+			if ( frameOrigin && frameOrigin !== 'null' && frameOrigin !== documentOrigin ) {
+				if ( ! request.isNavigationRequest() ) return;
+				embeddedFrames.add( new URL( frameUrl ).host );
+			}
+		}
 		requests.push( { url: request.url(), image: request.resourceType() === 'image' } );
 	};
 	page.on( 'request', onRequest );
@@ -509,7 +525,7 @@ export async function observePage(
 			// start pose. Measure its terminal keyframe instead. Keep decorative
 			// infinite/view motion at authored rest, without changing play state,
 			// timeline bindings or the motion evidence collected below.
-			const { images, backgrounds, widestImage, typography, paintedTextRects } = await ( async () => {
+			const { images, backgrounds, widestImage, typography, textNodes } = await ( async () => {
 			const effects = document.getAnimations().flatMap( animation =>
 				animation.effect instanceof KeyframeEffect ? [ { animation, effect: animation.effect, frames: animation.effect.getKeyframes() } ] : [] );
 			try {
@@ -645,6 +661,10 @@ export async function observePage(
 					for ( let ancestor: Element | null = parent; ancestor; ancestor = ancestor.parentElement ) {
 						const ancestorStyle = paintStyle( ancestor );
 						if ( ancestorStyle.display === 'none' ) return false;
+						// A fully transparent ancestor (a closed fade-out drawer)
+						// paints none of its text. Reveal motion is settled before
+						// observation, so a resting opacity of 0 is the real state.
+						if ( Number.parseFloat( ancestorStyle.opacity ) === 0 ) return false;
 						if ( ancestorStyle.display === 'contents' ) continue;
 						const box = ancestor.getBoundingClientRect();
 						if ( ! isDocumentRootBox( ancestor ) ) {
@@ -660,6 +680,13 @@ export async function observePage(
 						}
 						if ( bottom <= top || ( collapsedWhitespace ? right < left : right <= left ) ) return false;
 					}
+					// The viewport cannot scroll before the document's scroll origin,
+					// so text wholly above it, or wholly before its inline start
+					// (left in LTR, right in RTL), is never painted on screen: the
+					// classic `left:-999px` skip link.
+					const rtl = getComputedStyle( document.scrollingElement ?? document.documentElement ).direction === 'rtl';
+					if ( bottom + scrollY <= 0 ) return false;
+					if ( rtl ? left + scrollX >= document.documentElement.clientWidth : right + scrollX <= 0 ) return false;
 					return true;
 				} );
 			};
@@ -781,7 +808,45 @@ export async function observePage(
 			};
 			visit( document.body );
 			flush();
-			return { images, backgrounds, widestImage, typography, paintedTextRects };
+			// Painted text is read in the same rest pose as typography: a running
+			// marquee would otherwise clip a different item on each side.
+			const textNodes: Array< { text: string; clipped: boolean; replacement?: string; caseless?: boolean } > = [];
+			const closedSelect = ( element: Element ): element is HTMLSelectElement =>
+				element instanceof HTMLSelectElement && ! element.multiple && element.size <= 1;
+			const textWalker = document.createTreeWalker( document.body, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT );
+			let candidateText: Node | null;
+			while ( ( candidateText = textWalker.nextNode() ) ) {
+				// Chromium includes every option in innerText even though a closed
+				// select paints only its selected label. Treat it as one stream entry
+				// on both sides, without mutating the control or its live selection.
+				if ( candidateText instanceof Element ) {
+					if ( closedSelect( candidateText ) && candidateText.getClientRects().length && getComputedStyle( candidateText ).visibility !== 'hidden' ) {
+						textNodes.push( { text: candidateText.innerText, clipped: false, replacement: candidateText.selectedOptions[ 0 ]?.label ?? '' } );
+					}
+					continue;
+				}
+				const select = candidateText.parentElement?.closest( 'select' );
+				if ( select && closedSelect( select ) ) continue;
+				const value = candidateText.textContent ?? '';
+				if ( ! value.trim() || candidateText.parentElement?.closest( 'script,style,noscript,template' ) ) continue;
+				const range = document.createRange(); range.selectNodeContents( candidateText );
+				const rects = [ ...range.getClientRects() ];
+				if ( ! rects.length ) continue;
+				const parent = candidateText.parentElement;
+				if ( ! parent ) continue;
+				if ( getComputedStyle( parent ).visibility === 'hidden' ) continue;
+				const painted = paintedTextRects( range, parent ).length > 0;
+				// innerText reports the case text-transform renders, so a node
+				// must be found in that case, or an unpainted uppercase label
+				// would instead delete a later visible run of the same word.
+				const transform = getComputedStyle( parent ).textTransform;
+				const rendered = transform === 'uppercase' ? value.toLocaleUpperCase( parent.closest( '[lang]' )?.getAttribute( 'lang' ) || undefined )
+					: transform === 'lowercase' ? value.toLocaleLowerCase( parent.closest( '[lang]' )?.getAttribute( 'lang' ) || undefined ) : value;
+				// Capitalization follows the browser's own word boundaries, so a
+				// capitalized node is found in the stream without regard to case.
+				textNodes.push( { text: rendered.length === value.length ? rendered : value, clipped: ! painted, caseless: transform === 'capitalize' } );
+			}
+			return { images, backgrounds, widestImage, typography, paintedTextRects, textNodes };
 			} finally {
 				for ( const { effect, frames } of effects ) effect.setKeyframes( frames );
 			}
@@ -854,7 +919,13 @@ export async function observePage(
 				root.style.scrollBehavior = scrollBehavior;
 			}
 			const animations = animationsBefore.map( ( animation ) => animation.name ).sort();
-			const hashTargets: { fragment: string; resolved: boolean; targets: number }[] = [];
+			const hashTargets: { fragment: string; resolved: boolean; targets: number; rendered: boolean }[] = [];
+			// A link a reader can see: it has a box and is not hidden.
+			const linkRendered = ( link: Element ) => {
+				if ( link.getClientRects().length === 0 ) return false;
+				const style = getComputedStyle( link );
+				return style.display !== 'none' && style.visibility !== 'hidden';
+			};
 			const internalPaths: string[] = [];
 			const seen = new Set< string >();
 			// `/`, `/index.html` and a trailing slash all name the same document:
@@ -884,13 +955,19 @@ export async function observePage(
 					} catch {
 						continue;
 					}
-					if ( ! fragment || seen.has( `#${ fragment }` ) ) continue;
+					if ( ! fragment ) continue;
+					if ( seen.has( `#${ fragment }` ) ) {
+						// Several links to one fragment: rendered when any of them is.
+						const existing = hashTargets.find( ( entry ) => entry.fragment === fragment );
+						if ( existing && ! existing.rendered ) existing.rendered = linkRendered( link );
+						continue;
+					}
 					seen.add( `#${ fragment }` );
 					const targets = [ ...document.querySelectorAll( '[id],a[name]' ) ].filter(
 						( element ) =>
 							element.id === fragment || element.getAttribute( 'name' ) === fragment
 					).length;
-					hashTargets.push( { fragment, resolved: targets > 0, targets } );
+					hashTargets.push( { fragment, resolved: targets > 0, targets, rendered: linkRendered( link ) } );
 				}
 				if (
 					target.pathname &&
@@ -910,42 +987,6 @@ export async function observePage(
 			// ancestor clip; any partly painted run remains counted. Do not use
 			// carousel selectors, aria-hidden, or viewport position.
 			bodyText = bodyText.replace( /\s+/g, ' ' ).trim();
-			const textNodes: Array< { text: string; clipped: boolean; replacement?: string; caseless?: boolean } > = [];
-			const closedSelect = ( element: Element ): element is HTMLSelectElement =>
-				element instanceof HTMLSelectElement && ! element.multiple && element.size <= 1;
-			const textWalker = document.createTreeWalker( document.body, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT );
-			let candidateText: Node | null;
-			while ( ( candidateText = textWalker.nextNode() ) ) {
-				// Chromium includes every option in innerText even though a closed
-				// select paints only its selected label. Treat it as one stream entry
-				// on both sides, without mutating the control or its live selection.
-				if ( candidateText instanceof Element ) {
-					if ( closedSelect( candidateText ) && candidateText.getClientRects().length && getComputedStyle( candidateText ).visibility !== 'hidden' ) {
-						textNodes.push( { text: candidateText.innerText, clipped: false, replacement: candidateText.selectedOptions[ 0 ]?.label ?? '' } );
-					}
-					continue;
-				}
-				const select = candidateText.parentElement?.closest( 'select' );
-				if ( select && closedSelect( select ) ) continue;
-				const value = candidateText.textContent ?? '';
-				if ( ! value.trim() || candidateText.parentElement?.closest( 'script,style,noscript,template' ) ) continue;
-				const range = document.createRange(); range.selectNodeContents( candidateText );
-				const rects = [ ...range.getClientRects() ];
-				if ( ! rects.length ) continue;
-				const parent = candidateText.parentElement;
-				if ( ! parent ) continue;
-				if ( getComputedStyle( parent ).visibility === 'hidden' ) continue;
-				const painted = paintedTextRects( range, parent ).length > 0;
-				// innerText reports the case text-transform renders, so a node
-				// must be found in that case, or an unpainted uppercase label
-				// would instead delete a later visible run of the same word.
-				const transform = getComputedStyle( parent ).textTransform;
-				const rendered = transform === 'uppercase' ? value.toLocaleUpperCase( parent.closest( '[lang]' )?.getAttribute( 'lang' ) || undefined )
-					: transform === 'lowercase' ? value.toLocaleLowerCase( parent.closest( '[lang]' )?.getAttribute( 'lang' ) || undefined ) : value;
-				// Capitalization follows the browser's own word boundaries, so a
-				// capitalized node is found in the stream without regard to case.
-				textNodes.push( { text: rendered.length === value.length ? rendered : value, clipped: ! painted, caseless: transform === 'capitalize' } );
-			}
 			let textSearchFrom = 0;
 			for ( const { text, clipped, replacement, caseless } of textNodes ) {
 				// Map each DOM text node in document order to the normalized
@@ -1081,6 +1122,7 @@ export async function observePage(
 			overflow: measured.overflow,
 			externalHosts: [ ...new Set( requests.filter( request => ! ( request.image && emojiUrls.has( request.url ) ) )
 				.map( request => externalRequestHost( request.url, localOrigin ) ).filter( ( host ): host is string => host !== null ) ) ].sort(),
+			embeddedFrames: [ ...embeddedFrames ].sort(),
 			hashTargets: measured.hashTargets as HashTarget[],
 			internalRoutes,
 			dialogs,
@@ -1752,7 +1794,7 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 						else await request.abort();
 					} );
 					let source = frozen.observation;
-					let sourcePng = frozen.png;
+					const sourcePng = frozen.fullPagePng ?? frozen.png;
 					const deviceSelected = receipt.routes?.some( row => row.url === sources.get( route ) && row.documentSelection?.kind === 'device' );
 					const sourceDocument = cheerio.load( readReferenceArtifact( directory, entry.document! ).toString() );
 					// The captured website owns runtime authorization (the importer reads
@@ -1765,6 +1807,7 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 					const runtimeEmoji = capturedDocument( 'html' ).attr( 'data-blocks-engine-capture-runtime-emoji' ) === 'wordpress';
 					let sourceViewport = entry.viewportMeta ?? sourceDocument?.( 'meta[name="viewport"]' ).attr( 'content' );
 					const readViewport = () => page.evaluate( () => document.querySelector( 'meta[name="viewport"]' )?.getAttribute( 'content' ) ?? undefined );
+					const excludedMotion = ( entry.readiness.diagnostics ?? [] ).filter( diagnostic => diagnostic.startsWith( 'source perpetual motion excluded: ' ) ).map( diagnostic => diagnostic.slice( 'source perpetual motion excluded: '.length ) );
 					const measure = async ( url: string ): Promise<LayoutObservation> => {
 						return observePage( page, url, viewport, options.settleMs ?? 800, new URL( url ).origin, undefined, undefined, true, false, { runtimeEmoji, navigate: true } );
 					};
@@ -1773,12 +1816,13 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 						// The frozen replay is the source here. If it left an entrance in its
 						// pending pose, the copy would be scored against content no visitor sees.
 						if ( source.entranceUnrevealed?.length ) throw new Error( `Source evidence unready: frozen viewport entrance never played: ${ source.entranceUnrevealed.join( '; ' ) }` );
-						sourcePng = await captureViewportScreenshot( page ); sourceViewport = await readViewport();
+						sourceViewport = await readViewport();
 					}
 					const liberated = await measure( candidate );
 					if ( ambiguousRenderedImages( source.images, liberated.images ).length ) throw new Error( 'Repeated image correspondence ambiguous: structural role/state does not uniquely identify occurrences' );
 					const evidenceDir = join( directory, 'compare', stage, evidenceSlug( route ), ...( profile ? [ evidenceSlug( profile ) ] : [] ), String( viewport ), state );
-					const candidatePng = options.screenshots ? await captureViewportScreenshot( page ) : undefined;
+					const regionEvidence = !! frozen.fullPagePng;
+					const candidatePng = regionEvidence ? await captureFullPageScreenshot( page, excludedMotion ) : options.screenshots ? await captureViewportScreenshot( page ) : undefined;
 					const checked = await runFidelityChecks( { ...attribution, sourceUrl: stage === 'capture' ? `frozen:${ entries[0]!.observation!.path }` : local, candidateUrl: candidate, source, candidate: liberated, evidenceDir } );
 					// The foreign document is outside scope, but authored links to the
 					// requested source route must retain their query/hash meaning in both stages.
@@ -1803,7 +1847,8 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 						const retained = await applySourceCleanup( page, receipt.cleanup.policy );
 						if ( retained.removed || retained.residual || retained.failures.length ) checked.failures.push( 'Rendered artifact retains source attribution/advertising or cleanup audit failed' );
 					}
-					if ( candidatePng ) {
+					if ( candidatePng && regionEvidence ) checked.failures.push( ...pixelRegionFailures( sourcePng, candidatePng ) );
+					if ( candidatePng && ( options.screenshots || checked.failures.length ) ) {
 						const pixels = writePixelEvidence( evidenceDir, sourcePng, candidatePng );
 						checked.notes.push( 'score' in pixels ? `pixel evidence → ${ pixels.diffPath }` : pixels.error );
 					}

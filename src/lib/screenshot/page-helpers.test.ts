@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
-import { afterAll, beforeAll, describe, it, expect, vi } from 'vitest';
-import { chromium, type Browser } from 'playwright';
+import { describe, expect, vi } from 'vitest';
+import { it } from '../../../test/browser.js';
+
 import { observeViewportWork } from './viewport-work.js';
 import {
   waitForStable,
@@ -107,7 +108,7 @@ describe('waitForFonts', () => {
 describe('settleDocument', () => {
   it('asks the page to observe mutations with the given quiet/timeout budget', async () => {
     const page = makePage();
-    page.evaluate = vi.fn().mockResolvedValue('quiet');
+    page.evaluate = vi.fn().mockResolvedValue({ reason: 'quiet' });
     await expect(settleDocument(page as never, 'dom', { quietMs: 250, timeoutMs: 2_000 })).resolves.toMatchObject({ reason: 'quiet' });
     expect(page.evaluate).toHaveBeenCalledWith(expect.any(Function), { quietMs: 250, timeoutMs: 2_000, animations: false });
   });
@@ -121,12 +122,9 @@ describe('settleDocument', () => {
   });
 
   describe('in a browser', () => {
-    let browser: Browser;
-    beforeAll(async () => { browser = await chromium.launch({ headless: true }); });
-    afterAll(async () => { await browser.close(); });
 
-    it('resolves quiet after one window on an idle page and reports the outcome', async () => {
-      const page = await browser.newPage();
+    it('resolves quiet after one window on an idle page and reports the outcome', async ({ newPage }) => {
+      const page = await newPage();
       try {
         await page.setContent('<main>Idle</main>');
         const seen: Array<[string, string]> = [];
@@ -139,23 +137,52 @@ describe('settleDocument', () => {
       } finally { await page.close(); }
     });
 
-    it('extends the window while the document mutates and reports a page that never stops', async () => {
-      const page = await browser.newPage();
+    it('extends the window while the document mutates and reports a page that never stops', async ({ newPage }) => {
+      const page = await newPage();
       try {
         await page.setContent(`<main id="m"></main><script>let n = 0; const t = setInterval(() => { m.textContent = String(++n); if (n === 6) clearInterval(t); }, 60);</script>`);
         const finite = await settleDocument(page, 'finite', { quietMs: 150, timeoutMs: 3_000 });
         expect(finite.reason).toBe('quiet');
         expect(await page.locator('#m').textContent()).toBe('6');
       } finally { await page.close(); }
-      const forever = await browser.newPage();
+      const forever = await newPage();
       try {
         await forever.setContent(`<main id="m"></main><script>let n = 0; setInterval(() => { m.textContent = String(++n); }, 40);</script>`);
         expect((await settleDocument(forever, 'forever', { quietMs: 150, timeoutMs: 600 })).reason).toBe('deadline');
       } finally { await forever.close(); }
     });
 
-    it('scopes quiet to a selector so unrelated document churn does not hold the wait', async () => {
-      const page = await browser.newPage();
+    it('does not excuse layout changes or hydration alongside frame-cadence decorative motion', async ({ newPage }) => {
+      const page = await newPage();
+      try {
+        await page.setContent(`<div id="dot" style="width:12px;height:12px"></div><main id="content"></main>
+          <script>let n=0; (function f(){dot.style.transform='scale('+(1+Math.abs(Math.sin(n++/20)))+')';
+          dot.style.width=(12+n%5)+'px'; requestAnimationFrame(f)})();</script>`);
+        const layout = await settleDocument(page, 'layout', { quietMs: 150, timeoutMs: 1_800 });
+        expect(layout.reason).toBe('deadline');
+        expect(layout.excludedMotion).toBeUndefined();
+        await page.setContent(`<div id="dot" style="width:12px;height:12px"></div><main></main>
+          <script>(function f(t){dot.style.transform='scale('+(1+Math.abs(Math.sin(t/400)))+')';requestAnimationFrame(f)})(0);
+          setInterval(() => document.querySelector('main').append(document.createElement('span')), 50);</script>`);
+        expect((await settleDocument(page, 'hydration', { quietMs: 150, timeoutMs: 1_800 })).reason).toBe('deadline');
+      } finally { await page.close(); }
+    });
+
+    it('keeps proven decorative motion excluded through main-thread stalls', async ({ newPage }) => {
+      const page = await newPage();
+      try {
+        // An unbroken second of frame-cadence motion, then the loop keeps
+        // running with 300 ms pauses, like a busy main thread.
+        await page.setContent(`<div id="dot" style="width:12px;height:12px"></div>
+          <script>const s=performance.now();(function f(t){if(t-s<1200||(t-s)%700<400)dot.style.transform='scale('+(1+Math.abs(Math.sin(t/400)))+')';requestAnimationFrame(f)})(s);</script>`);
+        const outcome = await settleDocument(page, 'stalls', { quietMs: 500, timeoutMs: 3_000 });
+        expect(outcome.reason).toBe('quiet');
+        expect(outcome.excludedMotion).toHaveLength(1);
+      } finally { await page.close(); }
+    });
+
+    it('scopes quiet to a selector so unrelated document churn does not hold the wait', async ({ newPage }) => {
+      const page = await newPage();
       try {
         await page.setContent(`<div id="dialog">Static</div><div id="ticker"></div><script>let n = 0; setInterval(() => { ticker.textContent = String(++n); }, 40);</script>`);
         const scoped = await settleDocument(page, 'dialog-content', { selector: '#dialog', quietMs: 150, timeoutMs: 1_500 });
@@ -165,8 +192,8 @@ describe('settleDocument', () => {
       } finally { await page.close(); }
     });
 
-    it('waits for finite and chained animations but not paused or infinite ones', async () => {
-      const page = await browser.newPage();
+    it('waits for finite and chained animations but not paused or infinite ones', async ({ newPage }) => {
+      const page = await newPage();
       try {
         await page.setContent(`<style>@keyframes fade{from{opacity:0}to{opacity:1}}
           #paused{animation:fade 1s both paused}#spin{animation:fade 1s infinite}#first{animation:fade 300ms both}#second.go{animation:fade 300ms both}</style>
@@ -182,13 +209,9 @@ describe('settleDocument', () => {
 });
 
 describe('declared loading state', () => {
-  let browser: Browser;
 
-  beforeAll(async () => { browser = await chromium.launch(); });
-  afterAll(async () => { await browser.close(); });
-
-  it('settles a static page without the former one-second floor', async () => {
-    const page = await browser.newPage();
+  it('settles a static page without the former one-second floor', async ({ newPage }) => {
+    const page = await newPage();
     try {
       await page.setContent('<main>Static page</main>');
       const started = Date.now();
@@ -199,8 +222,8 @@ describe('declared loading state', () => {
     }
   });
 
-  it('captures content rendered by a delayed fetch', async () => {
-    const page = await browser.newPage();
+  it('captures content rendered by a delayed fetch', async ({ newPage }) => {
+    const page = await newPage();
     await page.route('https://fixture.test/late-content', async (route) => {
       await new Promise((resolve) => setTimeout(resolve, 700));
       await route.fulfill({ body: 'Fetched content' });
@@ -218,8 +241,8 @@ describe('declared loading state', () => {
     }
   });
 
-  it('captures the final authored text after a sequence with quiet gaps between timers', async () => {
-    const page = await browser.newPage();
+  it('captures the final authored text after a sequence with quiet gaps between timers', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent(`<body class="loading"><p id="status">Starting</p><script>
       setTimeout(() => document.querySelector('#status').textContent = 'Halfway', 900);
       setTimeout(() => { document.querySelector('#status').textContent = 'Complete'; document.body.classList.remove('loading'); }, 1800);
@@ -245,8 +268,8 @@ describe('declared loading state', () => {
       ${ removeAfterMs === null ? '' : `setTimeout(() => document.querySelector('#cover').remove(), ${ removeAfterMs });` }
     </script>`;
 
-  it('waits for a textless full-viewport loading cover to leave', async () => {
-    const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+  it('waits for a textless full-viewport loading cover to leave', async ({ newPage }) => {
+    const page = await newPage({ viewport: { width: 800, height: 600 } });
     try {
       await page.setContent(coverFixture(1_200));
       await waitForDeclaredLoadingState(page, 5_000);
@@ -256,11 +279,11 @@ describe('declared loading state', () => {
     }
   });
 
-  it.each([
+  it.for([
     ['textual content', '<p>We use cookies. Accept or reject.</p>'],
     ['an embedded document', '<iframe srcdoc="<p>Join our newsletter</p><button>Sign up</button>"></iframe>'],
-  ])('does not treat a full-viewport layer with %s as a loading cover', async (_description, coverContent) => {
-    const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+  ])('does not treat a full-viewport layer with %s as a loading cover', async ([ _description, coverContent ], { newPage }) => {
+    const page = await newPage({ viewport: { width: 800, height: 600 } });
     try {
       await page.setContent(coverFixture(3_000, coverContent));
       const started = Date.now();
@@ -272,8 +295,8 @@ describe('declared loading state', () => {
     }
   });
 
-  it('bounds a loading cover that never leaves', async () => {
-    const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+  it('bounds a loading cover that never leaves', async ({ newPage }) => {
+    const page = await newPage({ viewport: { width: 800, height: 600 } });
     try {
       await page.setContent(coverFixture(null));
       const started = Date.now();
@@ -284,8 +307,8 @@ describe('declared loading state', () => {
     }
   });
 
-  it('bounds a loading state that never clears', async () => {
-    const page = await browser.newPage();
+  it('bounds a loading state that never clears', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent('<body class="loading"><p>Static content</p></body>');
     const started = Date.now();
     await waitForDeclaredLoadingState(page, 50);
@@ -295,15 +318,6 @@ describe('declared loading state', () => {
 });
 
 describe('triggerLazyLoad', () => {
-  let browser: Browser;
-
-  beforeAll(async () => {
-    browser = await chromium.launch();
-  });
-
-  afterAll(async () => {
-    await browser.close();
-  });
 
   it('scrolls and waits, does not throw', async () => {
     const page = makePage();
@@ -311,8 +325,8 @@ describe('triggerLazyLoad', () => {
     expect(page.evaluate).toHaveBeenCalled();
   });
 
-  it('skips scroll-only waits for a document that fits the viewport', async () => {
-    const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+  it('skips scroll-only waits for a document that fits the viewport', async ({ newPage }) => {
+    const page = await newPage({ viewport: { width: 800, height: 600 } });
     try {
       await page.setContent('<style>html,body{margin:0}</style><main>Short content</main>');
       const started = Date.now();
@@ -326,8 +340,8 @@ describe('triggerLazyLoad', () => {
     }
   });
 
-  it('loads lazy images in a primary inner scroller and restores its starting pose', async () => {
-    const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+  it('loads lazy images in a primary inner scroller and restores its starting pose', async ({ newPage }) => {
+    const page = await newPage({ viewport: { width: 800, height: 600 } });
     try {
       await page.route('https://assets.test/image.svg', route => route.fulfill({
         contentType: 'image/svg+xml',
@@ -354,8 +368,8 @@ describe('triggerLazyLoad', () => {
     }
   }, 30_000);
 
-  it('preserves asynchronous body state and content revealed during lazy-load scrolling', async () => {
-    const page = await browser.newPage();
+  it('preserves asynchronous body state and content revealed during lazy-load scrolling', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent(`<!doctype html><style>
       body { height:3000px; }
       body.loaded main { min-height: 120px; background: rgb(1, 2, 3); }
@@ -380,10 +394,10 @@ describe('triggerLazyLoad', () => {
     }
   }, 30_000);
 
-  it('waits each step only for the work its scroll scheduled, and still reveals debounced and lazy tails', async () => {
+  it('waits each step only for the work its scroll scheduled, and still reveals debounced and lazy tails', async ({ newPage }) => {
     // Before #1630 every 500px step slept a fixed 200ms and a confirmation
     // sweep always followed: about 3.4 s here, against about 1.5 s now.
-    const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+    const page = await newPage({ viewport: { width: 800, height: 600 } });
     try {
       await page.addInitScript(observeViewportWork);
       await page.route('https://assets.test/lazy.svg', route => route.fulfill({
@@ -446,8 +460,8 @@ describe('triggerLazyLoad', () => {
     expect(page.waitForLoadState).toHaveBeenCalledWith('networkidle', { timeout: 5_000 });
   });
 
-  it('waits for decoded images before the capture continues', async () => {
-    const page = await browser.newPage();
+  it('waits for decoded images before the capture continues', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent('<img src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2210%22 height=%2210%22/%3E">');
     await waitForImages(page);
     expect(await page.locator('img').count()).toBe(1);
@@ -459,13 +473,13 @@ describe('triggerLazyLoad', () => {
     await page.close();
   });
 
-  it('does not let a layout-inactive alternative exhaust the image timer', async () => {
+  it('does not let a layout-inactive alternative exhaust the image timer', async ({ newPage }) => {
     // Issue #656: display:none removes an img from layout; its pending bytes
     // are an inactive responsive alternative that cannot affect the captured
     // state. A never-resolving request (an unfulfilled route) must not consume
     // the readiness budget — and it must not be pruned from the document
     // either, since resource capture localizes it independently.
-    const page = await browser.newPage();
+    const page = await newPage();
     await page.route('**/stalled.svg', () => undefined);
     await page.setContent('<img src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2210%22 height=%2210%22/%3E">');
     await page.evaluate(() => {
@@ -483,11 +497,11 @@ describe('triggerLazyLoad', () => {
     await page.close();
   });
 
-  it('stops an abandoned in-page sweep before it moves the restored pose', async () => {
+  it('stops an abandoned in-page sweep before it moves the restored pose', async ({ newPage }) => {
     // An overloaded driver can stop waiting for a sweep (its evaluate timeout
     // fires) while the page keeps running the scroll loop. The observation
     // read right after must find the top pose, not a sweep still walking down.
-    const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+    const page = await newPage({ viewport: { width: 800, height: 600 } });
     try {
       await page.setContent('<style>body{margin:0}</style><main style="height:20000px">Content</main>');
       let abandoned = 0;
@@ -515,12 +529,12 @@ describe('triggerLazyLoad', () => {
     }
   }, 30_000);
 
-  it('restores the top pose when a sweep step is interrupted after reaching the bottom', async () => {
+  it('restores the top pose when a sweep step is interrupted after reaching the bottom', async ({ newPage }) => {
     // The first sweep reaches the bottom and the document grows once, so a
     // second settle round runs; that sweep is interrupted (as a stalled
     // renderer or destroyed context would). The caller measures right after
     // this and must not see the parked page.
-    const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+    const page = await newPage({ viewport: { width: 800, height: 600 } });
     try {
       await page.setContent(`<style>body{margin:0}</style><main id="main" style="height:4000px">Content</main>
         <script>addEventListener('scroll', () => { if (scrollY > 3000) main.style.height = '5000px'; });</script>`);
@@ -542,8 +556,8 @@ describe('triggerLazyLoad', () => {
     }
   });
 
-  it('stops scroll preparation at the reachable viewport bottom without overscroll waits', async () => {
-    const page = await browser.newPage({ viewport: { width: 800, height: 900 } });
+  it('stops scroll preparation at the reachable viewport bottom without overscroll waits', async ({ newPage }) => {
+    const page = await newPage({ viewport: { width: 800, height: 900 } });
     try {
       await page.setContent('<style>body{margin:0}</style><main style="height:2100px">Content</main>');
       await page.evaluate(() => {
@@ -604,8 +618,8 @@ describe('triggerLazyLoad', () => {
   const countFigures = (page: import('playwright').Page) =>
     page.locator('figure.reveal').count();
 
-  it('reveals every element even though the document grows as it scrolls', async () => {
-    const page = await browser.newPage();
+  it('reveals every element even though the document grows as it scrolls', async ({ newPage }) => {
+    const page = await newPage();
     await page.setContent(growingRevealFixture(50, 60));
     await triggerLazyLoad(page as never);
     expect(await countFigures(page)).toBe(50);
@@ -613,14 +627,14 @@ describe('triggerLazyLoad', () => {
     await page.close();
   });
 
-  it('is stable across repeated captures of the same growing document', async () => {
+  it('is stable across repeated captures of the same growing document', async ({ newPage }) => {
     // Same fixture, captured fresh three times with a different (jittered)
     // per-element delay each run — standing in for real network variance
     // between two captures of the same source. Every run must reveal
     // everything; a stale-height sweep would reveal a different, timing-
     // dependent subset each time.
     for (let run = 0; run < 3; run++) {
-      const page = await browser.newPage();
+      const page = await newPage();
       const jitter = 40 + run * 35;
       await page.setContent(growingRevealFixture(40, jitter));
       await triggerLazyLoad(page as never);
@@ -630,12 +644,12 @@ describe('triggerLazyLoad', () => {
     }
   }, 30_000);
 
-  it('terminates on a page that grows without bound (infinite scroll)', async () => {
+  it('terminates on a page that grows without bound (infinite scroll)', async ({ newPage }) => {
     // A sentinel at the bottom that appends more content every time it is
     // observed never lets the document finish growing. triggerLazyLoad must
     // still return — bounded by its internal settle budget — rather than
     // scrolling forever.
-    const page = await browser.newPage();
+    const page = await newPage();
     await page.setContent(`<!doctype html><html><body>
       <div id="container"></div>
       <div id="sentinel" style="height:1px"></div>

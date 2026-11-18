@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import * as cheerio from 'cheerio';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { exportWebsiteCapture } from '../capture-export.js';
-import { BROWSER_IMAGE_ACCEPT } from '../media-fetch/media.js';
+import { BROWSER_IMAGE_ACCEPT } from '../browser-kit/source-identity.js';
 import type { SafeFetchOpts } from '../media-fetch/safe-fetch.js';
 import { CapturedResourceStore, resourceRequestHeaders } from './resource-capture.js';
 

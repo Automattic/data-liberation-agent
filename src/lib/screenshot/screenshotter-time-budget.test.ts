@@ -17,6 +17,7 @@ async function site( slow: Set< string > = new Set() ): Promise< { origin: strin
 	const requested: string[] = [];
 	const server = createServer( ( request, response ) => {
 		requested.push( request.url ?? '' );
+		if ( request.url?.includes( 'liberation-absent-' ) ) { response.writeHead( 404 ); response.end(); return; }
 		// A route that never answers: only the budget's deadline ends it.
 		if ( slow.has( request.url ?? '' ) ) return;
 		response.setHeader( 'content-type', 'text/html' );
@@ -181,12 +182,57 @@ it.skipIf( skipBrowser )( 'abandons a stalled route at its per-route deadline an
 	}
 }, 60_000 );
 
+// One public-interface regression for #1374; expected wall time about 45s.
+it.skipIf( skipBrowser )( 'stops admitting routes when the source stops answering navigations and exports captured routes', async () => {
+	const requested: string[] = [];
+	const server = createServer( ( request, response ) => {
+		if ( request.url?.includes( 'liberation-absent-' ) ) { response.writeHead( 404 ); response.end(); return; }
+		if ( request.url === '/' || request.url?.startsWith( '/route-' ) ) {
+			const path = request.url!;
+			if ( ! requested.includes( path ) ) requested.push( path );
+			if ( requested.indexOf( path ) >= 2 ) return;
+		}
+		response.setHeader( 'content-type', 'text/html' );
+		response.end( '<!doctype html><html><head><title>Captured</title></head><body><h1>Captured</h1></body></html>' );
+	} );
+	await new Promise< void >( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+	const origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
+	mkdirSync( '.tmp-test', { recursive: true } );
+	const outputDir = mkdtempSync( join( process.cwd(), '.tmp-test', 'source-stall-' ) );
+	try {
+		const urls = [ `${ origin }/`, ...Array.from( { length: 13 }, ( _, i ) => `${ origin }/route-${ i }` ) ];
+		const routeDeadlineMs = 12_000;
+		const startedAt = Date.now();
+		const result = await captureScreenshots( {
+			urls, primaryUrl: urls[ 0 ], outputDir, settleMs: 0, learnFluid: false,
+			viewports, routeDeadlineMs, concurrency: 1,
+		} );
+		expect( Date.now() - startedAt ).toBeLessThan( routeDeadlineMs * 7 );
+		expect( result ).toMatchObject( { captured: 2, failed: 12 } );
+		expect( requested ).toEqual( [ '/', '/route-0', '/route-1', '/route-2', '/route-3' ] );
+		const skipped = result.routeDiagnostics?.filter( row => row.code === 'route_capture_failed' );
+		expect( skipped?.map( row => row.url ) ).toEqual( urls.slice( 5 ) );
+		expect( skipped?.every( row => row.reason.includes( 'source stalled' ) ) ).toBe( true );
+		const { receipt, missing, complete, usable } = exportCapture( outputDir, urls[ 0 ]!, result );
+		expect( receipt.routes.map( ( route: { url: string } ) => route.url ).sort() ).toEqual( urls.slice( 0, 2 ).sort() );
+		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain( 'Captured' );
+		expect( missing ).toHaveLength( 12 );
+		expect( missing.filter( row => row.code === 'route_capture_failed' ).map( row => row.url ) ).toEqual( urls.slice( 5 ) );
+		expect( complete ).toBe( false );
+		expect( usable ).toBe( true );
+	} finally {
+		await close( server );
+		rmSync( outputDir, { recursive: true, force: true } );
+	}
+}, 120_000 );
+
 it.skipIf( skipBrowser )( 'keeps the completed desktop profile of a route abandoned at its deadline while its phone profile stalls', async () => {
 	// The homepage answers desktop identities and never answers the phone one:
 	// desktop completes, the phone profile is in flight at the deadline.
 	const requested: string[] = [];
 	const server = createServer( ( request, response ) => {
 		requested.push( request.url ?? '' );
+		if ( request.url?.includes( 'liberation-absent-' ) ) { response.writeHead( 404 ); response.end(); return; }
 		if ( request.url === '/' && /iPhone/.test( request.headers[ 'user-agent' ] ?? '' ) ) return;
 		response.setHeader( 'content-type', 'text/html' );
 		const title = request.url === '/' ? 'Home' : request.url ?? '';

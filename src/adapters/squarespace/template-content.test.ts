@@ -9,7 +9,7 @@ import type { StructuredContentEntry } from '../../platform/types.js';
 
 const origin = 'https://fixture.squarespace.com';
 const post = (id: string) => ({ id: `id-${id}`, fullUrl: `/journal/${id}`, title: `Post ${id}`, body: `<p>Body ${id} <a href="/about">About</a><img src="/photo.jpg" srcset="/photo.jpg 1x"></p>`, publishOn: 1704067200000, updatedOn: 1704153600000, author: { displayName: 'Writer' }, categories: ['Real Estate'], tags: ['Local', 'Real Estate'], assetUrl: `${origin}/featured.jpg` });
-const entry = (id: string): StructuredContentEntry => ({ permalink: `${origin}/journal/${id}`, slug: id, kind: 'post', title: `Post ${id}`, contentHtml: post(id).body, published: '2024-01-01T00:00:00.000Z', updated: '2024-01-02T00:00:00.000Z', author: 'Writer', terms: ['Real Estate', 'Local'] });
+const entry = (id: string): StructuredContentEntry => ({ permalink: `${origin}/journal/${id}`, slug: id, kind: 'post', title: `Post ${id}`, contentHtml: post(id).body, published: '2024-01-01T00:00:00.000Z', updated: '2024-01-02T00:00:00.000Z', author: 'Writer', terms: ['Real Estate', 'Local'], image: `${origin}/featured.jpg` });
 const document = (e: StructuredContentEntry, slot = 'blog-item-content') => `<html><head><title>${e.title} | Site</title><link rel="canonical" href="${e.permalink}"></head><body><nav>Keep me</nav><h1 class="blog-item-title">${e.title}</h1><time datetime="${e.published}"></time><div class="${slot}">${e.contentHtml}</div></body></html>`;
 
 afterEach(() => vi.restoreAllMocks());
@@ -87,10 +87,11 @@ describe('Squarespace structured blog content', () => {
 		const rep = entries[0]!, member = entries[2]!;
 		const nav = '<nav class="pagination"><div class="pagination-direction"><div class="newer">Newer Post</div><div class="older">Older Post</div></div><div class="pagination-content"><a class="newer" rel="prev" href="/stale"><div class="pagination-img"></div><span>Stale</span></a><a class="older" rel="next" href="/stale"><span>Stale</span></a></div><a class="pagination-home" href="/journal">Back to Blog Home</a></nav>';
 		const meta = '<article id="article-id-old" data-item-id="id-old"><div class="blog-list-article-content-categories"><span>Stale</span><span>Stale</span></div><div class="blog-list-article-content-date">Stale</div></article>';
-		const html = document(rep).replace('</body>', meta + nav + '</body>');
+		const html = document(rep).replace('<body>', '<body id="item-id-old">').replace('</body>', meta + nav + '</body>');
 		const $ = cheerio.load((await source.memberDocument(html, rep, member))!);
 		expect($('article').attr('id')).toBe('article-id-middle');
 		expect($('article').attr('data-item-id')).toBe('id-middle');
+		expect($('body').attr('id')).toBe('item-id-middle');
 		expect($('.blog-list-article-content-categories').html()).toBe('<span>Real Estate</span>');
 		expect($('.blog-list-article-content-date').text()).toBe('January 2, 2024');
 		expect($('.pagination a.newer').attr('href')).toBe('/journal/new');
@@ -99,6 +100,34 @@ describe('Squarespace structured blog content', () => {
 		const end = cheerio.load((await source.memberDocument(html, rep, entries[1]!))!);
 		expect(end('.newer')).toHaveLength(0);
 		expect(end('.pagination-home').text()).toBe('Back to Blog Home');
+	});
+
+	it('round-trips a 7.1 item date and prev/next neighbors without rel attributes', async () => {
+		vi.spyOn(fetching, 'safeFetch').mockImplementation(async url => ({
+			body: Buffer.from(String(url).includes('format=json') ? JSON.stringify({ website: { timeZone: 'UTC' }, collection: { typeName: 'blog', fullUrl: '/journal' }, items: ['one', 'two', 'three', 'four'].map((id, index) => ({ ...post(id), publishOn: 1704067200000 + index * 86400000, assetUrl: `${origin}/${id}.jpg` })) }) : '<html></html>'),
+			status: 200, finalUrl: String(url), headers: new Headers(),
+		}));
+		const { entries } = await source.enumerate(`${origin}/journal`, { governors: new SourceRequestGovernors() });
+		const page = (index: number) => document(entries[index]!).replace(`<time datetime="${entries[index]!.published}"></time>`, `<time class="dt-published blog-meta-item blog-meta-item--date" datetime="2024-01-0${index + 1}" data-content-field="published-on"><span>Jan ${index + 1}</span></time>`).replace('</body>', `<section id="itemPagination" class="item-pagination item-pagination--prev-next">${(['prev', 'next'] as const).map((direction, offset) => {
+			const neighbor = entries[index + (offset ? -1 : 1)];
+			return neighbor ? `<a class="item-pagination-link item-pagination-link--${direction}" href="/journal/${neighbor.slug}"><div class="item-pagination-thumb"><img src="${origin}/${neighbor.slug}.jpg" data-src="${origin}/${neighbor.slug}.jpg"></div><div class="item-pagination-title">${neighbor.title}</div></a>` : '';
+		}).join('')}</section></body>`);
+		const synthesized = (await source.memberDocument(page(1), entries[1]!, entries[2]!))!;
+		const $ = cheerio.load(synthesized);
+		expect($('time').attr('datetime')).toBe('2024-01-03');
+		expect($('time span').text()).toBe('Jan 3');
+		for (const [direction, slug] of [['prev', 'four'], ['next', 'two']]) {
+			const link = $(`.item-pagination-link--${direction}`);
+			expect(link.attr('href')).toBe(`/journal/${slug}`);
+			expect(link.find('.item-pagination-title').text()).toBe(`Post ${slug}`);
+			expect(link.find('img').attr('src')).toBe(`${origin}/${slug}.jpg`);
+			expect(link.find('img').attr('data-src')).toBe(`${origin}/${slug}.jpg`);
+		}
+		const derived = deriveMemberDocument({ repServerHtml: page(1), repProcessedHtml: page(1), memberServerHtml: synthesized, baseUrl: origin, styleNormalization: squarespaceAdapter.templateStyleNormalization, contentSlotSelector: source.contentSlotSelector });
+		expect(derived.ok, JSON.stringify(derived)).toBe(true);
+		if (derived.ok) expect(compareDerivedWithCapture({ derivedHtml: derived.html, realHtml: page(2), baseUrl: origin }).equal).toBe(true);
+		const end = cheerio.load((await source.memberDocument(page(1), entries[1]!, entries[3]!))!);
+		expect(end('.item-pagination-link--prev')).toHaveLength(0);
 	});
 
 	it('fetches and transplants only the member font slot through the governed contract', async () => {
@@ -125,4 +154,13 @@ describe('Squarespace structured blog content', () => {
 		expect(squarespaceTermName(`${origin}/journal/post`)).toBeUndefined();
 		expect(squarespaceTermName(`${origin}/journal/tag/%bad`)).toBeUndefined();
 	});
+});
+
+it('compares server-shuffled font-face rules as the same template style', () => {
+	// Squarespace emits the same @font-face rules in a per-request order.
+	const faces = ['italic', 'normal'].map(style => `@font-face { font-family: 'Sans'; font-style: ${style}; src: url(/${style}.woff2); }`);
+	const page = (rules: string[]) => `<html><head><style data-sqsp-font-ids="1">${rules.join('\n')}</style></head><body><p>Same</p></body></html>`;
+	const input = { derivedHtml: page(faces), realHtml: page([...faces].reverse()), baseUrl: 'https://fixture.example/' };
+	expect(compareDerivedWithCapture({ ...input, styleNormalization: squarespaceAdapter.templateStyleNormalization }).equal).toBe(true);
+	expect(compareDerivedWithCapture({ ...input, realHtml: page([faces[0]!]), styleNormalization: squarespaceAdapter.templateStyleNormalization }).equal).toBe(false);
 });

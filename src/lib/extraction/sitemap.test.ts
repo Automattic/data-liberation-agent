@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { runWithTrustedOrigins } from '../media-fetch/safe-fetch.js';
 import { allocateCaptureRoutes } from '../capture-export-routes.js';
 import { describe, it, expect, vi } from 'vitest';
 import { sameOriginPageAnchors } from '../screenshot/unscheduled-anchors.js';
@@ -281,6 +282,8 @@ describe('fetchSitemap', () => {
          'https://www.example.test/sitemap-index.xml',
          'https://www.example.test/sitemap.xml',
          'https://www.example.test/sitemap_pages.xml',
+         'https://www.example.test/',
+         ...['/feed', '/feed/', '/atom.xml', '/rss.xml'].map(path => `https://www.example.test${path}`),
        ]);
     } finally {
       vi.unstubAllGlobals();
@@ -334,6 +337,8 @@ describe('fetchSitemap', () => {
         'https://example.test/sitemap/v1-0?from=2&to=3',
         'https://example.test/sitemap/more.xml?from=2&to=3',
         'https://example.test/sitemap/pages.xml?from=10&to=20',
+        'https://example.test/',
+        ...['/feed', '/feed/', '/atom.xml', '/rss.xml'].map(path => `https://example.test${path}`),
       ]);
     } finally {
       vi.unstubAllGlobals();
@@ -543,6 +548,8 @@ describe('fetchSitemap', () => {
         'https://example.test/sitemap/two',
         'https://example.test/sitemap/three',
         'https://example.test/sitemap/pages',
+        'https://example.test/',
+        ...['/feed', '/feed/', '/atom.xml', '/rss.xml'].map(path => `https://example.test${path}`),
       ]);
     } finally {
       vi.unstubAllGlobals();
@@ -609,7 +616,7 @@ describe('fetchSitemap', () => {
     const origin = `http://127.0.0.1:${address.port}`;
 
     try {
-      const { urls, diagnostics } = await fetchSitemapWithDiagnostics(origin);
+      const { urls, diagnostics } = await runWithTrustedOrigins([origin], () => fetchSitemapWithDiagnostics(origin));
       expect(urls).toEqual(pages.map((path) => `${origin}${path}`));
       expect(diagnostics.filter((diagnostic) => diagnostic.code.startsWith('sitemap_missing') || diagnostic.code === 'sitemap_not_found')).toEqual([]);
     } finally {
@@ -640,6 +647,8 @@ describe('fetchSitemap', () => {
       expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
         'https://example.test/robots.txt',
         'https://example.test/declared.xml',
+        'https://example.test',
+        ...['/feed', '/feed/', '/atom.xml', '/rss.xml'].map(path => `https://example.test${path}`),
       ]);
     } finally {
       vi.unstubAllGlobals();
@@ -707,7 +716,7 @@ describe('fetchSitemap', () => {
       const { diagnostics } = await fetchSitemapWithDiagnostics(entryUrl);
       // Probed against the origin, never with the query string spliced in
       // (e.g. NOT 'https://example.test/?token=abc/sitemap.xml').
-      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      expect(fetchMock.mock.calls.map(([url]) => url).filter(url => !['/feed', '/feed/', '/atom.xml', '/rss.xml'].includes(new URL(url).pathname))).toEqual([
         'https://example.test/robots.txt',
         'https://example.test/sitemap-index.xml',
         'https://example.test/sitemap.xml',
@@ -736,7 +745,7 @@ describe('fetchSitemap', () => {
       const { diagnostics } = await fetchSitemapWithDiagnostics(entryUrl);
       // Probed against the origin, never with the deep path prefixed
       // (e.g. NOT 'https://example.test/en/store/checkout/sitemap.xml').
-      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      expect(fetchMock.mock.calls.map(([url]) => url).filter(url => !['/feed', '/feed/', '/atom.xml', '/rss.xml'].includes(new URL(url).pathname))).toEqual([
         'https://example.test/robots.txt',
         'https://example.test/sitemap-index.xml',
         'https://example.test/sitemap.xml',
@@ -928,7 +937,7 @@ describe('fetchSitemap route identity', () => {
     if (!address || typeof address === 'string') throw new Error('Test server did not start');
     const origin = `http://127.0.0.1:${address.port}`;
     try {
-      const { urls, diagnostics } = await fetchSitemapWithDiagnostics(`${origin}/`);
+      const { urls, diagnostics } = await runWithTrustedOrigins([origin], () => fetchSitemapWithDiagnostics(`${origin}/`));
       expect(urls).toEqual(paths.map(path => `${origin}${path}`));
       expect(diagnostics).toEqual([]);
       const documents = await Promise.all(urls.map(async url => (await fetch(url)).text()));

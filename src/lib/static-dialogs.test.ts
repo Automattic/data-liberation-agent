@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { chromium } from 'playwright';
+import { describe, expect } from 'vitest';
+import { it } from '../../test/browser.js';
+
 import * as cheerio from 'cheerio';
 import { wireCapturedDialogs } from './static-dialogs.js';
 import type { CapturedDialogInteraction } from './screenshot/interaction-capture.js';
@@ -88,7 +89,7 @@ describe( 'wireCapturedDialogs', () => {
 		expect( $( '[data-blocks-engine-capture-dialog-trigger]' ).toArray().map( node => $( node ).attr( 'id' ) ) ).toEqual( [ '6' ] );
 	} );
 	// ~1 second: reduced mebenedetto.com /jujuy-2022/ dual-document tree.
-	it( 'restores duplicate source panel IDs inside synthesized responsive menus', async () => {
+	it( 'restores duplicate source panel IDs inside synthesized responsive menus', async ({ newPage }) => {
 		const document = ( device: string ) => `<div class="${ device }"><header><nav>
 			<button aria-label="Open menu">Open menu</button>
 			<div id="modal-2" class="wp-block-navigation__responsive-container"><a href="#${ device }">${ device }</a></div>
@@ -108,9 +109,9 @@ describe( 'wireCapturedDialogs', () => {
 		panels.each( ( _, panel ) => expect( $( panel ).attr( 'style' ) ?? '' ).not.toMatch( /display|visibility/ ) );
 		expect( $( '.desktop [data-blocks-engine-capture-existing-panel]' ).text() ).toBe( 'desktop' );
 		expect( $( '.mobile [data-blocks-engine-capture-existing-panel]' ).text() ).toBe( 'mobile' );
-		const browser = await chromium.launch( { headless: true } );
-		try {
-			const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+
+		{
+			const page = await newPage( { viewport: { width: 390, height: 844 } } );
 			await page.setContent( portable );
 			const trigger = page.locator( '.mobile button' ).first();
 			for ( let repeat = 0; repeat < 2; repeat++ ) {
@@ -122,7 +123,7 @@ describe( 'wireCapturedDialogs', () => {
 				expect( await page.locator( '.mobile [data-blocks-engine-capture-existing-panel]' ).textContent() ).toBe( 'mobile' );
 				expect( await page.locator( '.is-menu-open,.has-modal-open' ).count() ).toBe( 0 );
 			}
-		} finally { await browser.close(); }
+		}
 	} );
 	it.each( [
 		{ wrapper: '<div id="shell"><x-modal id="m1"> \n<!-- resting host -->PANEL\n </x-modal></div>', retained: [] },
@@ -147,7 +148,7 @@ describe( 'wireCapturedDialogs', () => {
 		if ( retained.includes( 'm1' ) ) expect( $( '#m1' ).text() ).toContain( 'Other' );
 	} );
 
-	it( 'wires observed source controls rather than matching IDs copied into earlier popup snapshots', async () => {
+	it( 'wires observed source controls rather than matching IDs copied into earlier popup snapshots', async ({ newPage }) => {
 		const controls = '<button id="first" aria-haspopup="dialog">First gallery</button><button id="second" aria-haspopup="dialog">Second gallery</button>';
 		let nested = controls;
 		for ( let depth = 0; depth < 16; ++depth ) nested = `<div>${ nested }</div>`;
@@ -158,9 +159,9 @@ describe( 'wireCapturedDialogs', () => {
 			panel.innerHTML='<h2>'+id+' snapshot</h2>'+(id==='first'?'<div id="second" role="img" aria-label="Copied presentation"></div>':'')+'<button aria-label="Close">Close</button>';
 			document.getElementById(id).parentElement.append(panel);panel.querySelector('button').onclick=()=>panel.remove();
 		});</script></body></html>`;
-		const browser = await chromium.launch( { headless: true } );
-		try {
-			const page = await browser.newPage();
+
+		{
+			const page = await newPage();
 			await page.setContent( source );
 			const report = await captureTriggeredDialogs( page, 'https://fixture.test/gallery' );
 			const states = report.states.filter( state => state.status === 'captured' );
@@ -185,10 +186,10 @@ describe( 'wireCapturedDialogs', () => {
 			}
 			expect( await page.locator( 'main h1' ).textContent() ).toBe( 'Unrelated heading' );
 			expect( await page.locator( 'footer' ).textContent() ).toBe( 'Unrelated footer' );
-		} finally { await browser.close(); }
+		}
 	}, 30_000 );
 
-	it.each( [ 'button', 'div' ] )( 'preserves direct-child grid ownership for a %s trigger through resize', async ( tag ) => {
+	it.for( [ 'button', 'div' ] )( 'preserves direct-child grid ownership for a %s trigger through resize', { timeout: 30_000 }, async ( tag, { newPage } ) => {
 		const trigger = tag === 'button'
 			? '<button id="toggle" class="menu" aria-label="Open Menu">Menu</button>'
 			: '<div id="toggle" class="menu" role="button" tabindex="0" aria-label="Open Menu">Menu</div>';
@@ -201,9 +202,9 @@ describe( 'wireCapturedDialogs', () => {
 			...captured,
 			trigger: { ...captured.trigger, selector: 'header > #toggle', tag },
 		};
-		const browser = await chromium.launch( { headless: true } );
-		try {
-			const page = await browser.newPage();
+
+		{
+			const page = await newPage();
 			const measure = async () => page.evaluate( () => {
 				const rect = ( selector: string ) => {
 					const r = document.querySelector( selector )!.getBoundingClientRect();
@@ -239,14 +240,14 @@ describe( 'wireCapturedDialogs', () => {
 			expect( await page.locator( '#toggle' ).count() ).toBe( 1 );
 			expect( await page.locator( '#toggle' ).evaluate( el => el.tagName.toLowerCase() ) ).toBe( tag );
 			expect( await page.locator( 'summary#toggle, details' ).count() ).toBe( 0 );
-		} finally { await browser.close(); }
-	}, 30_000 );
+		}
+	} );
 
-	it.each( [ 'modal', 'dropdown' ] )( 'preserves responsive flex participation of a %s trigger across resizing', async ( presentation ) => {
+	it.for( [ 'modal', 'dropdown' ] )( 'preserves responsive flex participation of a %s trigger across resizing', { timeout: 30_000 }, async ( presentation, { newPage } ) => {
 		const source = '<html><head><style>body{margin:0}header{display:flex;align-items:center;justify-content:space-between;max-width:672px;margin:auto;padding:24px;box-sizing:border-box}.desktop{display:none}.menu{display:inline-flex;padding:8px;font:16px sans-serif;border:0;background:none;box-sizing:border-box;width:60px;height:36px}@media(min-width:640px){.desktop{display:flex;gap:20px}.menu{display:none}}</style></head><body><header><a href="/">Site title</a><nav class="desktop"><a href="/about">About</a><a href="/writing">Writing</a></nav><button class="menu" aria-label="Open menu">Menu</button></header></body></html>';
-		const browser = await chromium.launch();
-		try {
-			const page = await browser.newPage();
+
+		{
+			const page = await newPage();
 			const widths = [ 390, 768, 1440, 390, 1440, 390 ];
 			const rectangles = new Map<number, { nav: { x: number; y: number; width: number; height: number } | null; trigger: { x: number; y: number; width: number; height: number } | null }>();
 			for ( const width of [ 390, 768, 1440 ] ) {
@@ -277,10 +278,10 @@ describe( 'wireCapturedDialogs', () => {
 					expect( await trigger.evaluate( element => document.activeElement === element ) ).toBe( true );
 				}
 			}
-		} finally { await browser.close(); }
-	}, 30_000 );
+		}
+	} );
 
-	it( 'preserves painted children, tag-qualified placement, and dropdown positioning', async () => {
+	it( 'preserves painted children, tag-qualified placement, and dropdown positioning', async ({ newPage }) => {
 		const fixtures = [
 			{
 				name: 'class-owned-paint',
@@ -304,9 +305,9 @@ describe( 'wireCapturedDialogs', () => {
 				presentation: 'dropdown' as const,
 			},
 		];
-		const browser = await chromium.launch( { headless: true } );
-		try {
-			const page = await browser.newPage();
+
+		{
+			const page = await newPage();
 			for ( const fixture of fixtures ) {
 				const source = `<html><head><style>body{margin:0}${ fixture.css }</style></head><body><header class="bar"><span>Logo</span><button id="toggle" class="toggle" aria-label="Open Menu"><span class="glyph">M</span></button></header><main style="height:400px">Content</main></body></html>`;
 				const state: CapturedDialogInteraction = {
@@ -362,7 +363,7 @@ describe( 'wireCapturedDialogs', () => {
 				expect( await panel.evaluate( element => ( element as HTMLElement ).hidden ) ).toBe( true );
 				expect( await trigger.evaluate( element => document.activeElement === element ) ).toBe( true );
 			}
-		} finally { await browser.close(); }
+		}
 	}, 60_000 );
 
 	it( 'emits zero-specificity base disclosure rules so author utilities win', () => {
@@ -385,15 +386,15 @@ describe( 'wireCapturedDialogs', () => {
 		expect( css ).not.toMatch( /(^|;)details\.data-blocks-engine-capture-disclosure>summary(::-webkit-details-marker)?\{/ );
 	} );
 
-	it( 'keeps layered responsive summary visibility while retaining native disclosure behavior', async () => {
+	it( 'keeps layered responsive summary visibility while retaining native disclosure behavior', async ({ newPage }) => {
 		const source = '<html><head><style>@layer utilities{@media(min-width:40rem){.sm\\:hidden{display:none}}.sm\\:hidden{width:36px;height:43px}}body{margin:0}header{height:104px} @media(max-width:39.999rem){header{height:96px}}</style></head><body><header><details class="data-blocks-engine-capture-disclosure"><summary class="sm:hidden">Menu</summary><nav>Links</nav></details></header><button id="helper">Helper</button></body></html>';
 		const portable = wireCapturedDialogs( source, [ {
 			...captured,
 			trigger: { ...captured.trigger, selector: '#helper' },
 		} ] );
-		const browser = await chromium.launch( { headless: true } );
-		try {
-			const page = await browser.newPage();
+
+		{
+			const page = await newPage();
 			await page.setContent( portable );
 			for ( const width of [ 1280, 390 ] ) {
 				await page.setViewportSize( { width, height: 844 } );
@@ -408,10 +409,10 @@ describe( 'wireCapturedDialogs', () => {
 					expect( await page.locator( 'header details' ).evaluate( element => ( element as HTMLDetailsElement ).open ) ).toBe( false );
 				}
 			}
-		} finally { await browser.close(); }
+		}
 	}, 30_000 );
 
-	it( 'lets layered author CSS keep a trigger\'s display (Substack restack button)', async () => {
+	it( 'lets layered author CSS keep a trigger\'s display (Substack restack button)', async ({ newPage }) => {
 		// derekthompson.org: Substack ships its CSS in cascade layers. Replacing the
 		// restack button lost `.post-ufi-button{display:flex}` and wrapped the icon
 		// and count onto two lines. The authored button must remain the trigger.
@@ -426,9 +427,9 @@ describe( 'wireCapturedDialogs', () => {
 				},
 			]
 		);
-		const browser = await chromium.launch( { headless: true } );
-		try {
-			const page = await browser.newPage( { viewport: { width: 1600, height: 900 } } );
+
+		{
+			const page = await newPage( { viewport: { width: 1600, height: 900 } } );
 			await page.setContent( html );
 			const button = page.locator( '.post-ufi > button.post-ufi-button' );
 			expect( await button.count() ).toBe( 1 );
@@ -439,12 +440,10 @@ describe( 'wireCapturedDialogs', () => {
 				[ captured ]
 			) );
 			expect( await page.locator( 'button.burger' ).evaluate( ( el ) => getComputedStyle( el ).display ) ).toBe( 'inline-block' );
-		} finally {
-			await browser.close();
 		}
 	} );
 
-	it( 'lets an author md:hidden utility hide the toggle at 1600px while it still opens and closes the dialog at 390px', async () => {
+	it( 'lets an author md:hidden utility hide the toggle at 1600px while it still opens and closes the dialog at 390px', async ({ newPage }) => {
 		const html = wireCapturedDialogs(
 			'<html><head><style>.burger{display:inline-flex}@media(min-width:768px){.md\\:hidden{display:none}}</style></head><body><header><a href="/">Logo</a><button class="burger md:hidden" aria-label="Toggle menu">Menu</button></header></body></html>',
 			[
@@ -469,9 +468,9 @@ describe( 'wireCapturedDialogs', () => {
 				},
 			]
 		);
-		const browser = await chromium.launch( { headless: true } );
-		try {
-			const page = await browser.newPage( { viewport: { width: 1600, height: 900 } } );
+
+		{
+			const page = await newPage( { viewport: { width: 1600, height: 900 } } );
 			await page.setContent( html );
 			const trigger = page.locator( 'header > button.burger' );
 			expect(
@@ -492,19 +491,17 @@ describe( 'wireCapturedDialogs', () => {
 			await page.locator( '[data-blocks-engine-capture-dialog-close]' ).click();
 			expect( await panel.evaluate( ( element ) => ( element as HTMLElement ).hidden ) ).toBe( true );
 			expect( await trigger.evaluate( ( element ) => document.activeElement === element ) ).toBe( true );
-		} finally {
-			await browser.close();
 		}
 	}, 30_000 );
 
-	it( 'closes an open panel when a parent media query removes the trigger from layout', async () => {
+	it( 'closes an open panel when a parent media query removes the trigger from layout', async ({ newPage }) => {
 		const html = wireCapturedDialogs(
 			'<html><head><style>@media(min-width:768px){header{display:none}}</style></head><body><header><button class="burger" aria-label="Open Menu">Menu</button></header></body></html>',
 			[ { ...captured, trigger: { ...captured.trigger, selector: 'header > button' } } ]
 		);
-		const browser = await chromium.launch( { headless: true } );
-		try {
-			const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+
+		{
+			const page = await newPage( { viewport: { width: 390, height: 844 } } );
 			await page.setContent( html );
 			const trigger = page.locator( 'header > button.burger' );
 			await trigger.click();
@@ -515,7 +512,7 @@ describe( 'wireCapturedDialogs', () => {
 			await page.setViewportSize( { width: 390, height: 844 } );
 			await expect.poll( () => panel.evaluate( element => ( element as HTMLElement ).hidden ) ).toBe( false );
 			expect( await trigger.boundingBox() ).toMatchObject( { width: expect.any( Number ), height: expect.any( Number ) } );
-		} finally { await browser.close(); }
+		}
 	}, 30_000 );
 
 	it( 'keeps the authored menu button and attaches a hidden panel', () => {
@@ -748,7 +745,7 @@ describe( 'wireCapturedDialogs', () => {
 		expect( html ).not.toContain( 'data-blocks-engine-capture-disclosure' );
 	} );
 
-	it( 'replays observed choice-group transitions offline, including keyboard activation', async () => {
+	it( 'replays observed choice-group transitions offline, including keyboard activation', async ({ newPage }) => {
 		const choice = ( index: number, selected: number ) =>
 			`<div id="rating"><label id="rating-label">Rating</label><div class="choices">${ [ 0, 1, 2 ]
 				.map( ( choiceIndex ) => `<button type="button" data-blocks-engine-capture-choice-index="${ choiceIndex }"><svg class="${ choiceIndex <= selected ? 'filled' : 'empty' }"></svg></button>` )
@@ -797,9 +794,8 @@ describe( 'wireCapturedDialogs', () => {
 		expect( html ).toContain( 'data-blocks-engine-capture-choice-group="0"' );
 		expect( html ).toContain( 'Rating' );
 
-		const browser = await chromium.launch( { headless: true } );
-		try {
-			const page = await browser.newPage();
+		{
+			const page = await newPage();
 			await page.setContent( html );
 			const buttons = page.locator( '#rating button' );
 			await buttons.nth( 0 ).click();
@@ -807,8 +803,6 @@ describe( 'wireCapturedDialogs', () => {
 			await buttons.nth( 2 ).focus();
 			await page.keyboard.press( 'Enter' );
 			expect( await page.locator( '#rating svg' ).evaluateAll( ( svgs ) => svgs.map( ( svg ) => svg.getAttribute( 'class' ) ) ) ).toEqual( [ 'filled', 'filled', 'filled' ] );
-		} finally {
-			await browser.close();
 		}
 	}, 30_000 );
 

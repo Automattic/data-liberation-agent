@@ -1,23 +1,27 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import * as cheerio from 'cheerio';
-import { chromium } from 'playwright';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { chromium, type Browser, type BrowserContext } from 'playwright';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+// @ts-ignore TS6059: test helpers intentionally live outside the production rootDir.
+import { exportFixture } from '../../test/export-fixture.js';
 import * as sharedChrome from './shared-chrome.js';
+import { probeCanonicalRouteAliases } from './route-aliases.js';
 import { includeReferences, readResolvedPage } from './site-includes.js';
 import {
 	CAPTURED_INTERACTIONS_SCHEMA,
 	CAPTURE_RECEIPT_SCHEMA,
 	ASSET_EVIDENCE_SCHEMA,
-	canonicalizeUnreferencedRuntimeIds,
 	exportWebsiteCapture,
 	INDEXED_SEMANTIC_EVIDENCE_SCHEMA,
 	portableInlineStyle,
 } from './capture-export.js';
+import { canonicalizeUnreferencedRuntimeIds } from './capture-export-render.js';
+import { canonicalizeGoogleSitesHtml } from '../adapters/google-sites/index.js';
 import { SectionSpecsStore } from './replicate/section-specs-store.js';
 import { MediaStubStore } from './resume-state/index.js';
 import { checkSelfConsistency } from './fidelity/self-consistency.js';
@@ -31,25 +35,31 @@ import { EXPORT_PUBLICATION_OWNED } from './export-publication.js';
 import { sanitizeFrozenHtml } from './screenshot/freeze.js';
 import { SITE_ANALYSIS_FILES } from './screenshot/aggregator.js';
 import { missingRoutes } from './capture-usability.js';
-
-const dirs: string[] = [];
-
-afterEach( () => {
-	for ( const dir of dirs.splice( 0 ) ) rmSync( dir, { recursive: true, force: true } );
+let sharedBrowser: Browser;
+const contexts: BrowserContext[] = [];
+beforeAll( async () => { sharedBrowser = await chromium.launch( { headless: true } ); } );
+afterAll( async () => { await sharedBrowser.close(); } );
+// Browser.newPage creates an isolated context; retain that contract for each test.
+async function browserContext() {
+	const context = await sharedBrowser.newContext();
+	contexts.push( context );
+	return context;
+}
+afterEach( async () => {
+	for ( const context of contexts.splice( 0 ) ) await context.close();
 } );
-
 describe( 'exportWebsiteCapture', () => {
+
 	it( 'audits runtime IDs without searching every other document for each ID', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-id-work-' ) );
-		dirs.push( outputDir );
-		for ( const directory of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, directory ) );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const sourceUrl = 'https://example.test/';
 		const entries = Object.fromEntries( Array.from( { length: 16 }, ( _, page ) => {
 			const html = `html/${ page }.html`;
-			writeFileSync( join( outputDir, html ), `<html><body><main><h1>Page ${ page }</h1>${ Array.from( { length: 16 }, ( _, item ) => `<p id="yui_${ page }_${ item }">Content</p>` ).join( '' ) }<img src="/missing.jpg" srcset="/small.jpg 320w, /large.jpg 1280w"></main></body></html>` );
+			capture.file( html, `<html><body><main><h1>Page ${ page }</h1>${ Array.from( { length: 16 }, ( _, item ) => `<p id="yui_${ page }_${ item }">Content</p>` ).join( '' ) }<img src="/missing.jpg" srcset="/small.jpg 320w, /large.jpg 1280w"></main></body></html>` );
 			return [ page ? `${ sourceUrl }page-${ page }/` : sourceUrl, { html } ];
 		} ) );
-		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries } ) );
+		capture.manifest( { version: 1, entries } );
 		const includes = String.prototype.includes;
 		let searchedBytes = 0;
 		const search = vi.spyOn( String.prototype, 'includes' ).mockImplementation( function ( this: string, value: string, position?: number ) {
@@ -69,24 +79,21 @@ describe( 'exportWebsiteCapture', () => {
 			expect( html ).toContain( 'data-blocks-engine-capture-shared-' );
 		}
 	} );
+
 	it( 'localizes relative and absolute sprite references in routes and shared chrome', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-sprite-parts-' ) );
-		dirs.push( outputDir );
-		for ( const directory of [ 'html', 'screenshots', 'resources/captured' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots', 'resources/captured' ] } );
+		const outputDir = capture.build();
 		const sourceUrl = 'https://example.test/';
 		const sprite = '<svg xmlns="http://www.w3.org/2000/svg"><symbol id="a"/><symbol id="b"/></svg>';
-		writeFileSync( join( outputDir, 'resources/captured/sprite.svg' ), sprite );
-		writeFileSync( join( outputDir, 'resources/manifest.json' ), JSON.stringify( { version: 1, failures: [], resources: {
-			[ `${ sourceUrl }icons/sprite.svg` ]: { path: 'resources/captured/sprite.svg', contentType: 'image/svg+xml' },
-		} } ) );
+		capture.resource( `${ sourceUrl }icons/sprite.svg`, sprite, 'image/svg+xml', 'resources/captured/sprite.svg' );
 		const icons = '<svg><use href="/icons/sprite.svg#a"/><use href="https://example.test/icons/sprite.svg#b"/><use xlink:href="/icons/sprite.svg#b"/><use xlink:href="https://example.test/icons/sprite.svg#a"/></svg>';
 		const header = `<header>${ icons }<p>${ 'Shared brand '.repeat( 100 ) }</p></header>`;
 		const entries = Object.fromEntries( [ '', 'about/' ].map( ( route, i ) => {
 			const html = `html/${ i }.html`;
-			writeFileSync( join( outputDir, html ), `<html><body>${ header }<main><h1>Route ${ i }</h1>${ icons }</main></body></html>` );
+			capture.file( html, `<html><body>${ header }<main><h1>Route ${ i }</h1>${ icons }</main></body></html>` );
 			return [ sourceUrl + route, { html } ];
 		} ) );
-		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries } ) );
+		capture.manifest( { version: 1, entries } );
 		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( { outputDir, sourceUrl, platform: 'generic', summary: {}, failures: [] } ), 'utf8' ) );
 		for ( const route of receipt.routes ) {
 			const path = join( outputDir, route.path );
@@ -106,7 +113,7 @@ describe( 'exportWebsiteCapture', () => {
 		}
 		// Exercise the same include-aware serving used by compare in Chromium.
 		const server = await startStaticServer( join( outputDir, 'website' ) );
-		const browser = await chromium.launch( { headless: true } );
+		const browser = await browserContext();
 		try {
 			const page = await browser.newPage();
 			const external: string[] = [];
@@ -120,25 +127,19 @@ describe( 'exportWebsiteCapture', () => {
 			await server.close();
 		}
 	} );
+
 	it( 'compacts both landmarks after evidence projection within the published website tree', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-canonical-parts-' ) );
-		dirs.push( outputDir );
-		for ( const directory of [ 'html', 'screenshots', 'layout-geometry' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots', 'layout-geometry' ] } );
+		const outputDir = capture.build();
 		const header = `<header id="brand"><nav><a href="https://external.test/">External</a></nav><div>${ 'Brand content '.repeat( 100 ) }</div></header>`;
 		const footer = `<footer id="copyright">${ 'Copyright content '.repeat( 100 ) }</footer>`;
 		const entries = Object.fromEntries( [ 'home', 'about' ].map( ( slug, i ) => {
 			const html = `html/${ slug }.html`;
-			writeFileSync( join( outputDir, html ), `<html><body><div>${ header }<main><div data-blocks-engine-capture-geometry-id="wrapper"><section data-blocks-engine-capture-geometry-id="target"><h1>Route ${ i }</h1><a href="#copyright">Copyright</a></section></div></main>${ footer }</div></body></html>` );
-			writeFileSync( join( outputDir, 'layout-geometry', `${ slug }.desktop.json` ), JSON.stringify( {
-				schema: 'blocks-engine-capture/layout-geometry-capture/v1', omissions: {}, observations: [ {
-					wrapperIdentity: 'wrapper', targetIdentity: 'target', viewport: 1440, state: 'default',
-					wrapper: { x: 0, y: 0, width: 100, height: 24 }, target: { x: 0, y: 0, width: 100, height: 24 }, simulated: { x: 0, y: 0, width: 100, height: 24 },
-					facts: { display: 'block', position: 'static', visibility: 'visible', childCount: 1 }, invariants: { runtime: true, semantics: true },
-				} ],
-			} ) );
+			capture.file( html, `<html><body><div>${ header }<main><div data-blocks-engine-capture-geometry-id="wrapper"><section data-blocks-engine-capture-geometry-id="target"><h1>Route ${ i }</h1><a href="#copyright">Copyright</a></section></div></main>${ footer }</div></body></html>` );
+			capture.json( join( 'layout-geometry', `${ slug }.desktop.json` ), {  schema: 'blocks-engine-capture/layout-geometry-capture/v1', omissions: {}, observations: [ {  wrapperIdentity: 'wrapper', targetIdentity: 'target', viewport: 1440, state: 'default',  wrapper: { x: 0, y: 0, width: 100, height: 24 }, target: { x: 0, y: 0, width: 100, height: 24 }, simulated: { x: 0, y: 0, width: 100, height: 24 },  facts: { display: 'block', position: 'static', visibility: 'visible', childCount: 1 }, invariants: { runtime: true, semantics: true },  } ],  } );
 			return [ i ? 'https://example.test/about' : 'https://example.test/', { html, slug } ];
 		} ) );
-		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries } ) );
+		capture.manifest( { version: 1, entries } );
 		const options = { outputDir, sourceUrl: 'https://example.test/', platform: 'generic', summary: {}, failures: [] };
 		// Record the existing exporter bytes/evidence immediately before its new final step.
 		const baseline = vi.spyOn( sharedChrome, 'extractSharedChrome' ).mockImplementation( () => {} );
@@ -166,44 +167,33 @@ describe( 'exportWebsiteCapture', () => {
 		}
 		expect( checkSelfConsistency( join( outputDir, 'website' ), new Map( receipt!.routes.map( route => [ route.path, route.path.replace( /^website\//, '' ) ] ) ) ).pass ).toBe( true );
 	} );
+
 	it( 'preserves identical external href spelling across representative and derived template documents', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-derived-external-href-' ) );
-		dirs.push( outputDir );
-		for ( const directory of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const representative = 'https://example.test/posts/representative/';
 		const derived = 'https://example.test/posts/derived/';
 		for ( const [ index, url ] of [ representative, derived ].entries() ) {
-			writeFileSync( join( outputDir, `html/page-${ index }.html` ), '<aside><a href="https://example.org">Sidebar</a></aside>' );
+			capture.file( `html/page-${ index }.html`, '<aside><a href="https://example.org">Sidebar</a></aside>' );
 		}
-		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( {
-			version: 1, entries: {
-				[ representative ]: { html: 'html/page-0.html' },
-				[ derived ]: { html: 'html/page-1.html', derived: true },
-			},
-		} ) );
-		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
-			outputDir, sourceUrl: representative, platform: 'generic', summary: {}, failures: [],
-		} ), 'utf8' ) );
+		capture.manifest( {  version: 1, entries: {  [ representative ]: { html: 'html/page-0.html' },  [ derived ]: { html: 'html/page-1.html', derived: true },  },  } );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {  outputDir, sourceUrl: representative, platform: 'generic', summary: {}, failures: [],  } ), 'utf8' ) );
 		const hrefs = receipt.routes.map( ( route: { path: string } ) => cheerio.load( readFileSync( join( outputDir, route.path ), 'utf8' ) )( 'a' ).attr( 'href' ) );
 		expect( hrefs ).toEqual( [ 'https://example.org', 'https://example.org' ] );
 	} );
-
 	it( 'keeps uncaptured query-only navigation pointing at the source when no base route was captured', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-query-only-home-' ) );
-		dirs.push( outputDir );
-		for ( const directory of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
-		writeFileSync( join( outputDir, 'html/home.html' ), '<h1>English</h1><a href="?lang=de">German</a>' );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const sourceUrl = 'https://example.test/?lang=en';
-		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: { [ sourceUrl ]: { html: 'html/home.html' } } } ) );
+		capture.page( sourceUrl, '<h1>English</h1><a href="?lang=de">German</a>' , { entry: { html: 'html/home.html' } } );
 		exportWebsiteCapture( { outputDir, sourceUrl, platform: 'generic', summary: {}, failures: [] } );
 		const $ = cheerio.load( readFileSync( join( outputDir, 'website/index.html' ), 'utf8' ) );
 		expect( $( 'a' ).attr( 'href' ) ).toBe( 'https://example.test/?lang=de' );
 	} );
 
 	it( 'rewrites URL-valued navigation options exactly like matching anchors and preserves other values', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-option-routes-' ) );
-		dirs.push( outputDir );
-		for ( const directory of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const urls = [ 'https://example.test/fr/', 'https://example.test/fr/about/' ];
 		const destinations = [ urls[ 0 ], urls[ 1 ], '/fr/about/#team' ];
 		const unchanged = [ '', '#', 'en', '42', 'about/', 'https://external.test/fr/about/', '//external.test/fr/about/', '/uncaptured/', 'https://example.test/uncaptured/', '/fr/about/?unknown=1', 'mailto:hello@example.test' ];
@@ -211,10 +201,10 @@ describe( 'exportWebsiteCapture', () => {
 		const select = `<select>${ [ ...destinations, ...unchanged ].map( value => `<option value="${ value }">Page</option>` ).join( '' ) }</select>`;
 		const entries = Object.fromEntries( urls.map( ( url, index ) => {
 			const html = `html/page-${ index }.html`;
-			writeFileSync( join( outputDir, html ), `${ navigation }${ select }<main id="team"><h1>Page ${ index }</h1></main>` );
+			capture.file( html, `${ navigation }${ select }<main id="team"><h1>Page ${ index }</h1></main>` );
 			return [ url, { html } ];
 		} ) );
-		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries } ) );
+		capture.manifest( { version: 1, entries } );
 		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( { outputDir, sourceUrl: urls[ 0 ], platform: 'generic', summary: {}, failures: [] } ), 'utf8' ) );
 		for ( const route of receipt.routes ) {
 			const $ = cheerio.load( readFileSync( join( outputDir, route.path ), 'utf8' ) );
@@ -225,32 +215,25 @@ describe( 'exportWebsiteCapture', () => {
 			expect( values.slice( destinations.length ) ).toEqual( unchanged );
 		}
 	} );
-
 	it( 'names the capture-stage cause when the homepage has no manifest entry', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-home-deadline-' ) );
-		dirs.push( outputDir );
-		for ( const directory of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
-		writeFileSync( join( outputDir, 'html/contact.html' ), '<h1>Contact</h1>' );
-		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: { 'https://example.com/contact/': { slug: 'contact', html: 'html/contact.html' } } } ) );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/contact/", '<h1>Contact</h1>', { entry: { html: 'html/contact.html',  slug: 'contact' } } );
 		const reason = 'route capture deadline 600000ms: abandoned during the "galleries" phase in the mobile profile';
-		expect( () => exportWebsiteCapture( {
-			outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [],
-			discoveryDiagnostics: [ { code: 'route_capture_timeout', url: 'https://example.com/', reason } ],
-		} ) ).toThrow( `Source homepage https://example.com/ was not captured: ${ reason }` );
+		expect( () => exportWebsiteCapture( {  outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [],  discoveryDiagnostics: [ { code: 'route_capture_timeout', url: 'https://example.com/', reason } ],  } ) ).toThrow( `Source homepage https://example.com/ was not captured: ${ reason }` );
 	} );
 
 	it( 'exports query collections with their own content and correctly targeted portable links', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-query-collections-' ) );
-		dirs.push( outputDir );
-		for ( const directory of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const urls = [ 'https://example.test/', 'https://example.test/catalog/', 'https://example.test/catalog/?tag=red', 'https://example.test/catalog/?tag=blue%26green' ];
 		const nav = '<nav><a id="all" href="/catalog/">All</a><a id="red" href="/catalog/?tag=red#items">Red</a><a id="blue" href="https://example.test/catalog/?tag=blue%26green#items">Blue</a><a id="uncaptured" href="/catalog/?tag=unknown">Unknown</a></nav>';
 		const entries = Object.fromEntries( urls.map( ( url, index ) => {
 			const html = `html/page-${ index }.html`;
-			writeFileSync( join( outputDir, html ), `${ nav }<main id="items"><h1>Collection ${ index }</h1></main>` );
+			capture.file( html, `${ nav }<main id="items"><h1>Collection ${ index }</h1></main>` );
 			return [ url, { html } ];
 		} ) );
-		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries } ) );
+		capture.manifest( { version: 1, entries } );
 		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( { outputDir, sourceUrl: urls[ 0 ], platform: 'generic', summary: {}, failures: [] } ), 'utf8' ) );
 		const paths = new Map<string, string>( receipt.routes.map( ( route: { url: string; path: string } ) => [ route.url, route.path ] ) );
 		expect( new Set( paths.values() ).size ).toBe( 4 );
@@ -274,13 +257,11 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'reports captured first-party canvas motion whose executable script is intentionally removed', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-source-motion-' ) );
-		dirs.push( outputDir );
-		for ( const directory of [ 'html', 'screenshots', 'resources' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
-		writeFileSync( join( outputDir, 'html/homepage.html' ), '<html><body><canvas id="stage"></canvas><p id="status">Waiting</p><script src="/motion.js"></script></body></html>' );
-		writeFileSync( join( outputDir, 'resources/motion.js' ), 'const canvas = document.getElementById("stage"); const ctx = canvas.getContext("2d"); function draw(){requestAnimationFrame(draw)}; addEventListener("mousemove",draw); document.getElementById("status").addEventListener("click",()=>setTimeout(()=>{document.getElementById("status").textContent="Ready"},10)); draw();' );
-		writeFileSync( join( outputDir, 'resources/manifest.json' ), JSON.stringify( { version: 1, failures: [], resources: { 'https://example.test/motion.js': { path: 'resources/motion.js', contentType: 'application/javascript' } } } ) );
-		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: { 'https://example.test/': { html: 'html/homepage.html' } } } ) );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots', 'resources' ] } );
+		const outputDir = capture.build();
+		capture.file( 'resources/motion.js', 'const canvas = document.getElementById("stage"); const ctx = canvas.getContext("2d"); function draw(){requestAnimationFrame(draw)}; addEventListener("mousemove",draw); document.getElementById("status").addEventListener("click",()=>setTimeout(()=>{document.getElementById("status").textContent="Ready"},10)); draw();' );
+		capture.json( 'resources/manifest.json', { version: 1, failures: [], resources: { 'https://example.test/motion.js': { path: 'resources/motion.js', contentType: 'application/javascript' } } } );
+		capture.page( "https://example.test/", '<html><body><canvas id="stage"></canvas><p id="status">Waiting</p><script src="/motion.js"></script></body></html>' , { entry: { html: 'html/homepage.html' } } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.test/', platform: 'generic', summary: {}, failures: [] } );
 		const receipt = JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) );
 		const report = JSON.parse( readFileSync( join( outputDir, 'source-interactivity.json' ), 'utf8' ) );
@@ -289,20 +270,17 @@ describe( 'exportWebsiteCapture', () => {
 		expect( report.pages[ 0 ].scripts[ 0 ].sha256 ).toMatch( /^[a-f0-9]{64}$/ );
 		expect( readFileSync( join( outputDir, 'website/index.html' ), 'utf8' ) ).not.toContain( '<script src="/motion.js"' );
 	} );
-
 	it( 'declares exactly the published importer-facing sidecars as receipt reports', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-receipt-reports-' ) );
-		dirs.push( outputDir );
-		for ( const directory of [ 'html', 'screenshots', 'resources' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
-		writeFileSync( join( outputDir, 'html/homepage.html' ), '<html><body><canvas id="stage"></canvas><script src="/motion.js"></script></body></html>' );
-		writeFileSync( join( outputDir, 'resources/motion.js' ), 'const ctx = document.getElementById("stage").getContext("2d"); function draw(){requestAnimationFrame(draw)}; addEventListener("mousemove",draw); draw();' );
-		writeFileSync( join( outputDir, 'resources/manifest.json' ), JSON.stringify( { version: 1, failures: [], resources: { 'https://example.test/motion.js': { path: 'resources/motion.js', contentType: 'application/javascript' } } } ) );
-		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: { 'https://example.test/': { html: 'html/homepage.html' } } } ) );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots', 'resources' ] } );
+		const outputDir = capture.build();
+		capture.file( 'resources/motion.js', 'const ctx = document.getElementById("stage").getContext("2d"); function draw(){requestAnimationFrame(draw)}; addEventListener("mousemove",draw); draw();' );
+		capture.json( 'resources/manifest.json', { version: 1, failures: [], resources: { 'https://example.test/motion.js': { path: 'resources/motion.js', contentType: 'application/javascript' } } } );
+		capture.page( "https://example.test/", '<html><body><canvas id="stage"></canvas><script src="/motion.js"></script></body></html>' , { entry: { html: 'html/homepage.html' } } );
 		// Capture-time site analysis: two of the five aggregator outputs exist.
-		writeFileSync( join( outputDir, 'breakpoints.json' ), JSON.stringify( { minWidth: [], maxWidth: [] } ) );
-		writeFileSync( join( outputDir, 'palette.json' ), JSON.stringify( { version: 1, colors: [] } ) );
+		capture.json( 'breakpoints.json', { minWidth: [], maxWidth: [] } );
+		capture.json( 'palette.json', { version: 1, colors: [] } );
 		// A capture-root file that is not an importer report.
-		writeFileSync( join( outputDir, 'template-groups.json' ), '{}' );
+		capture.file( 'template-groups.json', '{}' );
 		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.test/', platform: 'generic', summary: {}, failures: [] } ), 'utf8' ) );
 		const candidates = [
 			...EXPORT_PUBLICATION_OWNED.filter( item => item.kind === 'file' ).map( item => item.path as string ),
@@ -333,11 +311,10 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'exports structurally shared header IDs without rewriting independent page content', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-header-identity-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
-		for ( const [ slug, id ] of [ [ 'homepage', '111' ], [ 'about', '222' ] ] ) writeFileSync( join( outputDir, 'html', `${ slug }.html` ), `<html><body><header><div id="yui_3_17_2_1_${ id }_3"><div id="yui_3_17_2_1_${ id }_4">Brand</div></div><nav><a href="/">Home</a></nav></header><main><h1>${ slug }</h1></main></body></html>` );
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries: { 'https://example.test/': { html: 'html/homepage.html' }, 'https://example.test/about': { html: 'html/about.html' } } } ) );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		for ( const [ slug, id ] of [ [ 'homepage', '111' ], [ 'about', '222' ] ] ) capture.file( join( 'html', `${ slug }.html` ), `<html><body><header><div id="yui_3_17_2_1_${ id }_3"><div id="yui_3_17_2_1_${ id }_4">Brand</div></div><nav><a href="/">Home</a></nav></header><main><h1>${ slug }</h1></main></body></html>` );
+		capture.manifest( { version: 1, entries: { 'https://example.test/': { html: 'html/homepage.html' }, 'https://example.test/about': { html: 'html/about.html' } } } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.test/', platform: 'generic', summary: {}, failures: [] } );
 		const first = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
 		const second = cheerio.load( readFileSync( join( outputDir, 'website', 'about', 'index.html' ), 'utf8' ) );
@@ -346,36 +323,14 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'preserves the 360 Chiropractic BlogPosting as standard document JSON-LD', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-publication-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync( join( outputDir, 'html', 'homepage.html' ), '<main><article>Ordinary article page</article></main>' );
-		writeFileSync(
-			join( outputDir, 'html', 'publication.html' ),
-			readFileSync( fileURLToPath( new URL( '../../test/fixtures/360chiro-publication-metadata.html', import.meta.url ) ), 'utf8' ) +
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'html', 'homepage.html' ), '<main><article>Ordinary article page</article></main>' );
+		capture.file( join( 'html', 'publication.html' ), readFileSync( fileURLToPath( new URL( '../../test/fixtures/360chiro-publication-metadata.html', import.meta.url ) ), 'utf8' ) +
 				// The fixture is metadata-only; a real route also has article content.
-				'<main><article>Can chiropractic help with back pain?</article></main>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://www.360chiro.co.uk/': { slug: 'homepage', html: 'html/homepage.html' },
-					'https://www.360chiro.co.uk/post/can-chiropractic-help-with-back-pain-360-chiro-clinic-sheffield': { slug: 'publication', html: 'html/publication.html' },
-				},
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://www.360chiro.co.uk/',
-			platform: 'generic',
-			summary: {},
-			failures: [],
-		} );
-
+				'<main><article>Can chiropractic help with back pain?</article></main>' );
+		capture.manifest( {  version: 1,  entries: {  'https://www.360chiro.co.uk/': { slug: 'homepage', html: 'html/homepage.html' },  'https://www.360chiro.co.uk/post/can-chiropractic-help-with-back-pain-360-chiro-clinic-sheffield': { slug: 'publication', html: 'html/publication.html' },  },  } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://www.360chiro.co.uk/',  platform: 'generic',  summary: {},  failures: [],  } );
 		const $ = cheerio.load(
 			readFileSync(
 				join( outputDir, 'website', 'post', 'can-chiropractic-help-with-back-pain-360-chiro-clinic-sheffield', 'index.html' ),
@@ -392,21 +347,10 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'preserves arbitrary Article JSON-LD without enabling source scripts', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-json-ld-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<script>globalThis.executed = true</script><script type="application/ld+json">"source-only-primitive"</script><script type="application/ld+json; charset=utf-8">{"@context":"https://schema.org","@type":"Article","datePublished":"2025-01-02T03:04:05Z","description":"\\u003C/script>\\u003Cscript>globalThis.executed = true\\u003C/script>"}</script><script type="application/ld+json">{"@context":"https://schema.org","@type":"WebPage","mainEntity":{"@type":"Article","datePublished":"2024-05-06T07:08:09Z"}}</script><main>Article</main>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } )
-		);
-
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/", '<script>globalThis.executed = true</script><script type="application/ld+json">"source-only-primitive"</script><script type="application/ld+json; charset=utf-8">{"@context":"https://schema.org","@type":"Article","datePublished":"2025-01-02T03:04:05Z","description":"\\u003C/script>\\u003Cscript>globalThis.executed = true\\u003C/script>"}</script><script type="application/ld+json">{"@context":"https://schema.org","@type":"WebPage","mainEntity":{"@type":"Article","datePublished":"2024-05-06T07:08:09Z"}}</script><main>Article</main>' , { entry: { html: 'html/homepage.html' } } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
-
 		const page = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		expect( page ).toContain( 'application/ld+json' );
 		const $ = cheerio.load( page );
@@ -424,33 +368,23 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'bounds inert JSON-LD before parsing and preserves only accepted objects', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-json-ld-bounds-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const emptyDocument = JSON.stringify( { description: '' } );
 		const atScriptLimit = JSON.stringify( {
 			description: 'x'.repeat( 64 * 1024 - Buffer.byteLength( emptyDocument ) ),
 		} );
 		const oversized = JSON.stringify( { oversized: 'x'.repeat( 64 * 1024 ) } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			[
+		capture.file( join( 'html', 'homepage.html' ), [
 				`<script type="application/ld+json">${ oversized }</script>`,
 				...Array.from(
 					{ length: 4 },
 					() => `<script type="application/ld+json">${ atScriptLimit }</script>`
 				),
 				'<script type="application/ld+json">{"overTotal":true}</script>',
-			].join( '' )
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } )
-		);
-
+			].join( '' ) );
+		capture.manifest( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
-
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const jsonLd = cheerio.load( html )( 'script[type="application/ld+json"]' );
 		expect( jsonLd ).toHaveLength( 4 );
@@ -462,46 +396,25 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'retains no more than sixteen inert JSON-LD scripts', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-json-ld-count-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			Array.from(
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'html', 'homepage.html' ), Array.from(
 				{ length: 17 },
 				( _, index ) => `<script type="application/ld+json">{"index":${ index }}</script>`
-			).join( '' )
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } )
-		);
-
+			).join( '' ) );
+		capture.manifest( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
-
 		const jsonLd = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) )(
 			'script[type="application/ld+json"]'
 		);
 		expect( jsonLd ).toHaveLength( 16 );
 		expect( JSON.parse( jsonLd.last().text() ) ).toEqual( { index: 15 } );
 	} );
+
 	it( 'writes responsive section evidence as a neutral sidecar', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-semantic-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<main><h1>Tianna Wolfson</h1><img src="portrait.jpg"></main>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
-			} )
-		);
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/", '<main><h1>Tianna Wolfson</h1><img src="portrait.jpg"></main>', { entry: { html: 'html/homepage.html',  slug: 'homepage' } } );
 		const spec = {
 			selector: 'main > section',
 			headings: [ 'Tianna Wolfson' ],
@@ -513,15 +426,7 @@ describe( 'exportWebsiteCapture', () => {
 		const specs = Array.from( { length: 5 }, () => spec );
 		SectionSpecsStore.load( outputDir ).set( 'https://example.com/', specs, [] );
 		SectionSpecsStore.loadMobile( outputDir ).set( 'https://example.com/', specs, [] );
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'generic',
-			summary: {},
-			failures: [],
-		} );
-
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'generic',  summary: {},  failures: [],  } );
 		const index = JSON.parse( readFileSync( join( outputDir, 'semantic-evidence.index.json' ), 'utf8' ) );
 		const evidence = JSON.parse( readFileSync( join( outputDir, index.shards[ 0 ].path ), 'utf8' ) );
 		expect( index ).toMatchObject( { schema: INDEXED_SEMANTIC_EVIDENCE_SCHEMA, page_count: 1 } );
@@ -542,43 +447,18 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'retains the HTML-only fallback when section evidence is invalid', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-invalid-semantic-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<main><h1>Captured fallback</h1></main>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
-			} )
-		);
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/", '<main><h1>Captured fallback</h1></main>', { entry: { html: 'html/homepage.html',  slug: 'homepage' } } );
 		SectionSpecsStore.load( outputDir ).set( 'https://example.com/', [ {} as never ], [] );
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'generic',
-			summary: {},
-			failures: [],
-		} );
-
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'generic',  summary: {},  failures: [],  } );
 		expect( existsSync( join( outputDir, 'semantic-evidence.index.json' ) ) ).toBe( false );
 	} );
 
 	it( 'measures UTF-8 semantic evidence shards at the exact file limit', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-semantic-byte-limit-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
-		writeFileSync( join( outputDir, 'html', 'homepage.html' ), '<main>Home</main>' );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } )
-		);
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/", '<main>Home</main>' , { entry: { html: 'html/homepage.html' } } );
 		const maxFileBytes = 10 * 1024 * 1024;
 		const page = {
 			path: 'website/index.html',
@@ -594,9 +474,7 @@ describe( 'exportWebsiteCapture', () => {
 			page.viewports.desktop as never,
 			[]
 		);
-
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
-
 		const index = JSON.parse( readFileSync( join( outputDir, 'semantic-evidence.index.json' ), 'utf8' ) );
 		const shard = readFileSync( join( outputDir, index.shards[ 0 ].path ), 'utf8' );
 		expect( Buffer.byteLength( shard ) ).toBe( maxFileBytes );
@@ -604,14 +482,8 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'exports hash-bound geometry proof without runtime capture markers', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-geometry-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'layout-geometry' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<html><body><main><div data-blocks-engine-capture-geometry-id="wrapper-0"><section data-blocks-engine-capture-geometry-id="target-0">Copy</section></div></main></body></html>'
-		);
+		const capture = exportFixture( { directories: [ 'html', 'layout-geometry' ] } );
+		const outputDir = capture.build();
 		const observation = ( viewport: number ) => ( {
 			wrapperIdentity: 'wrapper-0',
 			targetIdentity: 'target-0',
@@ -627,33 +499,13 @@ describe( 'exportWebsiteCapture', () => {
 			[ 'desktop', 1440 ],
 			[ 'mobile', 390 ],
 		] as const )
-			writeFileSync(
-				join( outputDir, 'layout-geometry', `homepage.${ viewport }.json` ),
-				JSON.stringify( {
-					schema: 'blocks-engine-capture/layout-geometry-capture/v1',
-					observations: [ observation( width ) ],
-					omissions: {},
-				} )
-			);
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'generic',
-			summary: {},
-			failures: [],
-		} );
+			capture.json( join( 'layout-geometry', `homepage.${ viewport }.json` ), {  schema: 'blocks-engine-capture/layout-geometry-capture/v1',  observations: [ observation( width ) ],  omissions: {},  } );
+		capture.directory( 'screenshots' );
+		capture.page( "https://example.com/", '<html><body><main><div data-blocks-engine-capture-geometry-id="wrapper-0"><section data-blocks-engine-capture-geometry-id="target-0">Copy</section></div></main></body></html>', { entry: { html: 'html/homepage.html',  slug: 'homepage' } } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'generic',  summary: {},  failures: [],  } );
 		const proof = JSON.parse( readFileSync( join( outputDir, 'layout-geometry-proof.json' ), 'utf8' ) );
 		expect( proof ).toMatchObject( {
-			schema: 'blocks-engine-capture/layout-geometry-proof/v1',
+			schema: 'blocks-engine/layout-geometry-proof/v1',
 			nodes: [
 				{ selector: 'main:nth-of-type(1) > div:nth-of-type(1)' },
 				{ selector: 'main:nth-of-type(1) > div:nth-of-type(1) > section:nth-of-type(1)' },
@@ -668,56 +520,15 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'points a captured phone menu panel at the phone document section targets', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-responsive-panel-anchor-export-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<html><body><nav><a href="https://example.com/#services" data-blocks-engine-capture-anchor-fragment="services">Services</a></nav><span id="services" data-blocks-engine-capture-anchor-target="services" data-blocks-engine-capture-anchor-source-id="services-section"></span><section id="services-section">Desktop services</section></body></html>'
-		);
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
 		// The phone header only has a menu button; its links live in the dialog
 		// the capture recorded, which carries source-origin hrefs. Its banner text
 		// has no stable identity, so the phone document keeps its own copy.
-		writeFileSync(
-			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><body><header><p>Phone-only banner</p><button id="menu" aria-haspopup="dialog" aria-label="Menu">Menu</button></header><section id="services-section">Phone services</section></body></html>'
-		);
+		capture.file( join( 'html-mobile', 'homepage.html' ), '<html><body><header><p>Phone-only banner</p><button id="menu" aria-haspopup="dialog" aria-label="Menu">Menu</button></header><section id="services-section">Phone services</section></body></html>' );
 		const menuHtml = '<div role="dialog" aria-label="Site"><nav><a href="https://example.com/#services">Services</a><a href="https://example.com/#unknown">Unknown</a></nav></div>';
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/': {
-						slug: 'homepage',
-						html: 'html/homepage.html',
-						interactions: {
-							schema: 'blocks-engine-capture/interaction-states/v2',
-							sourceUrl: 'https://example.com/',
-							viewport: { width: 390, height: 844 },
-							capturedAt: '2026-09-26T00:00:00.000Z',
-							states: [
-								{
-									status: 'captured',
-									trigger: { selector: '#menu', tag: 'button', id: 'menu', ariaHaspopup: 'dialog', label: 'Menu', dataBindings: {} },
-									dialog: { selector: '[role="dialog"]', tag: 'div', role: 'dialog', ariaModal: true, html: menuHtml, htmlBytes: menuHtml.length, htmlTruncated: false },
-								},
-							],
-						},
-					},
-				},
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'wix',
-			summary: {},
-			failures: [],
-		} );
-
+		capture.page( "https://example.com/", '<html><body><nav><a href="https://example.com/#services" data-blocks-engine-capture-anchor-fragment="services">Services</a></nav><span id="services" data-blocks-engine-capture-anchor-target="services" data-blocks-engine-capture-anchor-source-id="services-section"></span><section id="services-section">Desktop services</section></body></html>', { entry: { html: 'html/homepage.html',  slug: 'homepage', interactions: {  schema: 'blocks-engine-capture/interaction-states/v2',  sourceUrl: 'https://example.com/',  viewport: { width: 390, height: 844 },  capturedAt: '2026-09-26T00:00:00.000Z',  states: [  {  status: 'captured',  trigger: { selector: '#menu', tag: 'button', id: 'menu', ariaHaspopup: 'dialog', label: 'Menu', dataBindings: {} },  dialog: { selector: '[role="dialog"]', tag: 'div', role: 'dialog', ariaModal: true, html: menuHtml, htmlBytes: menuHtml.length, htmlTruncated: false },  },  ],  } } } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'wix',  summary: {},  failures: [],  } );
 		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
 		const panelLinks = $( '.data-blocks-engine-capture-mobile-document [data-blocks-engine-capture-dialog-panel] a' );
 		expect( panelLinks ).toHaveLength( 2 );
@@ -729,29 +540,26 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'resolves cross-page legacy anchor aliases to the visible responsive target', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-responsive-named-alias-' ) ); dirs.push( outputDir );
-		for ( const path of [ 'html', 'html-mobile', 'screenshots', 'resources' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture();
+		const outputDir = capture.build();
+		for ( const path of [ 'html', 'html-mobile', 'screenshots', 'resources' ] ) capture.directory( path );
 		const css = '<style>body{margin:0}body:not(.phone){--desktop:1}</style><link rel="stylesheet" href="https://example.com/aliases.css">';
-		writeFileSync( join( outputDir, 'resources', 'aliases.css' ), '#comments{margin-top:1100px;height:500px;color:rgb(11,22,33)}a[name="comments"]{display:block;height:7px}' );
-		writeFileSync( join( outputDir, 'resources', 'manifest.json' ), JSON.stringify( { version: 1, failures: [], resources: {
-			'https://example.com/aliases.css': { path: 'resources/aliases.css', contentType: 'text/css' },
-		} } ) );
+		capture.file( join( 'resources', 'aliases.css' ), '#comments{margin-top:1100px;height:500px;color:rgb(11,22,33)}a[name="comments"]{display:block;height:7px}' );
+		capture.json( join( 'resources', 'manifest.json' ), { version: 1, failures: [], resources: {  'https://example.com/aliases.css': { path: 'resources/aliases.css', contentType: 'text/css' },  } } );
 		const article = '<main><h1>Article</h1><section id="comments"><a name="comments"></a><h2>Comments</h2></section><footer style="height:900px">Footer</footer></main>';
-		writeFileSync( join( outputDir, 'html', 'homepage.html' ), '<html><body><a href="/article#comments">Comments</a></body></html>' );
-		writeFileSync( join( outputDir, 'html', 'article.html' ), `<html><head>${ css }</head><body>${ article }</body></html>` );
-		writeFileSync( join( outputDir, 'html-mobile', 'article.html' ), `<html><head>${ css }</head><body class="phone"><p>Mobile introduction</p>${ article }</body></html>` );
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries: {
-			'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' },
-			'https://example.com/article': { slug: 'article', html: 'html/article.html' },
-		} } ) );
+		capture.file( join( 'html', 'homepage.html' ), '<html><body><a href="/article#comments">Comments</a></body></html>' );
+		capture.file( join( 'html', 'article.html' ), `<html><head>${ css }</head><body>${ article }</body></html>` );
+		capture.file( join( 'html-mobile', 'article.html' ), `<html><head>${ css }</head><body class="phone"><p>Mobile introduction</p>${ article }</body></html>` );
+		capture.manifest( { version: 1, entries: {  'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' },  'https://example.com/article': { slug: 'article', html: 'html/article.html' },  } } );
 		const receiptPath = exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'default', summary: {}, failures: [] } );
 		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
 		const routeFiles = new Map<string,string>( receipt.routes.map( ( route: { url: string; path: string } ) => [ new URL( route.url ).pathname, route.path.replace( /^website\//, '' ) ] ) );
 		expect( checkSelfConsistency( join( outputDir, 'website' ), routeFiles ).findings ).toEqual( [] );
-		const browser = await chromium.launch(); const server = await startStaticServer( join( outputDir, 'website' ) );
+		const browser = await browserContext(); const server = await startStaticServer( join( outputDir, 'website' ) );
 		try {
 			for ( const width of [ 390, 768, 1440 ] ) {
-				const page = await browser.newPage( { viewport: { width, height: 900 } } );
+				const page = await browser.newPage();
+				await page.setViewportSize( { width, height: 900 } );
 				await page.goto( server.url ); await page.getByRole( 'link', { name: 'Comments' } ).click();
 				const expected = width < 768 ? '#comments--data-blocks-engine-capture-mobile' : '#comments';
 				await page.waitForFunction( target => Math.abs( document.querySelector( target )!.getBoundingClientRect().top ) < 2, expected );
@@ -765,13 +573,12 @@ describe( 'exportWebsiteCapture', () => {
 	}, 30_000 );
 
 	it( 'keeps ordinary responsive fragment targets unique with author CSS and ARIA associations', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-authored-responsive-anchor-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const css = '<style>body{margin:0}#main{padding-top:700px;color:rgb(11,22,33)}#main p{height:600px}</style>';
-		writeFileSync( join( outputDir, 'html', 'homepage.html' ), `<html><head>${ css }</head><body><a href="#main" aria-controls="main">Skip</a><main id="main"><p>Desktop article</p></main></body></html>` );
-		writeFileSync( join( outputDir, 'html-mobile', 'homepage.html' ), `<html><head>${ css }</head><body><a href="#main" aria-controls="main">Skip</a><main id="main"><section><p>Phone article</p></section></main></body></html>` );
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } } } ) );
+		capture.file( join( 'html', 'homepage.html' ), `<html><head>${ css }</head><body><a href="#main" aria-controls="main">Skip</a><main id="main"><p>Desktop article</p></main></body></html>` );
+		capture.file( join( 'html-mobile', 'homepage.html' ), `<html><head>${ css }</head><body><a href="#main" aria-controls="main">Skip</a><main id="main"><section><p>Phone article</p></section></main></body></html>` );
+		capture.manifest( { version: 1, entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } } } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'default', summary: {}, failures: [] } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
@@ -783,11 +590,12 @@ describe( 'exportWebsiteCapture', () => {
 		expect( $( 'main > p' ).hasClass( 'data-blocks-engine-capture-desktop-only' ) ).toBe( true );
 		expect( $( 'main > section' ).hasClass( 'data-blocks-engine-capture-mobile-only' ) ).toBe( true );
 		expect( checkSelfConsistency( join( outputDir, 'website' ), new Map( [ [ '/', 'index.html' ] ] ) ).findings ).toEqual( [] );
-		const browser = await chromium.launch();
+		const browser = await browserContext();
 		const server = await startStaticServer( join( outputDir, 'website' ) );
 		try {
 			for ( const width of [ 390, 768, 1440 ] ) {
-				const page = await browser.newPage( { viewport: { width, height: 900 } } );
+				const page = await browser.newPage();
+				await page.setViewportSize( { width, height: 900 } );
 				await page.goto( server.url );
 				await page.getByRole( 'link', { name: 'Skip' } ).click();
 				const target = '#main';
@@ -803,34 +611,11 @@ describe( 'exportWebsiteCapture', () => {
 	}, 30_000 );
 
 	it( 'keeps responsive runtime anchor targets unique and diagnoses unresolved fragments', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-responsive-anchor-export-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<html><body><a href="https://example.com/#features" data-blocks-engine-capture-anchor-fragment="features">Features</a><a href="https://example.com/#missing" data-blocks-engine-capture-anchor-fragment="missing" data-blocks-engine-capture-anchor-unresolved="runtime scroll did not resolve to a section boundary">Missing</a><span id="features" data-blocks-engine-capture-anchor-target="features" data-blocks-engine-capture-anchor-source-id="feature-section"></span><section id="feature-section">Desktop features</section></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><body><a href="https://example.com/#features" data-blocks-engine-capture-anchor-fragment="features">Features</a><a href="https://example.com/#testimonial" data-blocks-engine-capture-anchor-fragment="testimonial">Testimonial</a><article id="testimonial">Mobile testimonial</article><section id="feature-section">Mobile features</section></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'wix',
-			summary: {},
-			failures: [],
-		} );
-
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'html-mobile', 'homepage.html' ), '<html><body><a href="https://example.com/#features" data-blocks-engine-capture-anchor-fragment="features">Features</a><a href="https://example.com/#testimonial" data-blocks-engine-capture-anchor-fragment="testimonial">Testimonial</a><article id="testimonial">Mobile testimonial</article><section id="feature-section">Mobile features</section></body></html>' );
+		capture.page( "https://example.com/", '<html><body><a href="https://example.com/#features" data-blocks-engine-capture-anchor-fragment="features">Features</a><a href="https://example.com/#missing" data-blocks-engine-capture-anchor-fragment="missing" data-blocks-engine-capture-anchor-unresolved="runtime scroll did not resolve to a section boundary">Missing</a><span id="features" data-blocks-engine-capture-anchor-target="features" data-blocks-engine-capture-anchor-source-id="feature-section"></span><section id="feature-section">Desktop features</section></body></html>', { entry: { html: 'html/homepage.html',  slug: 'homepage' } } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'wix',  summary: {},  failures: [],  } );
 		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
 		expect( $( '#features' ) ).toHaveLength( 1 );
 		expect( $( '#features--data-blocks-engine-capture-mobile' ) ).toHaveLength( 1 );
@@ -864,27 +649,10 @@ describe( 'exportWebsiteCapture', () => {
 		// looks like when the deferred content never rendered before the
 		// snapshot. The receipt must surface it instead of reporting a clean
 		// capture.
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-bare-anchor-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<html><body><nav><a href="#releases">Releases</a><a href="#listen">Listen</a></nav><section id="listen">Listen</section></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'generic',
-			summary: {},
-			failures: [],
-		} );
-
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/", '<html><body><nav><a href="#releases">Releases</a><a href="#listen">Listen</a></nav><section id="listen">Listen</section></body></html>' , { entry: { html: 'html/homepage.html' } } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'generic',  summary: {},  failures: [],  } );
 		expect(
 			JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) ).unresolvedAnchors
 		).toEqual( [
@@ -898,37 +666,11 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'does not flag a resolvable same-page anchor or a captured cross-route fragment link', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-ok-anchor-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<html><body><a href="#listen">Listen</a><a href="/about/#team">Team</a><section id="listen">Listen</section></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'html', 'about.html' ),
-			'<html><body><section id="team">Team</section></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/': { html: 'html/homepage.html' },
-					'https://example.com/about/': { html: 'html/about.html' },
-				},
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'generic',
-			summary: {},
-			failures: [],
-		} );
-
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/", '<html><body><a href="#listen">Listen</a><a href="/about/#team">Team</a><section id="listen">Listen</section></body></html>' , { entry: { html: 'html/homepage.html' } } );
+		capture.page( "https://example.com/about/", '<html><body><section id="team">Team</section></body></html>' , { entry: { html: 'html/about.html' } } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'generic',  summary: {},  failures: [],  } );
 		expect(
 			JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) ).unresolvedAnchors
 		).toEqual( [] );
@@ -938,46 +680,20 @@ describe( 'exportWebsiteCapture', () => {
 		// Regression for the Wix portfolio menu: from a project page the
 		// "Expertise" link carried its target only in `data-anchor` and exported
 		// as a bare `/index.html`, landing readers at the top of the home page.
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-cross-page-anchor-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'home.html' ),
-			'<html><body><main>Home</main><span id="dataItem-home-section" data-blocks-engine-capture-anchor-target="dataItem-home-section"></span></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'html', 'project.html' ),
-			'<html><body><nav>' +
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'html', 'home.html' ), '<html><body><main>Home</main><span id="dataItem-home-section" data-blocks-engine-capture-anchor-target="dataItem-home-section"></span></body></html>' );
+		capture.file( join( 'html', 'project.html' ), '<html><body><nav>' +
 				'<a href="https://example.com/#dataItem-home-section" data-blocks-engine-capture-anchor-fragment="dataItem-home-section">Expertise</a>' +
 				'<a href="https://example.com/#dataItem-absent" data-blocks-engine-capture-anchor-fragment="dataItem-absent">Missing</a>' +
-				'</nav></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/': { html: 'html/home.html' },
-					'https://example.com/project': { html: 'html/project.html' },
-				},
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'wix',
-			summary: {},
-			failures: [],
-		} );
-
+				'</nav></body></html>' );
+		capture.manifest( {  version: 1,  entries: {  'https://example.com/': { html: 'html/home.html' },  'https://example.com/project': { html: 'html/project.html' },  },  } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'wix',  summary: {},  failures: [],  } );
 		const $ = cheerio.load(
 			readFileSync( join( outputDir, 'website', 'project', 'index.html' ), 'utf8' )
 		);
 		expect( $( 'nav a' ).eq( 0 ).attr( 'href' ) ).toBe( '/index.html#dataItem-home-section' );
 		expect( $( 'nav a' ).eq( 1 ).attr( 'href' ) ).toBe( '/index.html#dataItem-absent' );
-
 		// Cross-route marked links resolve against the TARGET document, so the
 		// per-route diagnostic stays out of the way and self-consistency rules:
 		// the section that exists passes, and the one the target page never had
@@ -998,27 +714,10 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'names same-origin anchors whose target route was never captured', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-uncaptured-route-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<html><body><nav><a href="/blog">Blog</a><a href="/contact">Contact</a></nav><main><a href="/hyundai-i30n">Post</a><a href="/using-hyper-key-skhd-app-switching-mac">Another</a></main></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } )
-		);
-
-		const receiptPath = exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'generic',
-			summary: { routesDiscovered: 1, routesCaptured: 1, routesFailed: 0 },
-			failures: [],
-		} );
-
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/", '<html><body><nav><a href="/blog">Blog</a><a href="/contact">Contact</a></nav><main><a href="/hyundai-i30n">Post</a><a href="/using-hyper-key-skhd-app-switching-mac">Another</a></main></body></html>' , { entry: { html: 'html/homepage.html' } } );
+		const receiptPath = exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'generic',  summary: { routesDiscovered: 1, routesCaptured: 1, routesFailed: 0 },  failures: [],  } );
 		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
 		expect( diagnostics.unresolvedAnchors ).toEqual( [
 			{
@@ -1047,34 +746,11 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'declares responsive editing counterparts from stable source component slots', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-responsive-counterparts-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<html><body><main><section id="hero"><h1>Desktop title</h1><a href="/quote">Quote</a></section><p>Unproven equal copy</p><div id="duplicate"><p>First</p></div><div id="duplicate"><p>Second</p></div></main></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><body><main><section id="hero"><div><h1>Mobile title</h1></div><div><a href="/quote">Quote mobile</a></div></section><div><p>Unproven equal copy</p></div><div id="duplicate"><p>First</p></div><div id="duplicate"><p>Second</p></div></main></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'generic',
-			summary: {},
-			failures: [],
-		} );
-
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'html-mobile', 'homepage.html' ), '<html><body><main><section id="hero"><div><h1>Mobile title</h1></div><div><a href="/quote">Quote mobile</a></div></section><div><p>Unproven equal copy</p></div><div id="duplicate"><p>First</p></div><div id="duplicate"><p>Second</p></div></main></body></html>' );
+		capture.page( "https://example.com/", '<html><body><main><section id="hero"><h1>Desktop title</h1><a href="/quote">Quote</a></section><p>Unproven equal copy</p><div id="duplicate"><p>First</p></div><div id="duplicate"><p>Second</p></div></main></body></html>' , { entry: { html: 'html/homepage.html' } } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'generic',  summary: {},  failures: [],  } );
 		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
 		for ( const selector of [ 'h1', 'a' ] ) {
 			const desktop = $( `.data-blocks-engine-capture-desktop-document ${ selector }` );
@@ -1096,54 +772,11 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'switches documents at the width the source stops adapting at, not a hardcoded one', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-detected-switch-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<html><head><style>.desktop{color:blue}</style></head><body><main>Desktop</main></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><head><style>.mobile{color:red}:root .device-mobile-responsive.responsive{display:revert!important}</style></head><body class="device-mobile-responsive responsive"><main>Mobile</main><nav>Menu</nav></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/': {
-						html: 'html/homepage.html',
-						// Learned during capture: this document stops shrinking at 980px.
-						fluid: {
-							applied: 12,
-							unmodelled: 3,
-							breakpoints: [ 1024 ],
-							canvasFloor: 980,
-							byKind: { floored: 12, breakpoint: 3 },
-						},
-						// A separate document's floor cannot select the desktop document.
-						fluidMobile: {
-							applied: 4,
-							unmodelled: 1,
-							breakpoints: [ 600 ],
-							canvasFloor: 402,
-							byKind: { floored: 4, breakpoint: 1 },
-						},
-					},
-				},
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
-
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'html-mobile', 'homepage.html' ), '<html><head><style>.mobile{color:red}:root .device-mobile-responsive.responsive{display:revert!important}</style></head><body class="device-mobile-responsive responsive"><main>Mobile</main><nav>Menu</nav></body></html>' );
+		capture.page( "https://example.com/", '<html><head><style>.desktop{color:blue}</style></head><body><main>Desktop</main></body></html>', { entry: { html: 'html/homepage.html',  fluid: {  applied: 12,  unmodelled: 3,  breakpoints: [ 1024 ],  canvasFloor: 980,  byKind: { floored: 12, breakpoint: 3 },  }, fluidMobile: {  applied: 4,  unmodelled: 1,  breakpoints: [ 600 ],  canvasFloor: 402,  byKind: { floored: 4, breakpoint: 1 },  } } } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		expect( html ).toContain( '@media(max-width:980px)' );
 		expect( html ).toContain( '<style media="(min-width:981px)">.desktop{color:blue}</style>' );
@@ -1155,7 +788,6 @@ describe( 'exportWebsiteCapture', () => {
 		expect( authoritativeSwitch ).toBeGreaterThan( sourceVisibilityOverride );
 		expect( html ).not.toContain( '767px' );
 		expect( html ).not.toContain( '768px' );
-
 		const profile = JSON.parse( readFileSync( join( outputDir, 'source-profile.json' ), 'utf8' ) );
 		expect( profile ).toMatchObject( {
 			schema: 'blocks-engine-capture/source-profile/v1',
@@ -1174,34 +806,11 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'falls back to the default switch width when nothing was detected', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-default-switch-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<html><head><style>.desktop{color:blue}</style></head><body><main>Desktop</main></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><head><style>.mobile{color:red}</style></head><body><main>Mobile</main><nav>Menu</nav></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
-
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'html-mobile', 'homepage.html' ), '<html><head><style>.mobile{color:red}</style></head><body><main>Mobile</main><nav>Menu</nav></body></html>' );
+		capture.page( "https://example.com/", '<html><head><style>.desktop{color:blue}</style></head><body><main>Desktop</main></body></html>' , { entry: { html: 'html/homepage.html' } } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		// 768px is a tablet width. Per-device sources serve tablets their desktop
 		// document, and it is the desktop document the fluid sweep observed at
@@ -1215,8 +824,8 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'binds viewport-scoped geometry identities to the exact marker-free responsive output', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-responsive-geometry-export-' ) );
-		dirs.push( outputDir );
+		const capture = exportFixture();
+		const outputDir = capture.build();
 		for ( const path of [
 			'html',
 			'html-mobile',
@@ -1224,15 +833,8 @@ describe( 'exportWebsiteCapture', () => {
 			'resources/cdn',
 			'screenshots',
 		] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<html><head><base href="https://evil.example/"><meta http-equiv="refresh" content="0;url=https://evil.example/"><link rel="stylesheet" href="https://cdn.example/site.css"><style>.desktop{display:block}</style></head><body class="responsive desktop-body" style="margin:3px;padding:4px"><main><div data-blocks-engine-capture-geometry-id="desktop-wrapper-0" onclick="discard()"><section data-blocks-engine-capture-geometry-id="desktop-target-0">Desktop<a href="javascript:discard()">Unsafe</a><form action="https://evil.example/"><button formaction="javascript:discard()">Send</button></form><iframe src="https://evil.example/"></iframe></section></div><script>discard()</script></main></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><head><style>.mobile{display:block}</style></head><body class="responsive mobile-body" style="margin:5px;padding:6px"><main><div data-blocks-engine-capture-geometry-id="mobile-wrapper-0"><section data-blocks-engine-capture-geometry-id="mobile-target-0">Mobile</section></div></main></body></html>'
-		);
+			capture.directory( path );
+		capture.file( join( 'html-mobile', 'homepage.html' ), '<html><head><style>.mobile{display:block}</style></head><body class="responsive mobile-body" style="margin:5px;padding:6px"><main><div data-blocks-engine-capture-geometry-id="mobile-wrapper-0"><section data-blocks-engine-capture-geometry-id="mobile-target-0">Mobile</section></div></main></body></html>' );
 		const observation = ( viewport: number, identity: string ) => ( {
 			wrapperIdentity: `${ identity }-wrapper-0`,
 			targetIdentity: `${ identity }-target-0`,
@@ -1244,51 +846,12 @@ describe( 'exportWebsiteCapture', () => {
 			facts: { display: 'block', position: 'static', visibility: 'visible', childCount: 1 },
 			invariants: { runtime: true, semantics: true },
 		} );
-		writeFileSync(
-			join( outputDir, 'layout-geometry', 'homepage.desktop.json' ),
-			JSON.stringify( {
-				schema: 'blocks-engine-capture/layout-geometry-capture/v1',
-				observations: [ observation( 1440, 'desktop' ) ],
-				omissions: {},
-			} )
-		);
-		writeFileSync(
-			join( outputDir, 'layout-geometry', 'homepage.mobile.json' ),
-			JSON.stringify( {
-				schema: 'blocks-engine-capture/layout-geometry-capture/v1',
-				observations: [ observation( 390, 'mobile' ) ],
-				omissions: {},
-			} )
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
-			} )
-		);
-		writeFileSync( join( outputDir, 'resources', 'cdn', 'site.css' ), '.desktop{display:block}' );
-		writeFileSync(
-			join( outputDir, 'resources', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				resources: {
-					'https://cdn.example/site.css': {
-						path: 'resources/cdn/site.css',
-						contentType: 'text/css',
-					},
-				},
-				failures: [],
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'generic',
-			summary: {},
-			failures: [],
-		} );
+		capture.json( join( 'layout-geometry', 'homepage.desktop.json' ), {  schema: 'blocks-engine-capture/layout-geometry-capture/v1',  observations: [ observation( 1440, 'desktop' ) ],  omissions: {},  } );
+		capture.json( join( 'layout-geometry', 'homepage.mobile.json' ), {  schema: 'blocks-engine-capture/layout-geometry-capture/v1',  observations: [ observation( 390, 'mobile' ) ],  omissions: {},  } );
+		capture.page( "https://example.com/", '<html><head><base href="https://evil.example/"><meta http-equiv="refresh" content="0;url=https://evil.example/"><link rel="stylesheet" href="https://cdn.example/site.css"><style>.desktop{display:block}</style></head><body class="responsive desktop-body" style="margin:3px;padding:4px"><main><div data-blocks-engine-capture-geometry-id="desktop-wrapper-0" onclick="discard()"><section data-blocks-engine-capture-geometry-id="desktop-target-0">Desktop<a href="javascript:discard()">Unsafe</a><form action="https://evil.example/"><button formaction="javascript:discard()">Send</button></form><iframe src="https://evil.example/"></iframe></section></div><script>discard()</script></main></body></html>', { entry: { html: 'html/homepage.html',  slug: 'homepage' } } );
+		capture.file( join( 'resources', 'cdn', 'site.css' ), '.desktop{display:block}' );
+		capture.json( join( 'resources', 'manifest.json' ), {  version: 1,  resources: {  'https://cdn.example/site.css': {  path: 'resources/cdn/site.css',  contentType: 'text/css',  },  },  failures: [],  } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'generic',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const proof = JSON.parse( readFileSync( join( outputDir, 'layout-geometry-proof.json' ), 'utf8' ) );
 		expect( html ).not.toContain( 'data-blocks-engine-capture-geometry-id' );
@@ -1326,119 +889,33 @@ describe( 'exportWebsiteCapture', () => {
 		);
 	} );
 
-	it( 'treats capture correspondence attributes as equivalence, not difference', () => {
-		const desktop =
-			'<html><body><main><div data-blocks-engine-capture-geometry-id="desktop-wrapper-0" class="page" style="width:940px"><h1>Same heading</h1><img src="/a.jpg" alt="a"></div></main></body></html>';
-		const mobile =
-			'<html><body><main><div data-blocks-engine-capture-geometry-id="mobile-wrapper-0" class="page mobile-page" style="width:100%"><h1>Same heading</h1><img src="/a.jpg" alt="a"></div></main></body></html>';
-		expect( documentsDiffer( desktop, mobile ) ).toBe( false );
-		expect(
-			documentsDiffer(
-				desktop,
-				mobile.replace( '<h1>Same heading</h1>', '<h1>Same heading</h1><p>Mobile extra</p>' )
-			)
-		).toBe( true );
-	} );
+	it.each( [
+		{ name: 'treats capture correspondence attributes as equivalence, not difference', desktop: '<html><body><main><div data-blocks-engine-capture-geometry-id="desktop-wrapper-0" class="page" style="width:940px"><h1>Same heading</h1><img src="/a.jpg" alt="a"></div></main></body></html>', mobile: '<html><body><main><div data-blocks-engine-capture-geometry-id="mobile-wrapper-0" class="page mobile-page" style="width:100%"><h1>Same heading</h1><img src="/a.jpg" alt="a"></div></main></body></html>', check: ( desktop: string, mobile: string ) => { expect( documentsDiffer( desktop, mobile ) ).toBe( false ); expect( documentsDiffer( desktop, mobile.replace( '<h1>Same heading</h1>', '<h1>Same heading</h1><p>Mobile extra</p>' ) ) ).toBe( true ); } },
+		{ name: 'treats changing text as equivalence, not a second document', desktop: '<html><body><main><h1>Opening</h1><div><span>17</span><span>HEURES</span><span>52</span><span>SEC</span></div></main></body></html>', mobile: '<html><body><main><h1>Opening</h1><div><span>17</span><span>HEURES</span><span>38</span><span>SEC</span></div></main></body></html>', check: ( desktop: string, mobile: string ) => { expect( documentsDiffer( desktop, mobile ) ).toBe( false ); expect( documentsDiffer( desktop, mobile.replace( 'Opening', 'Fermeture' ) ) ).toBe( false ); expect( documentsDiffer( desktop, mobile.replace( '</div></main>', '</div><aside>Menu</aside></main>' ) ) ).toBe( true ); } },
+		{ name: 'treats capture geometry ids and runtime UUIDs as equivalence, not a second document', desktop: '<html><body><main><div id="desktop-target-0"><h1>About</h1><section id="AE7E84B0-6F1E-4160-B12C-99F8F4749F09"><p>Hello</p></section></div></main></body></html>', mobile: '<html><body><main><div id="mobile-target-0"><h1>About</h1><section id="C0834C17-B49B-4A41-88EB-72DE5F404700"><p>Hello</p></section></div></main></body></html>', check: ( desktop: string, mobile: string ) => { expect( documentsDiffer( desktop, mobile ) ).toBe( false ); expect( documentsDiffer( desktop, mobile.replace( '</section>', '</section><aside id="mobile-menu">Menu</aside>' ) ) ).toBe( true ); } },
+		{ name: 'treats a viewport-injected YUI widget as equivalence, not a second document', desktop: '<html><body><div id="siteWrapper"><header><nav><a href="/">Home</a></nav></header><main><h1>About</h1><p>Hello</p></main></div></body></html>', mobile: '<html><body><div id="yui_3_17_2_1_1789567315719_163" class="yui3-widget sqs-mobile-info-bar"><div id="yui_3_17_2_1_1789567315719_165"><a href="tel:1">Call</a></div></div><div id="siteWrapper"><header><nav><a href="/">Home</a></nav></header><main><h1>About</h1><p>Hello</p></main></div></body></html>', check: ( desktop: string, mobile: string ) => { expect( documentsDiffer( desktop, mobile ) ).toBe( false ); expect( documentsDiffer( desktop, mobile.replace( '<p>Hello</p>', '<p>Hello</p><p>Mobile extra</p>' ) ) ).toBe( true ); } },
+		{ name: 'treats Squarespace block-yui map chrome as equivalence, not a second document', desktop: '<html><body><main><h1>About</h1><div id="block-yui_3_17_2_1_1755739610085_5613"><button type="button"></button><table><tr><td><kbd>←</kbd></td><td>Move left</td></tr></table></div></main></body></html>', mobile: '<html><body><main><h1>About</h1><div id="block-yui_3_17_2_1_1755739610085_5613"><button type="button"></button><span>To navigate the map with touch gestures double-tap and hold your finger on the map, then drag the map.</span><table><tr><td><kbd>←</kbd></td><td>Move left</td></tr></table></div></main></body></html>', check: ( desktop: string, mobile: string ) => { expect( documentsDiffer( desktop, mobile ) ).toBe( false ); expect( documentsDiffer( desktop, mobile.replace( '</main>', '<aside id="mobile-menu">Menu</aside></main>' ) ) ).toBe( true ); } },
+		{ name: 'treats generated form field names as equivalence, not a second document', desktop: '<html><body><main><h1>Contact</h1><form action="/form"><input id="message-field" name="message-yui_5a971da7-2728-4c20-80a1-6b77a38b830d-field" type="text"></form></main></body></html>', mobile: '<html><body><main><h1>Contact</h1><form action="/form"><input id="message-field" name="message-yui_69609980-c587-4cc8-9d6e-c7268aedab8d-field" type="text"></form></main></body></html>', check: ( desktop: string, mobile: string ) => { expect( documentsDiffer( desktop, mobile ) ).toBe( false ); expect( documentsDiffer( desktop, mobile.replace( 'type="text"', 'type="email"' ) ) ).toBe( true ); } },
+		{ name: 'treats viewport hydration attributes as equivalence, not a second document', desktop: '<html><body><div id="siteWrapper"><a href="/cart" tabindex="0" data-test="continue-to-cart" data-current-styles="{&quot;layout&quot;:&quot;desktop&quot;}">Cart</a><header data-controller="Header"><nav><a href="/">Home</a></nav></header><main><h1>About</h1></main></div></body></html>', mobile: '<html><body><div id="siteWrapper"><a href="/cart" data-test="continue-to-cart" data-current-styles="{&quot;layout&quot;:&quot;mobile&quot;}">Cart</a><header data-controller="Header"><nav><a href="/">Home</a></nav></header><main><h1>About</h1></main></div></body></html>', check: ( desktop: string, mobile: string ) => { expect( documentsDiffer( desktop, mobile ) ).toBe( false ); expect( documentsDiffer( desktop, mobile.replace( 'href="/"', 'href="/menu"' ) ) ).toBe( true ); } },
+		{ name: 'treats viewport-only iframe embeds as equivalence, not a second document', desktop: '<html><body><main><h1>Contact</h1><form action="/form"><input name="email"></form>' +
+			'<iframe name="form-1-target-1789528387446" id="form-1-target-1789528387446" style="display:none"></iframe>' +
+			'<iframe src="//www.weebly.com/weebly/apps/generateMap.php?map=google"></iframe>' +
+			'</main></body></html>', mobile: '<html><body><main><h1>Contact</h1><form action="/form"><input name="email"></form></main></body></html>', check: ( desktop: string, mobile: string ) => { expect( documentsDiffer( desktop, mobile ) ).toBe( false ); expect( documentsDiffer( desktop, mobile.replace( '</form>', '</form><aside id="mobile-only">Menu</aside>' ) ) ).toBe( true ); } },
+	] )( '$name', ( { desktop, mobile, check } ) => { check( desktop, mobile ); } );
 
-	it( 'treats changing text as equivalence, not a second document', () => {
-		const desktop =
-			'<html><body><main><h1>Opening</h1><div><span>17</span><span>HEURES</span><span>52</span><span>SEC</span></div></main></body></html>';
-		const mobile =
-			'<html><body><main><h1>Opening</h1><div><span>17</span><span>HEURES</span><span>38</span><span>SEC</span></div></main></body></html>';
-		expect( documentsDiffer( desktop, mobile ) ).toBe( false );
-		expect(
-			documentsDiffer( desktop, mobile.replace( 'Opening', 'Fermeture' ) )
-		).toBe( false );
-		expect(
-			documentsDiffer(
-				desktop,
-				mobile.replace( '</div></main>', '</div><aside>Menu</aside></main>' )
-			)
-		).toBe( true );
-	} );
-
-	it( 'treats capture geometry ids and runtime UUIDs as equivalence, not a second document', () => {
-		const desktop =
-			'<html><body><main><div id="desktop-target-0"><h1>About</h1><section id="AE7E84B0-6F1E-4160-B12C-99F8F4749F09"><p>Hello</p></section></div></main></body></html>';
-		const mobile =
-			'<html><body><main><div id="mobile-target-0"><h1>About</h1><section id="C0834C17-B49B-4A41-88EB-72DE5F404700"><p>Hello</p></section></div></main></body></html>';
-		expect( documentsDiffer( desktop, mobile ) ).toBe( false );
-		expect(
-			documentsDiffer(
-				desktop,
-				mobile.replace( '</section>', '</section><aside id="mobile-menu">Menu</aside>' )
-			)
-		).toBe( true );
-	} );
-
-	it( 'treats a viewport-injected YUI widget as equivalence, not a second document', () => {
-		const desktop =
-			'<html><body><div id="siteWrapper"><header><nav><a href="/">Home</a></nav></header><main><h1>About</h1><p>Hello</p></main></div></body></html>';
-		const mobile =
-			'<html><body><div id="yui_3_17_2_1_1789567315719_163" class="yui3-widget sqs-mobile-info-bar"><div id="yui_3_17_2_1_1789567315719_165"><a href="tel:1">Call</a></div></div><div id="siteWrapper"><header><nav><a href="/">Home</a></nav></header><main><h1>About</h1><p>Hello</p></main></div></body></html>';
-		expect( documentsDiffer( desktop, mobile ) ).toBe( false );
-		expect(
-			documentsDiffer( desktop, mobile.replace( '<p>Hello</p>', '<p>Hello</p><p>Mobile extra</p>' ) )
-		).toBe( true );
-	} );
-
-	it( 'treats Squarespace block-yui map chrome as equivalence, not a second document', () => {
-		const desktop =
-			'<html><body><main><h1>About</h1><div id="block-yui_3_17_2_1_1755739610085_5613"><button type="button"></button><table><tr><td><kbd>←</kbd></td><td>Move left</td></tr></table></div></main></body></html>';
-		const mobile =
-			'<html><body><main><h1>About</h1><div id="block-yui_3_17_2_1_1755739610085_5613"><button type="button"></button><span>To navigate the map with touch gestures double-tap and hold your finger on the map, then drag the map.</span><table><tr><td><kbd>←</kbd></td><td>Move left</td></tr></table></div></main></body></html>';
-		expect( documentsDiffer( desktop, mobile ) ).toBe( false );
-		expect(
-			documentsDiffer(
-				desktop,
-				mobile.replace( '</main>', '<aside id="mobile-menu">Menu</aside></main>' )
-			)
-		).toBe( true );
-	} );
-
-	it( 'treats generated form field names as equivalence, not a second document', () => {
-		const desktop =
-			'<html><body><main><h1>Contact</h1><form action="/form"><input id="message-field" name="message-yui_5a971da7-2728-4c20-80a1-6b77a38b830d-field" type="text"></form></main></body></html>';
-		const mobile =
-			'<html><body><main><h1>Contact</h1><form action="/form"><input id="message-field" name="message-yui_69609980-c587-4cc8-9d6e-c7268aedab8d-field" type="text"></form></main></body></html>';
-		expect( documentsDiffer( desktop, mobile ) ).toBe( false );
-		expect(
-			documentsDiffer( desktop, mobile.replace( 'type="text"', 'type="email"' ) )
-		).toBe( true );
-	} );
-
-	it( 'treats viewport hydration attributes as equivalence, not a second document', () => {
-		const desktop =
-			'<html><body><div id="siteWrapper"><a href="/cart" tabindex="0" data-test="continue-to-cart" data-current-styles="{&quot;layout&quot;:&quot;desktop&quot;}">Cart</a><header data-controller="Header"><nav><a href="/">Home</a></nav></header><main><h1>About</h1></main></div></body></html>';
-		const mobile =
-			'<html><body><div id="siteWrapper"><a href="/cart" data-test="continue-to-cart" data-current-styles="{&quot;layout&quot;:&quot;mobile&quot;}">Cart</a><header data-controller="Header"><nav><a href="/">Home</a></nav></header><main><h1>About</h1></main></div></body></html>';
-		expect( documentsDiffer( desktop, mobile ) ).toBe( false );
-		expect(
-			documentsDiffer( desktop, mobile.replace( 'href="/"', 'href="/menu"' ) )
-		).toBe( true );
-	} );
 
 	it( 'keeps third-party form endpoints, never submits to the source site, and records what changed', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-form-action-export-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<html><body><main><h1>Give</h1>' +
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'html', 'homepage.html' ), '<html><body><main><h1>Give</h1>' +
 				'<form id="donate" action="https://payments.example/cgi-bin/donate" method="post" target="_top"><input type="hidden" name="button_id" value="ABC123"><input type="image" src="https://payments.example/button.gif" alt="Donate"></form>' +
 				'<form id="search" action="/search" method="get"><input name="q"><button formaction="javascript:alert(1)">Go</button></form>' +
 				'<form id="contact" action="https://www.example.com/contact.php" method="post"><input name="email"></form>' +
 				'<form id="scripted" action="data:text/html,<p>x</p>"><input name="x"></form>' +
 				'<social-like id="widget" action="like"></social-like><div id="inert" action="javascript:alert(1)"></div>' +
-				'</main></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( { version: 1, entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } } } )
-		);
-
+				'</main></body></html>' );
+		capture.manifest( { version: 1, entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } } } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
-
 		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
 		expect( $( '#donate' ).attr( 'action' ) ).toBe( 'https://payments.example/cgi-bin/donate' );
 		expect( $( '#search' ).attr( 'action' ) ).toBe( '/search' );
@@ -1459,54 +936,16 @@ describe( 'exportWebsiteCapture', () => {
 		expect( diagnostics ).toHaveLength( 4 );
 	} );
 
-	it( 'treats viewport-only iframe embeds as equivalence, not a second document', () => {
-		const desktop =
-			'<html><body><main><h1>Contact</h1><form action="/form"><input name="email"></form>' +
-			'<iframe name="form-1-target-1789528387446" id="form-1-target-1789528387446" style="display:none"></iframe>' +
-			'<iframe src="//www.weebly.com/weebly/apps/generateMap.php?map=google"></iframe>' +
-			'</main></body></html>';
-		const mobile =
-			'<html><body><main><h1>Contact</h1><form action="/form"><input name="email"></form></main></body></html>';
-		expect( documentsDiffer( desktop, mobile ) ).toBe( false );
-		expect(
-			documentsDiffer(
-				desktop,
-				mobile.replace( '</form>', '</form><aside id="mobile-only">Menu</aside>' )
-			)
-		).toBe( true );
-	} );
 
 	it( 'collapses a contact page whose only mobile gap is embed iframes, keeping the desktop map', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-collapse-iframe-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<html><body><main><h1>Contact</h1><form action="/form"><input name="email"></form>' +
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'html', 'homepage.html' ), '<html><body><main><h1>Contact</h1><form action="/form"><input name="email"></form>' +
 				'<iframe class="map" src="https://source.example/wrong" data-blocks-engine-capture-visual-iframe-src="https://maps.example/embed" data-blocks-engine-capture-visual-iframe-width="1280" data-blocks-engine-capture-visual-iframe-height="350"></iframe>' +
-				'</main></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><body><main><h1>Contact</h1><form action="/form"><input name="email"></form></main></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'weebly',
-			summary: {},
-			failures: [],
-		} );
-
+				'</main></body></html>' );
+		capture.file( join( 'html-mobile', 'homepage.html' ), '<html><body><main><h1>Contact</h1><form action="/form"><input name="email"></form></main></body></html>' );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },  } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'weebly',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
 		expect( $( '.data-blocks-engine-capture-desktop-document' ) ).toHaveLength( 0 );
@@ -1523,36 +962,14 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'collapses before viewport peeling so hidden-chrome snapshots stay one document', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-collapse-before-peel-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const inner =
 			'<header><nav><a href="/">Home</a></nav></header><main><h1>About</h1><p>Hello</p></main>';
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			`<html><body>${ inner }</body></html>`
-		);
-		writeFileSync(
-			join( outputDir, 'html-mobile', 'homepage.html' ),
-			`<html><body><div id="yui_3_17_2_1_1" class="yui3-widget sqs-mobile-info-bar" style="position:fixed;bottom:0"><a href="tel:1">Call</a></div>${ inner }</body></html>`
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'squarespace',
-			summary: {},
-			failures: [],
-		} );
-
+		capture.file( join( 'html', 'homepage.html' ), `<html><body>${ inner }</body></html>` );
+		capture.file( join( 'html-mobile', 'homepage.html' ), `<html><body><div id="yui_3_17_2_1_1" class="yui3-widget sqs-mobile-info-bar" style="position:fixed;bottom:0"><a href="tel:1">Call</a></div>${ inner }</body></html>` );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },  } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'squarespace',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		expect( html ).not.toContain( 'data-blocks-engine-capture-desktop-document' );
 		expect( html ).not.toContain( 'data-blocks-engine-capture-mobile-document' );
@@ -1564,35 +981,13 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'collapses structurally equivalent responsive variants into one document and records why', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-collapse-equivalent-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const sharedStyles = '<style>.wrap{margin:0 auto}.wrap img{max-width:100%}</style>';
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			`<html><head><meta name="viewport" content="width=device-width, initial-scale=1">${ sharedStyles }</head><body class="page"><main><div data-blocks-engine-capture-geometry-id="desktop-wrapper-0" style="width:940px"><h1>About</h1><img src="/media/a.jpg" alt="a"></div></main></body></html>`
-		);
-		writeFileSync(
-			join( outputDir, 'html-mobile', 'homepage.html' ),
-			`<html><head><meta name="viewport" content="width=device-width, initial-scale=1">${ sharedStyles }</head><body class="page mobile"><main><div data-blocks-engine-capture-geometry-id="mobile-wrapper-0" style="width:100%"><h1>About</h1><img src="/media/a.jpg" alt="a"></div></main></body></html>`
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'weebly',
-			summary: {},
-			failures: [],
-		} );
-
+		capture.file( join( 'html', 'homepage.html' ), `<html><head><meta name="viewport" content="width=device-width, initial-scale=1">${ sharedStyles }</head><body class="page"><main><div data-blocks-engine-capture-geometry-id="desktop-wrapper-0" style="width:940px"><h1>About</h1><img src="/media/a.jpg" alt="a"></div></main></body></html>` );
+		capture.file( join( 'html-mobile', 'homepage.html' ), `<html><head><meta name="viewport" content="width=device-width, initial-scale=1">${ sharedStyles }</head><body class="page mobile"><main><div data-blocks-engine-capture-geometry-id="mobile-wrapper-0" style="width:100%"><h1>About</h1><img src="/media/a.jpg" alt="a"></div></main></body></html>` );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },  } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'weebly',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
 		expect( $( '.data-blocks-engine-capture-desktop-document' ) ).toHaveLength( 0 );
@@ -1625,34 +1020,11 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'collapses equivalent variants while preserving viewport-specific styles as CSS', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-collapse-scoped-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<html><head><style>.hero{color:red}</style></head><body><main><div data-blocks-engine-capture-geometry-id="desktop-wrapper-0"><h1>About</h1></div></main></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><head><style>.hero{color:blue}</style></head><body><main><div data-blocks-engine-capture-geometry-id="mobile-wrapper-0"><h1>About</h1></div></main></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'weebly',
-			summary: {},
-			failures: [],
-		} );
-
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'html-mobile', 'homepage.html' ), '<html><head><style>.hero{color:blue}</style></head><body><main><div data-blocks-engine-capture-geometry-id="mobile-wrapper-0"><h1>About</h1></div></main></body></html>' );
+		capture.page( "https://example.com/", '<html><head><style>.hero{color:red}</style></head><body><main><div data-blocks-engine-capture-geometry-id="desktop-wrapper-0"><h1>About</h1></div></main></body></html>', { entry: { html: 'html/homepage.html',  slug: 'homepage' } } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'weebly',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
 		expect( $( '.data-blocks-engine-capture-desktop-document' ) ).toHaveLength( 0 );
@@ -1679,36 +1051,14 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'does not project equivalent variants whose inline styles already match', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-collapse-identical-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const section =
 			'<section class="page-section" style="padding:8px"><h1>About</h1><p>Hello</p></section>';
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			`<html><head><style>body{margin:0}</style></head><body><main>${ section }</main></body></html>`
-		);
-		writeFileSync(
-			join( outputDir, 'html-mobile', 'homepage.html' ),
-			`<html><head><style>body{margin:0}</style></head><body><main>${ section }</main></body></html>`
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'weebly',
-			summary: {},
-			failures: [],
-		} );
-
+		capture.file( join( 'html', 'homepage.html' ), `<html><head><style>body{margin:0}</style></head><body><main>${ section }</main></body></html>` );
+		capture.file( join( 'html-mobile', 'homepage.html' ), `<html><head><style>body{margin:0}</style></head><body><main>${ section }</main></body></html>` );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },  } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'weebly',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
 		expect( $( 'section' ).attr( 'style' ) ).toBe( 'padding:8px' );
@@ -1728,10 +1078,8 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'renders projected equivalent geometry at both captured viewports', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-collapse-equivalent-geometry-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
 		// A banner section whose runtime writes its phone padding inline at the
 		// phone width and a feature box whose phone rules drop the desktop
 		// centering: structurally equivalent id-less trees, different inline
@@ -1739,36 +1087,16 @@ describe( 'exportWebsiteCapture', () => {
 		const head =
 			'<meta name="viewport" content="width=device-width, initial-scale=1">' +
 			'<style>body{margin:0}.page-section{background:#eef}.feature p{color:#111}</style>';
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			`<html><head>${ head }</head><body><main>` +
+		capture.file( join( 'html', 'homepage.html' ), `<html><head>${ head }</head><body><main>` +
 				'<section class="page-section" style="padding-top:189px"><h1>About</h1></section>' +
 				'<div class="feature" style="margin:0 auto;width:980px"><p>Feature</p></div>' +
-				'</main></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'html-mobile', 'homepage.html' ),
-			`<html><head>${ head }</head><body><main>` +
+				'</main></body></html>' );
+		capture.file( join( 'html-mobile', 'homepage.html' ), `<html><head>${ head }</head><body><main>` +
 				'<section class="page-section" style="padding-top:145px"><h1>About</h1></section>' +
 				'<div class="feature" style="width:320px"><p>Feature</p></div>' +
-				'</main></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'weebly',
-			summary: {},
-			failures: [],
-		} );
-
+				'</main></body></html>' );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },  } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'weebly',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
 		expect( $( '.data-blocks-engine-capture-desktop-document' ) ).toHaveLength( 0 );
@@ -1809,9 +1137,8 @@ describe( 'exportWebsiteCapture', () => {
 			matchedNodes: 5,
 			projectedInlineStyles: 2,
 		} );
-
 		// Both captured viewports measure the geometry their capture observed.
-		const browser = await chromium.launch( { headless: true } );
+		const browser = await browserContext();
 		try {
 			const page = await browser.newPage();
 			const measure = async ( width: number ) => {
@@ -1841,34 +1168,11 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'ships both variants when the mobile document genuinely differs, and says so', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-collapse-structural-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<html><body><main><div data-blocks-engine-capture-geometry-id="desktop-wrapper-0"><h1>About</h1><section id="gallery"><img src="/media/a.jpg" alt="a"></section></div></main></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><body><main><div data-blocks-engine-capture-geometry-id="mobile-wrapper-0"><h1>About us</h1><section id="gallery"><img src="/media/b.jpg" alt="a"></section><aside id="mobile-menu">Mobile only</aside></div></main></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'weebly',
-			summary: {},
-			failures: [],
-		} );
-
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'html-mobile', 'homepage.html' ), '<html><body><main><div data-blocks-engine-capture-geometry-id="mobile-wrapper-0"><h1>About us</h1><section id="gallery"><img src="/media/b.jpg" alt="a"></section><aside id="mobile-menu">Mobile only</aside></div></main></body></html>' );
+		capture.page( "https://example.com/", '<html><body><main><div data-blocks-engine-capture-geometry-id="desktop-wrapper-0"><h1>About</h1><section id="gallery"><img src="/media/a.jpg" alt="a"></section></div></main></body></html>', { entry: { html: 'html/homepage.html',  slug: 'homepage' } } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'weebly',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
 		expect( $( '.data-blocks-engine-capture-desktop-document' ) ).toHaveLength( 1 );
@@ -1885,40 +1189,18 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'collapses a mobile document that reconciles with desktop by element identity', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-collapse-identity-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<html><head><style>.hero{color:red}</style></head><body><main><div id="comp-root">' +
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'html', 'homepage.html' ), '<html><head><style>.hero{color:red}</style></head><body><main><div id="comp-root">' +
 				'<div id="comp-hero"><h1>About</h1></div>' +
 				'<div id="comp-desktop-map">Desktop only</div>' +
-				'</div></main></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><head><style>.hero{color:blue}</style></head><body><main><div id="comp-root">' +
+				'</div></main></body></html>' );
+		capture.file( join( 'html-mobile', 'homepage.html' ), '<html><head><style>.hero{color:blue}</style></head><body><main><div id="comp-root">' +
 				'<div id="comp-hero"><h1>About</h1></div>' +
 				'<div id="comp-mobile-menu">Mobile only</div>' +
-				'</div></main></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'weebly',
-			summary: {},
-			failures: [],
-		} );
-
+				'</div></main></body></html>' );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },  } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'weebly',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
 		expect( $( '.data-blocks-engine-capture-desktop-document' ) ).toHaveLength( 0 );
@@ -1959,25 +1241,19 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'keeps mobile-only layout classes viewport-scoped in a single identity-merged tree', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-responsive-class-scope-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const css = '@media(min-width:768px){.phone-layout{position:absolute;transform:translate(0,-500px)}}.article{width:900px;min-height:1100px;margin:0 auto}.phone-layout{width:100%;margin:0}';
-		writeFileSync( join( outputDir, 'html', 'homepage.html' ),
-			`<html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${ css }</style></head><body><main><article id="comp-article" class="article" style="width:900px"><h1>One article title</h1><img src="/media/hero.jpg"><p>Article text</p></article></main></body></html>` );
-		writeFileSync( join( outputDir, 'html-mobile', 'homepage.html' ),
-			`<html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${ css }</style></head><body><main><article id="comp-article" class="article phone-layout" style="width:100%"><h1>One article title</h1><img src="/media/hero.jpg"><p>Article text</p><aside id="comp-mobile-note">Mobile note</aside></article></main></body></html>` );
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
-			version: 1, entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
-		} ) );
+		capture.file( join( 'html', 'homepage.html' ), `<html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${ css }</style></head><body><main><article id="comp-article" class="article" style="width:900px"><h1>One article title</h1><img src="/media/hero.jpg"><p>Article text</p></article></main></body></html>` );
+		capture.file( join( 'html-mobile', 'homepage.html' ), `<html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${ css }</style></head><body><main><article id="comp-article" class="article phone-layout" style="width:100%"><h1>One article title</h1><img src="/media/hero.jpg"><p>Article text</p><aside id="comp-mobile-note">Mobile note</aside></article></main></body></html>` );
+		capture.manifest( {  version: 1, entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },  } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'unknown', summary: {}, failures: [] } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
 		expect( $( '#comp-article' ) ).toHaveLength( 1 );
 		expect( $( '#comp-article' ).hasClass( 'phone-layout' ) ).toBe( false );
 		expect( html ).toContain( 'data-blocks-engine-capture-responsive-class-' );
-		const browser = await chromium.launch( { headless: true } );
+		const browser = await browserContext();
 		try {
 			const page = await browser.newPage();
 			for ( const width of [ 390, 768, 1440 ] ) {
@@ -2007,29 +1283,14 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'scopes mobile CSS against body classes carried by the document wrapper', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-responsive-root-class-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<html><head><style>body{margin:0}.x .banner{height:152px}.x .article-title{font-size:32px;line-height:36px;margin:0}</style></head><body class="x"><header class="banner"></header><main><h1 class="article-title">Article title</h1><p>Desktop article</p></main></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><head><style>body{margin:0}.x .banner{height:0}.x .article-title{font-size:28px;line-height:31.5px;margin:0}</style></head><body class="x"><header class="banner"></header><main><h1 class="article-title">Article title</h1><p>Mobile article</p><aside>Mobile menu</aside></main></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
-			} )
-		);
-		writeFileSync( join( outputDir, 'breakpoints.json' ), JSON.stringify( { minWidth: [ 768, 1024, 1280 ], maxWidth: [ 767, 1023, 1279 ] } ) );
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'html-mobile', 'homepage.html' ), '<html><head><style>body{margin:0}.x .banner{height:0}.x .article-title{font-size:28px;line-height:31.5px;margin:0}</style></head><body class="x"><header class="banner"></header><main><h1 class="article-title">Article title</h1><p>Mobile article</p><aside>Mobile menu</aside></main></body></html>' );
+		capture.page( "https://example.com/", '<html><head><style>body{margin:0}.x .banner{height:152px}.x .article-title{font-size:32px;line-height:36px;margin:0}</style></head><body class="x"><header class="banner"></header><main><h1 class="article-title">Article title</h1><p>Desktop article</p></main></body></html>', { entry: { html: 'html/homepage.html',  slug: 'homepage' } } );
+		capture.json( 'breakpoints.json', { minWidth: [ 768, 1024, 1280 ], maxWidth: [ 767, 1023, 1279 ] } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'unknown', summary: {}, failures: [] } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
-		const browser = await chromium.launch( { headless: true } );
+		const browser = await browserContext();
 		try {
 			const page = await browser.newPage();
 			for ( const width of [ 390, 768, 1440 ] ) {
@@ -2067,17 +1328,15 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'guards projected desktop inline styles at the route check\'s probed switch width', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-responsive-switch-width-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
 		// Script reveals nav items at >=768 and tags the phone body; a tablet-only
 		// logo rule contributes the unrelated, largest 1279 boundary.
 		const page = ( bodyClass: string, itemStyle: string ) => `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{margin:0}.bar{display:flex;justify-content:space-between;padding:24px 48px}.logo{margin:0;font-size:20px}.menu{margin:0;padding:0;list-style:none;white-space:nowrap}.item{display:inline-block;padding-left:32px;visibility:hidden}.burger{display:none}@media (max-width:767px){.menu{display:none}.burger{display:block}}@media (min-width:1024px) and (max-width:1279px){.logo{font-size:18px}}</style></head><body${ bodyClass }><header class="bar"><p class="logo">Site Title</p><a class="burger" href="#menu">&#9776;</a><nav><ul class="menu">${ [ 'Home', 'Team', 'Partners', 'Store' ].map( label => `<li class="item"${ itemStyle }><a href="/${ label.toLowerCase() }/">${ label }</a></li>` ).join( '' ) }</ul></nav></header><main><p>Body text.</p></main></body></html>`;
-		writeFileSync( join( outputDir, 'html', 'homepage.html' ), page( '', ' style="visibility: visible;"' ) );
-		writeFileSync( join( outputDir, 'html-mobile', 'homepage.html' ), page( ' class="phone"', '' ) );
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html',
-			deviceMode: { mode: 'dual', reason: 'the phone identity renders different body classes (+phone)', switchWidth: 767 } } } } ) );
-		writeFileSync( join( outputDir, 'breakpoints.json' ), JSON.stringify( { minWidth: [ 1024 ], maxWidth: [ 767, 1279 ] } ) );
+		capture.file( join( 'html', 'homepage.html' ), page( '', ' style="visibility: visible;"' ) );
+		capture.file( join( 'html-mobile', 'homepage.html' ), page( ' class="phone"', '' ) );
+		capture.manifest( { version: 1, entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html',  deviceMode: { mode: 'dual', reason: 'the phone identity renders different body classes (+phone)', switchWidth: 767 } } } } );
+		capture.json( 'breakpoints.json', { minWidth: [ 1024 ], maxWidth: [ 767, 1279 ] } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'unknown', summary: {}, failures: [] } );
 		expect( JSON.parse( readFileSync( join( outputDir, 'source-profile.json' ), 'utf8' ) ) ).toMatchObject( { switchWidth: 767 } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
@@ -2086,41 +1345,19 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'reconciles a nested mobile-only subtree and a desktop-only wrapper around shared components', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-collapse-nested-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
 		// Desktop wraps the shared background in a transition layer mobile omits;
 		// mobile adds a phone menu whose overlay is itself mobile-only.
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<html><body><div id="comp-root"><div id="comp-header"><h1>Site</h1></div>' +
+		capture.file( join( 'html', 'homepage.html' ), '<html><body><div id="comp-root"><div id="comp-header"><h1>Site</h1></div>' +
 				'<div id="comp-transition"><div id="comp-background">Background</div></div>' +
-				'</div></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><body><div id="comp-root"><div id="comp-header"><h1>Site</h1>' +
+				'</div></body></html>' );
+		capture.file( join( 'html-mobile', 'homepage.html' ), '<html><body><div id="comp-root"><div id="comp-header"><h1>Site</h1>' +
 				'<nav id="comp-phone-menu">Menu<div id="comp-phone-overlay"></div></nav></div>' +
 				'<div id="comp-background">Background</div>' +
-				'</div></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'weebly',
-			summary: {},
-			failures: [],
-		} );
-
+				'</div></body></html>' );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },  } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'weebly',  summary: {},  failures: [],  } );
 		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
 		expect( $( '.data-blocks-engine-capture-mobile-document' ) ).toHaveLength( 0 );
 		expect( $( '#comp-header #comp-phone-menu #comp-phone-overlay' ) ).toHaveLength( 1 );
@@ -2140,48 +1377,26 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'projects per-viewport presentation of shared components into width-scoped rules', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-collapse-projection-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
 		// Desktop and mobile render the same components with their own inline
 		// presentation: text rescaled on an id-less descendant, a grid item
 		// placed under an id-less grid container, an image sized per viewport,
 		// and a sibling only desktop renders ahead of the shared one.
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<html><body class=""><div id="comp-root">' +
+		capture.file( join( 'html', 'homepage.html' ), '<html><body class=""><div id="comp-root">' +
 				'<div id="comp-text"><p style="font-size:30px"><span style="font-size:30px">Name</span></p></div>' +
 				'<div id="comp-card"><div class="trigger"></div><img class="photo" style="width:122px;height:223px" sizes="626px" src="a.jpg"></div>' +
 				'<div class="grid" data-mesh-id="root-grid"><div id="comp-first">First</div></div>' +
 				'<div id="comp-box" style="margin:0 auto;width:980px">Box</div>' +
-				'</div></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><body class="device-mobile-optimized"><div id="comp-root">' +
+				'</div></body></html>' );
+		capture.file( join( 'html-mobile', 'homepage.html' ), '<html><body class="device-mobile-optimized"><div id="comp-root">' +
 				'<div id="comp-text"><p style="font-size:21px"><span style="font-size:21px">Name</span></p></div>' +
 				'<div id="comp-card"><img class="photo" style="width:280px;height:501px" sizes="280px" src="a.jpg"></div>' +
 				'<div class="grid" data-mesh-id="root-grid"><div id="comp-first">First</div><div id="comp-phone-only">Phone</div></div>' +
 				'<div id="comp-box" style="width:320px">Box</div>' +
-				'</div></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'weebly',
-			summary: {},
-			failures: [],
-		} );
-
+				'</div></body></html>' );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },  } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'weebly',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
 		expect( $( '.data-blocks-engine-capture-mobile-document' ) ).toHaveLength( 0 );
@@ -2214,10 +1429,8 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'keeps a responsive hero and split section wide when a phone-only body flag gates desktop layout', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-responsive-body-width-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const css = '<style>body{margin:0}.hero img{width:100%}' +
 			'body:not(.compact) .hero{width:100vw}' +
 			'body:not(.compact) .split{display:flex;width:100vw}' +
@@ -2229,15 +1442,11 @@ describe( 'exportWebsiteCapture', () => {
 			`<section id="hero" class="hero">${ image }</section>` +
 			`<section id="split" class="split">${ image }<p>Story</p></section>` +
 			( phone ? '<span id="phone-navigation">Menu</span>' : '' ) + '</main>';
-		writeFileSync( join( outputDir, 'html/homepage.html' ),
-			`<html><head>${ css }</head><body>${ body( false ) }</body></html>` );
-		writeFileSync( join( outputDir, 'html-mobile/homepage.html' ),
-			`<html><head>${ css }</head><body class="compact">${ body( true ) }</body></html>` );
-		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( {
-			version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-		} ) );
+		capture.file( 'html/homepage.html', `<html><head>${ css }</head><body>${ body( false ) }</body></html>` );
+		capture.file( 'html-mobile/homepage.html', `<html><head>${ css }</head><body class="compact">${ body( true ) }</body></html>` );
+		capture.manifest( {  version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } },  } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
-		const browser = await chromium.launch();
+		const browser = await browserContext();
 		try {
 			const page = await browser.newPage();
 			await page.setContent( readFileSync( join( outputDir, 'website/index.html' ), 'utf8' ) );
@@ -2261,30 +1470,17 @@ describe( 'exportWebsiteCapture', () => {
 		// Phone-only body classes must retain separate documents when they gate
 		// desktop CSS. The hidden first child and duplicate navigation links
 		// exercise the redundant-hidden-navigation cleanup heuristic.
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-gated-dual-prune-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const css = '<style>body{margin:0}body:not(.phone) .page{width:980px;margin:0 auto}</style>';
 		const nav = '<header id="site-header"><nav><a href="/about">About</a><a href="/contact">Contact</a></nav></header>';
 		const page = ( story: string ) => `<main id="page" class="page"><h1>Home</h1><p>${ story }</p></main>`;
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			`<html><head>${ css }</head><body>${ nav }${ page( 'Desktop story' ) }</body></html>`
-		);
-		writeFileSync(
-			join( outputDir, 'html-mobile', 'homepage.html' ),
-			`<html><head><meta name="viewport" content="width=device-width, initial-scale=1">${ css }</head><body class="phone">` +
+		capture.file( join( 'html', 'homepage.html' ), `<html><head>${ css }</head><body>${ nav }${ page( 'Desktop story' ) }</body></html>` );
+		capture.file( join( 'html-mobile', 'homepage.html' ), `<html><head><meta name="viewport" content="width=device-width, initial-scale=1">${ css }</head><body class="phone">` +
 				'<svg id="sprite" style="display:none" aria-hidden="true"><symbol id="i-menu" viewBox="0 0 24 24"></symbol></svg>' +
-				`${ nav }${ page( 'Phone story' ) }<aside id="mobile-menu">Phone menu</aside></body></html>`
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } )
-		);
-
+				`${ nav }${ page( 'Phone story' ) }<aside id="mobile-menu">Phone menu</aside></body></html>` );
+		capture.manifest( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
-
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
 		expect( $( '.data-blocks-engine-capture-desktop-document' ) ).toHaveLength( 1 );
@@ -2300,10 +1496,9 @@ describe( 'exportWebsiteCapture', () => {
 		expect( receipt.routes[ 0 ].responsiveVariants.reason ).toContain( 'body:not(.phone)' );
 		const profile = JSON.parse( readFileSync( join( outputDir, 'source-profile.json' ), 'utf8' ) );
 		expect( profile ).toMatchObject( { variants: 'per-device', documentsPerRoute: 2 } );
-
 		// What a reader gets: the phone document at phone width, the desktop
 		// document above the switch — no blank phone page.
-		const browser = await chromium.launch( { headless: true } );
+		const browser = await browserContext();
 		try {
 			const page = await browser.newPage();
 			await page.setContent( html );
@@ -2321,22 +1516,15 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'keeps receipt and assembly aligned when a phone-only body class gates structurally equivalent documents', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-gated-equivalent-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const document = ( bodyClass = '' ) =>
 			`<html><head><style>body:not(.phone) main{width:980px}</style></head><body${ bodyClass }>\n` +
 				'<main><h1>Shared page</h1></main></body></html>';
-		writeFileSync( join( outputDir, 'html', 'homepage.html' ), document() );
-		writeFileSync( join( outputDir, 'html-mobile', 'homepage.html' ), document( ' class="phone"' ) );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } )
-		);
-
+		capture.file( join( 'html', 'homepage.html' ), document() );
+		capture.file( join( 'html-mobile', 'homepage.html' ), document( ' class="phone"' ) );
+		capture.manifest( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
-
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
 		expect( $( '.data-blocks-engine-capture-desktop-document main h1' ).text() ).toBe( 'Shared page' );
@@ -2356,31 +1544,12 @@ describe( 'exportWebsiteCapture', () => {
 			'collapsed-identity-subset',
 		],
 	] )( 'reconciles %s as expected', ( _label, desktopBody, mobileBody, outcome ) => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-collapse-shape-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
-		writeFileSync( join( outputDir, 'html', 'homepage.html' ), `<html><body>${ desktopBody }</body></html>` );
-		writeFileSync(
-			join( outputDir, 'html-mobile', 'homepage.html' ),
-			`<html><body>${ mobileBody }</body></html>`
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'weebly',
-			summary: {},
-			failures: [],
-		} );
-
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'html', 'homepage.html' ), `<html><body>${ desktopBody }</body></html>` );
+		capture.file( join( 'html-mobile', 'homepage.html' ), `<html><body>${ mobileBody }</body></html>` );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },  } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'weebly',  summary: {},  failures: [],  } );
 		const receipt = JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) );
 		expect( receipt.routes[ 0 ].responsiveVariants.outcome ).toBe( outcome );
 		if ( outcome === 'collapsed-identity-subset' ) {
@@ -2389,18 +1558,12 @@ describe( 'exportWebsiteCapture', () => {
 			expect( $( '#comp-a #icon, #comp-b #icon' ) ).toHaveLength( 2 );
 		}
 	} );
-
 	const exportDualCapture = ( desktopBody: string, mobileBody: string ) => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-collapse-component-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
-		writeFileSync( join( outputDir, 'html', 'homepage.html' ), `<html><body>${ desktopBody }</body></html>` );
-		writeFileSync( join( outputDir, 'html-mobile', 'homepage.html' ), `<html><body>${ mobileBody }</body></html>` );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( { version: 1, entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } } } )
-		);
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'html', 'homepage.html' ), `<html><body>${ desktopBody }</body></html>` );
+		capture.file( join( 'html-mobile', 'homepage.html' ), `<html><body>${ mobileBody }</body></html>` );
+		capture.manifest( { version: 1, entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } } } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'weebly', summary: {}, failures: [] } );
 		return {
 			receipt: JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) ),
@@ -2445,40 +1608,18 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'reconciles mobile-only content into the matched parent as one tree', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-collapse-unmapped-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<html><body><main><div id="comp-root">' +
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'html', 'homepage.html' ), '<html><body><main><div id="comp-root">' +
 				'<div id="comp-hero"><h1>About</h1></div>' +
 				'<div id="comp-desktop-map">Desktop only</div>' +
-				'</div></main></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><body><main><div id="comp-root">' +
+				'</div></main></body></html>' );
+		capture.file( join( 'html-mobile', 'homepage.html' ), '<html><body><main><div id="comp-root">' +
 				'<div id="comp-hero"><h1>About</h1></div>' +
 				'<div id="comp-mobile-menu">Mobile only</div>' +
-				'</div><p>Stray mobile note</p></main></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'weebly',
-			summary: {},
-			failures: [],
-		} );
-
+				'</div><p>Stray mobile note</p></main></body></html>' );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },  } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'weebly',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
 		// The matched wrappers correspond, so the stray note joins its parent on
@@ -2498,36 +1639,40 @@ describe( 'exportWebsiteCapture', () => {
 		} );
 	} );
 
+	it( 'exports Google Sites URL tiles with their declared URL and original sizing wrappers', () => {
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		const declaredUrl = 'https://widget.example/contact-widget?site=garden&view=contact';
+		const intermediateUrl = 'https://www.gstatic.com/atari/embeds/example/intermediate-frame-minified.html';
+		const html = canonicalizeGoogleSitesHtml( '<html><body><main>' +
+			'<div class="WIdY2d M1aSXe"><div style="padding-top:58.6080586081%"></div>' +
+			`<div class="YMEQtf"><div class="w536ob" data-url="${ declaredUrl.replace( '&', '&amp;' ) }" aria-label="Whole page embed">` +
+			`<iframe title="Contact widget" style="width:100%;height:100%" src="${ intermediateUrl }" data-blocks-engine-capture-visual-iframe-src="${ intermediateUrl }" data-blocks-engine-capture-visual-iframe-width="1155" data-blocks-engine-capture-visual-iframe-height="677"></iframe>` +
+			'</div></div></div></main></body></html>' );
+		capture.file( join( 'html', 'homepage.html' ), html );
+		capture.manifest( { version: 1, entries: { 'https://garden.example/': { html: 'html/homepage.html' } } } );
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://garden.example/', platform: 'google-sites', summary: {}, failures: [] } );
+		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+		expect( $( 'iframe' ) ).toHaveLength( 1 );
+		expect( $( 'div.w536ob > iframe' ).attr( 'src' ) ).toBe( declaredUrl );
+		expect( $( '.WIdY2d.M1aSXe > div' ).first().attr( 'style' ) ).toBe( 'padding-top:58.6080586081%' );
+		expect( $( '.WIdY2d.M1aSXe > .YMEQtf > .w536ob > iframe' ) ).toHaveLength( 1 );
+		expect( $( 'iframe' ).attr( 'title' ) ).toBe( 'Contact widget' );
+		expect( $( 'iframe' ).attr( 'height' ) ).toBe( '677' );
+		expect( $.html() ).not.toContain( intermediateUrl );
+	} );
+
 	it( 'preserves only capture-attested bounded HTTPS iframe surfaces', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-visual-iframe-export-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<html><body><main>' +
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'html', 'homepage.html' ), '<html><body><main>' +
 				'<iframe class="map" title="Map" style="width:100%;height:auto;aspect-ratio:16 / 9" src="https://source.example/wrong" width="100%" height="100%" allow="fullscreen" loading="lazy" sandbox="allow-scripts" referrerpolicy="no-referrer" allowfullscreen frameborder="0" onclick="steal()" srcdoc="<script>steal()</script>" data-blocks-engine-capture-visual-iframe-src="https://maps.example/embed" data-blocks-engine-capture-visual-iframe-width="1280" data-blocks-engine-capture-visual-iframe-height="350"></iframe>' +
 				'<iframe src="https://hidden.example/embed" width="500" height="300"></iframe>' +
 				'<iframe src="javascript:steal()" data-blocks-engine-capture-visual-iframe-src="javascript:steal()" data-blocks-engine-capture-visual-iframe-width="500" data-blocks-engine-capture-visual-iframe-height="300"></iframe>' +
 				'<iframe src="https://zero.example/embed" data-blocks-engine-capture-visual-iframe-src="https://zero.example/embed" data-blocks-engine-capture-visual-iframe-width="0" data-blocks-engine-capture-visual-iframe-height="300"></iframe>' +
-			'</main></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'generic',
-			summary: {},
-			failures: [],
-		} );
-
+			'</main></body></html>' );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },  } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'generic',  summary: {},  failures: [],  } );
 		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
 		expect( $( 'iframe' ) ).toHaveLength( 1 );
 		expect( $( 'iframe' ).attr( 'src' ) ).toBe( 'https://maps.example/embed' );
@@ -2543,33 +1688,21 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'keeps a percentage-width embed fitting viewports narrower than the one it was measured in', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-relative-iframe-export-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
 		// Measured by a ~402px phone profile: the authored 100% resolved to 401px.
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			sanitizeFrozenHtml(
+		capture.file( join( 'html', 'homepage.html' ), sanitizeFrozenHtml(
 				'<html><body style="margin:0"><main>' +
 					'<iframe title="Map" style="border:0" src="https://maps.example/embed" width="100%" height="100%" data-blocks-engine-capture-visual-iframe-src="https://maps.example/embed" data-blocks-engine-capture-visual-iframe-width="401" data-blocks-engine-capture-visual-iframe-height="300"></iframe>' +
 				'</main></body></html>'
-			)
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
-			} )
-		);
-
+			) );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },  } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
-
-		const browser = await chromium.launch();
+		const browser = await browserContext();
 		const server = await startStaticServer( join( outputDir, 'website' ) );
 		try {
-			const page = await browser.newPage( { viewport: { width: 390, height: 900 } } );
+			const page = await browser.newPage();
+				await page.setViewportSize( { width: 390, height: 900 } );
 			await page.route( 'https://maps.example/**', route => route.fulfill( { contentType: 'text/html', body: '' } ) );
 			await page.goto( server.url );
 			const box = await page.locator( 'iframe[title="Map"]' ).boundingBox();
@@ -2590,38 +1723,16 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'preserves validated HubSpot form descriptors across raced desktop and mobile captures', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-form-embed-export-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const descriptor =
 			'class="hs-form-frame contact-form" data-portal-id="145288931" data-form-id="D320B12E-97D4-4FC0-91BE-27D99192F4E9" data-region="EU1"';
 		const adversarial =
 			'<div class="hs-form-frame" data-portal-id="145288931"><iframe src="https://js-eu1.hsforms.net/forms/embed/v2/?portalId=145288931"></iframe></div><iframe src="https://evil.example/form" srcdoc="<script>steal()</script>"></iframe><object data="https://evil.example/payload"></object><embed src="data:text/html,evil"><base href="https://evil.example/"><a href="java\nscript:steal()">unsafe</a><noscript>fallback</noscript>';
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			`<html><body><main><div ${ descriptor }><iframe src="https://js-eu1.hsforms.net/forms/embed/v2/?portalId=145288931&amp;formId=d320b12e-97d4-4fc0-91be-27d99192f4e9&amp;region=eu1" onload="steal()" srcdoc="<script>steal()</script>"></iframe></div>${ adversarial }<script src="https://js-eu1.hsforms.net/forms/embed/v2.js"></script></main></body></html>`
-		);
-		writeFileSync(
-			join( outputDir, 'html-mobile', 'homepage.html' ),
-			`<html><body><main><div ${ descriptor }></div>${ adversarial }<script src="https://js-eu1.hsforms.net/forms/embed/v2.js"></script></main></body></html>`
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'generic',
-			summary: {},
-			failures: [],
-		} );
-
+		capture.file( join( 'html', 'homepage.html' ), `<html><body><main><div ${ descriptor }><iframe src="https://js-eu1.hsforms.net/forms/embed/v2/?portalId=145288931&amp;formId=d320b12e-97d4-4fc0-91be-27d99192f4e9&amp;region=eu1" onload="steal()" srcdoc="<script>steal()</script>"></iframe></div>${ adversarial }<script src="https://js-eu1.hsforms.net/forms/embed/v2.js"></script></main></body></html>` );
+		capture.file( join( 'html-mobile', 'homepage.html' ), `<html><body><main><div ${ descriptor }></div>${ adversarial }<script src="https://js-eu1.hsforms.net/forms/embed/v2.js"></script></main></body></html>` );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },  } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'generic',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
 		expect(
@@ -2639,10 +1750,8 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'bounds declarative form synthesis deterministically on desktop and mobile', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-bounded-form-embed-export-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const forms = Array.from(
 			{ length: 40 },
 			( _, index ) =>
@@ -2651,23 +1760,9 @@ describe( 'exportWebsiteCapture', () => {
 				}" data-form-id="d320b12e-97d4-4fc0-91be-27d99192f4e9" data-region="eu1"></div>`
 		).join( '' );
 		for ( const path of [ 'html/homepage.html', 'html-mobile/homepage.html' ] )
-			writeFileSync( join( outputDir, path ), `<html><body>${ forms }</body></html>` );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'generic',
-			summary: {},
-			failures: [],
-		} );
-
+			capture.file( path, `<html><body>${ forms }</body></html>` );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },  } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'generic',  summary: {},  failures: [],  } );
 		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
 		expect( $( '.hs-form-frame' ) ).toHaveLength( 40 );
 		expect( $( '.hs-form-frame iframe' ) ).toHaveLength( 32 );
@@ -2678,33 +1773,15 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'removes a multiline media srcset URL containing an apostrophe without leaving a malformed reference', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-quoted-media-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const imageUrl = "https://static.wixstatic.com/media/Happy%20Women's%20Day.jpg";
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			`<html><body><img srcset="${ imageUrl } 1x,\n${ imageUrl } 2x"></body></html>`
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
-			} )
-		);
+		capture.file( join( 'html', 'homepage.html' ), `<html><body><img srcset="${ imageUrl } 1x,\n${ imageUrl } 2x"></body></html>` );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },  } );
 		const media = MediaStubStore.load( outputDir );
 		media.markFailure( imageUrl, 'HTTP 404' );
 		media.flush();
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'generic',
-			summary: {},
-			failures: [],
-		} );
-
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'generic',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
 		expect( $( 'img' ).attr( 'srcset' ) ).toBeUndefined();
@@ -2713,17 +1790,14 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'keeps retrieved LQIP and hydrated image URLs distinct during export', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-image-identity-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots', 'media' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots', 'media' ] } );
+		const outputDir = capture.build();
 		const base = 'https://static.wixstatic.com/media/asset~mv2.jpg/v1/fill/';
 		const lqip = `${ base }w_147,h_97,al_c,blur_2,enc_auto/asset.jpg`;
 		const hydrated = `${ base }w_685,h_386,al_c,enc_auto/asset.jpg`;
-		writeFileSync( join( outputDir, 'html', 'homepage.html' ), `<html><body><img id="lqip" src="${ lqip }"><img id="hydrated" src="${ hydrated }"></body></html>` );
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
-			version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-		} ) );
-		mkdirSync( join( outputDir, 'resources' ), { recursive: true } );
+		capture.file( join( 'html', 'homepage.html' ), `<html><body><img id="lqip" src="${ lqip }"><img id="hydrated" src="${ hydrated }"></body></html>` );
+		capture.manifest( {  version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } },  } );
+		capture.directory( 'resources' );
 		const resources: Record<string, { path: string; contentType: string }> = {};
 		const media = MediaStubStore.load( outputDir );
 		for ( const [ url, filename, bytes ] of [ [ lqip, 'lqip.jpg', 'blurred' ], [ hydrated, 'hydrated.jpg', 'sharp' ] ] ) {
@@ -2735,7 +1809,7 @@ describe( 'exportWebsiteCapture', () => {
 			if ( url === lqip ) media.markSuccess( url, path );
 		}
 		media.flush();
-		writeFileSync( join( outputDir, 'resources', 'manifest.json' ), JSON.stringify( { version: 1, resources, failures: [] } ) );
+		capture.json( join( 'resources', 'manifest.json' ), { version: 1, resources, failures: [] } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
 		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
 		expect( $( '#lqip' ).attr( 'src' ) ).toBe( '/media/lqip.jpg' );
@@ -2745,43 +1819,20 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'localizes a same-origin srcset whose candidate URLs contain commas', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-comma-srcset-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'media' ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots', 'media' ] } );
+		const outputDir = capture.build();
 		// An image-service path carries its transform in the URL, commas and all.
 		const variant = ( width: number, height: number ) =>
 			`/media/asset~mv2.png/v1/fill/w_${ width },h_${ height },al_c,q_85,enc_avif,quality_auto/file.png`;
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			`<html><body><img src="${ variant( 58, 57 ) }" srcset="${ variant( 58, 57 ) } 1x, ${ variant(
+		capture.file( join( 'html', 'homepage.html' ), `<html><body><img src="${ variant( 58, 57 ) }" srcset="${ variant( 58, 57 ) } 1x, ${ variant(
 				116,
 				114
-			) } 2x"></body></html>`
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
-			} )
-		);
-		writeFileSync( join( outputDir, 'media', 'asset.png' ), 'asset' );
+			) } 2x"></body></html>` );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },  } );
 		const media = MediaStubStore.load( outputDir );
-		media.markSuccess(
-			'https://example.com/media/asset~mv2.png',
-			join( outputDir, 'media', 'asset.png' )
-		);
+		capture.media( 'https://example.com/media/asset~mv2.png', 'media/asset.png', 'asset' , media );
 		media.flush();
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'generic',
-			summary: {},
-			failures: [],
-		} );
-
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'generic',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
 		expect( cheerio.load( html )( 'img' ).attr( 'srcset' ) ).toBe(
@@ -2792,11 +1843,8 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'keeps a ?tab= link on the captured route when the value names one of that page\'s tabs', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-tab-link-export-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
-		writeFileSync( join( outputDir, 'html', 'homepage.html' ), '<html><body><a id="good" href="https://example.com/treatments?tab=oral-habits">Oral</a><a id="unknown" href="https://example.com/treatments?tab=bogus">Bogus</a><a id="other" href="https://example.com/treatments?page=2">Other</a></body></html>' );
-		writeFileSync( join( outputDir, 'html', 'treatments.html' ), '<html><body><div role="tablist"><button role="tab" id="radix-:r0:-trigger-braces">Braces</button><button role="tab" id="radix-:r0:-trigger-oral-habits">Oral</button></div></body></html>' );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const tab = ( id: string ) => ( {
 			status: 'captured',
 			kind: 'selectable-set',
@@ -2804,26 +1852,8 @@ describe( 'exportWebsiteCapture', () => {
 			dialog: { selector: '#panel', tag: 'div', ariaModal: false, html: '<div>Panel</div>', htmlBytes: 12, htmlTruncated: false },
 			set: { selector: 'body > div', size: 2, index: 0 },
 		} );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/': { html: 'html/homepage.html' },
-					'https://example.com/treatments': {
-						html: 'html/treatments.html',
-						interactions: {
-							schema: 'blocks-engine-capture/interaction-states/v2',
-							sourceUrl: 'https://example.com/treatments',
-							viewport: { width: 1440, height: 900 },
-							capturedAt: '2026-08-22T00:00:00.000Z',
-							states: [ tab( 'radix-:r0:-trigger-braces' ), tab( 'radix-:r0:-trigger-oral-habits' ) ],
-							initialDialogs: [],
-						},
-					},
-				},
-			} )
-		);
+		capture.page( "https://example.com/", '<html><body><a id="good" href="https://example.com/treatments?tab=oral-habits">Oral</a><a id="unknown" href="https://example.com/treatments?tab=bogus">Bogus</a><a id="other" href="https://example.com/treatments?page=2">Other</a></body></html>' , { entry: { html: 'html/homepage.html' } } );
+		capture.page( "https://example.com/treatments", '<html><body><div role="tablist"><button role="tab" id="radix-:r0:-trigger-braces">Braces</button><button role="tab" id="radix-:r0:-trigger-oral-habits">Oral</button></div></body></html>', { entry: { html: 'html/treatments.html',  interactions: {  schema: 'blocks-engine-capture/interaction-states/v2',  sourceUrl: 'https://example.com/treatments',  viewport: { width: 1440, height: 900 },  capturedAt: '2026-08-22T00:00:00.000Z',  states: [ tab( 'radix-:r0:-trigger-braces' ), tab( 'radix-:r0:-trigger-oral-habits' ) ],  initialDialogs: [],  } } } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
 		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
 		expect( $( '#good' ).attr( 'href' ) ).toBe( '/treatments/index.html?tab=oral-habits' );
@@ -2834,21 +1864,12 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'resolves route links inside a retained panel\'s replay snapshot as the live panel\'s own', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-panel-snapshot-links-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const panel = '<div id="panel" role="dialog"><a href="https://example.com/about">About</a></div>';
-		writeFileSync( join( outputDir, 'html', 'homepage.html' ), `<html><body><button id="open" aria-haspopup="dialog">Menu</button>${ panel.replace( 'role="dialog"', 'role="dialog" hidden' ) }</body></html>` );
-		writeFileSync( join( outputDir, 'html', 'about.html' ), '<html><body><h1>About</h1></body></html>' );
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries: {
-			'https://example.com/': { html: 'html/homepage.html', interactions: {
-				schema: 'blocks-engine-capture/interaction-states/v2', sourceUrl: 'https://example.com/', viewport: { width: 1440, height: 900 }, capturedAt: '2026-11-03T00:00:00.000Z', initialDialogs: [],
-				states: [ { status: 'captured',
-					trigger: { selector: '#open', tag: 'button', id: 'open', ariaHaspopup: 'dialog', label: 'Menu', dataBindings: {} },
-					dialog: { selector: '#panel', tag: 'div', id: 'panel', role: 'dialog', ariaModal: true, presentation: 'modal', html: panel, htmlBytes: panel.length, htmlTruncated: false } } ],
-			} },
-			'https://example.com/about': { html: 'html/about.html' },
-		} } ) );
+		capture.file( join( 'html', 'homepage.html' ), `<html><body><button id="open" aria-haspopup="dialog">Menu</button>${ panel.replace( 'role="dialog"', 'role="dialog" hidden' ) }</body></html>` );
+		capture.file( join( 'html', 'about.html' ), '<html><body><h1>About</h1></body></html>' );
+		capture.manifest( { version: 1, entries: {  'https://example.com/': { html: 'html/homepage.html', interactions: {  schema: 'blocks-engine-capture/interaction-states/v2', sourceUrl: 'https://example.com/', viewport: { width: 1440, height: 900 }, capturedAt: '2026-11-03T00:00:00.000Z', initialDialogs: [],  states: [ { status: 'captured',  trigger: { selector: '#open', tag: 'button', id: 'open', ariaHaspopup: 'dialog', label: 'Menu', dataBindings: {} },  dialog: { selector: '#panel', tag: 'div', id: 'panel', role: 'dialog', ariaModal: true, presentation: 'modal', html: panel, htmlBytes: panel.length, htmlTruncated: false } } ],  } },  'https://example.com/about': { html: 'html/about.html' },  } } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
 		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
 		const live = $( '[data-blocks-engine-capture-dialog-panel] a' ).attr( 'href' );
@@ -2858,61 +1879,17 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'localizes images named inside captured interaction states, including renditions that were never downloaded', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-interaction-media-export-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'media', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'media', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const rendition = ( width: number, height: number ) =>
 			`https://cdn.example/images/portrait.png/v1/fill/w_${ width },h_${ height },al_c,q_90,enc_webp/portrait.webp`;
 		const page = `<html><body><a href="https://cdn.example/images/portrait.png" download>Download</a><span data-image-src="https://cdn.example/images/portrait.png"><img src="${ rendition( 534, 713 ) }" alt="Portrait"></span><button id="open" aria-haspopup="dialog">Open</button></body></html>`;
-		writeFileSync( join( outputDir, 'html', 'homepage.html' ), page );
-		writeFileSync( join( outputDir, 'media', 'portrait.webp' ), 'portrait' );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/': {
-						html: 'html/homepage.html',
-						interactions: {
-							schema: 'blocks-engine-capture/interaction-states/v2',
-							sourceUrl: 'https://example.com/',
-							viewport: { width: 1440, height: 900 },
-							capturedAt: '2026-08-22T00:00:00.000Z',
-							states: [
-								{
-									status: 'captured',
-									trigger: { selector: '#open', tag: 'button', id: 'open', ariaHaspopup: 'dialog', dataBindings: {} },
-									dialog: {
-										selector: '#panel',
-										tag: 'div',
-										id: 'panel',
-										role: 'dialog',
-										ariaModal: true,
-										// The 352px rendition is not the one that was downloaded.
-										html: `<div id="panel" role="dialog"><img src="${ rendition( 352, 470 ) }" srcset="${ rendition( 352, 470 ) } 1x, ${ rendition( 704, 940 ) } 2x"></div>`,
-										htmlBytes: 100,
-										htmlTruncated: false,
-									},
-								},
-							],
-							initialDialogs: [],
-						},
-					},
-				},
-			} )
-		);
+		capture.file( join( 'html', 'homepage.html' ), page );
+		capture.manifest( {  version: 1,  entries: {  'https://example.com/': {  html: 'html/homepage.html',  interactions: {  schema: 'blocks-engine-capture/interaction-states/v2',  sourceUrl: 'https://example.com/',  viewport: { width: 1440, height: 900 },  capturedAt: '2026-08-22T00:00:00.000Z',  states: [  {  status: 'captured',  trigger: { selector: '#open', tag: 'button', id: 'open', ariaHaspopup: 'dialog', dataBindings: {} },  dialog: {  selector: '#panel',  tag: 'div',  id: 'panel',  role: 'dialog',  ariaModal: true,  /*  The 352px rendition is not the one that was downloaded. */  html: `<div id="panel" role="dialog"><img src="${ rendition( 352, 470 ) }" srcset="${ rendition( 352, 470 ) } 1x, ${ rendition( 704, 940 ) } 2x"></div>`,  htmlBytes: 100,  htmlTruncated: false,  },  },  ],  initialDialogs: [],  },  },  },  } );
 		const media = MediaStubStore.load( outputDir );
-		media.markSuccess( rendition( 534, 713 ), join( outputDir, 'media', 'portrait.webp' ) );
+		capture.media( rendition( 534, 713 ), 'media/portrait.webp', 'portrait' , media );
 		media.flush();
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'generic',
-			summary: {},
-			failures: [],
-		} );
-
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'generic',  summary: {},  failures: [],  } );
 		const states = readFileSync( join( outputDir, 'interaction-states.json' ), 'utf8' );
 		expect( states ).not.toContain( 'cdn.example' );
 		expect( states ).toContain( '/media/portrait.webp' );
@@ -2922,10 +1899,8 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'localizes protocol-relative images inside captured interaction states', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-protocol-relative-interaction-media-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'media', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'media', 'screenshots' ] } );
+		const outputDir = capture.build();
 		// Authored markup names the chart protocol-relative; the downloader
 		// resolved it against the https page.
 		const authored = '//cdn.example/files/size-chart.jpg?w=1200';
@@ -2933,38 +1908,12 @@ describe( 'exportWebsiteCapture', () => {
 		const panel = `<div id="panel" role="dialog"><img src="${ authored }" alt="Size chart"></div>`;
 		// The page names a different rendition of the chart, so the panel's
 		// reference resolves only through its media family.
-		writeFileSync( join( outputDir, 'html', 'homepage.html' ), `<html><body><img src="${ downloaded }" alt=""><button id="open" aria-haspopup="dialog">Size guide</button></body></html>` );
-		writeFileSync( join( outputDir, 'media', 'size-chart.jpg' ), 'chart' );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/': {
-						html: 'html/homepage.html',
-						interactions: {
-							schema: 'blocks-engine-capture/interaction-states/v2',
-							sourceUrl: 'https://example.com/',
-							viewport: { width: 1440, height: 900 },
-							capturedAt: '2026-10-22T00:00:00.000Z',
-							states: [
-								{
-									status: 'captured',
-									trigger: { selector: '#open', tag: 'button', id: 'open', ariaHaspopup: 'dialog', dataBindings: {} },
-									dialog: { selector: '#panel', tag: 'div', id: 'panel', role: 'dialog', ariaModal: true, html: panel, htmlBytes: panel.length, htmlTruncated: false },
-								},
-							],
-							initialDialogs: [],
-						},
-					},
-				},
-			} )
-		);
+		capture.file( join( 'html', 'homepage.html' ), `<html><body><img src="${ downloaded }" alt=""><button id="open" aria-haspopup="dialog">Size guide</button></body></html>` );
+		capture.manifest( {  version: 1,  entries: {  'https://example.com/': {  html: 'html/homepage.html',  interactions: {  schema: 'blocks-engine-capture/interaction-states/v2',  sourceUrl: 'https://example.com/',  viewport: { width: 1440, height: 900 },  capturedAt: '2026-10-22T00:00:00.000Z',  states: [  {  status: 'captured',  trigger: { selector: '#open', tag: 'button', id: 'open', ariaHaspopup: 'dialog', dataBindings: {} },  dialog: { selector: '#panel', tag: 'div', id: 'panel', role: 'dialog', ariaModal: true, html: panel, htmlBytes: panel.length, htmlTruncated: false },  },  ],  initialDialogs: [],  },  },  },  } );
 		const media = MediaStubStore.load( outputDir );
-		media.markSuccess( downloaded, join( outputDir, 'media', 'size-chart.jpg' ) );
+		capture.media( downloaded, 'media/size-chart.jpg', 'chart' , media );
 		media.flush();
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
-
 		const states = readFileSync( join( outputDir, 'interaction-states.json' ), 'utf8' );
 		expect( states ).not.toContain( 'cdn.example' );
 		expect( states ).toContain( '/media/size-chart.jpg' );
@@ -2974,34 +1923,19 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'localizes large media referenced only by gallery frames', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-gallery-frame-media-export-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'media', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'media', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const frameUrl = 'https://example.com/photos/large-frame.jpg';
 		const pageUrl = 'https://example.com/';
 		const page = '<html><body><section id="carousel"><div id="stage"></div><button id="previous">Previous</button><button id="next">Next</button></section></body></html>';
-		writeFileSync( join( outputDir, 'html', 'homepage.html' ), page );
+		capture.file( join( 'html', 'homepage.html' ), page );
 		const mediaPath = join( outputDir, 'media', 'large-frame.jpg' );
 		writeFileSync( mediaPath, Buffer.alloc( 6 * 1024 * 1024, 1 ) );
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
-			version: 1,
-			entries: { [ pageUrl ]: {
-				html: 'html/homepage.html',
-				interactions: {
-					schema: 'blocks-engine-capture/interaction-states/v2', sourceUrl: pageUrl,
-					viewport: { width: 1440, height: 900 }, capturedAt: '2026-10-09T00:00:00.000Z',
-					states: [ { status: 'captured', kind: 'gallery', trigger: { selector: '#carousel', tag: 'section', ariaHaspopup: '', dataBindings: {} }, gallery: { inline: {
-						selector: '#carousel', stage: ':scope > div', next: '#next', previous: '#previous', viewport: { width: 1440, height: 900 }, order: [ frameUrl ], initial: 0,
-						frames: [ { key: frameUrl, html: `<div><img src="${frameUrl}"></div>`, text: [] } ], coverage: 'complete', restoration: 'verified', autoplay: 'unmeasured',
-					} } } ], initialDialogs: [],
-				},
-			} },
-		} ) );
+		capture.manifest( {  version: 1,  entries: { [ pageUrl ]: {  html: 'html/homepage.html',  interactions: {  schema: 'blocks-engine-capture/interaction-states/v2', sourceUrl: pageUrl,  viewport: { width: 1440, height: 900 }, capturedAt: '2026-10-09T00:00:00.000Z',  states: [ { status: 'captured', kind: 'gallery', trigger: { selector: '#carousel', tag: 'section', ariaHaspopup: '', dataBindings: {} }, gallery: { inline: {  selector: '#carousel', stage: ':scope > div', next: '#next', previous: '#previous', viewport: { width: 1440, height: 900 }, order: [ frameUrl ], initial: 0,  frames: [ { key: frameUrl, html: `<div><img src="${frameUrl}"></div>`, text: [] } ], coverage: 'complete', restoration: 'verified', autoplay: 'unmeasured',  } } } ], initialDialogs: [],  },  } },  } );
 		const media = MediaStubStore.load( outputDir );
 		media.markSuccess( frameUrl, mediaPath );
 		media.flush();
 		exportWebsiteCapture( { outputDir, sourceUrl: pageUrl, platform: 'generic', summary: {}, failures: [] } );
-
 		const states = readFileSync( join( outputDir, 'interaction-states.json' ), 'utf8' );
 		expect( states ).not.toContain( frameUrl );
 		expect( states ).toContain( '/media/large-frame.jpg' );
@@ -3009,17 +1943,11 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'keeps htmlBytes equal to the html length after localizing interaction-state images', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-interaction-bytes-export-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'media', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'media', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const rendition = ( width: number ) =>
 			`https://cdn.example/images/portrait.png/v1/fill/w_${ width },h_${ width },al_c/portrait.webp`;
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			`<html><body><img src="${ rendition( 534 ) }"><button id="a" aria-haspopup="dialog">A</button><button id="b" aria-haspopup="dialog">B</button></body></html>`
-		);
-		writeFileSync( join( outputDir, 'media', 'portrait.webp' ), 'portrait' );
+		capture.file( join( 'html', 'homepage.html' ), `<html><body><img src="${ rendition( 534 ) }"><button id="a" aria-haspopup="dialog">A</button><button id="b" aria-haspopup="dialog">B</button></body></html>` );
 		const region = ( id: string, html: string, htmlBytes: number ) => ( {
 			status: 'captured',
 			trigger: { selector: `#${ id }`, tag: 'button', id, ariaHaspopup: 'dialog', dataBindings: {} },
@@ -3028,36 +1956,11 @@ describe( 'exportWebsiteCapture', () => {
 		const html = ( label: string ) => `<div>${ label } caf\u00e9 \u2603<img src="${ rendition( 352 ) }"></div>`;
 		const exact = html( 'exact' );
 		const stale = html( 'stale' );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/': {
-						html: 'html/homepage.html',
-						interactions: {
-							schema: 'blocks-engine-capture/interaction-states/v2',
-							sourceUrl: 'https://example.com/',
-							viewport: { width: 1440, height: 900 },
-							capturedAt: '2026-08-22T00:00:00.000Z',
-							states: [ region( 'a', exact, Buffer.byteLength( exact ) ), region( 'b', stale, 12345 ) ],
-							initialDialogs: [],
-						},
-					},
-				},
-			} )
-		);
+		capture.manifest( {  version: 1,  entries: {  'https://example.com/': {  html: 'html/homepage.html',  interactions: {  schema: 'blocks-engine-capture/interaction-states/v2',  sourceUrl: 'https://example.com/',  viewport: { width: 1440, height: 900 },  capturedAt: '2026-08-22T00:00:00.000Z',  states: [ region( 'a', exact, Buffer.byteLength( exact ) ), region( 'b', stale, 12345 ) ],  initialDialogs: [],  },  },  },  } );
 		const media = MediaStubStore.load( outputDir );
-		media.markSuccess( rendition( 534 ), join( outputDir, 'media', 'portrait.webp' ) );
+		capture.media( rendition( 534 ), 'media/portrait.webp', 'portrait' , media );
 		media.flush();
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'generic',
-			summary: {},
-			failures: [],
-		} );
-
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'generic',  summary: {},  failures: [],  } );
 		const states = JSON.parse( readFileSync( join( outputDir, 'interaction-states.json' ), 'utf8' ) ).pages[ 0 ].components.flatMap( (component: { states: Array<{ evidence?: unknown }> }) => component.states.flatMap( state => state.evidence ? [state.evidence] : [] ) );
 		expect( states[ 0 ].dialog.html ).not.toContain( 'cdn.example' );
 		expect( states[ 0 ].dialog.htmlBytes ).toBe( Buffer.byteLength( states[ 0 ].dialog.html ) );
@@ -3066,10 +1969,8 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'keeps a lazy image whose bare original was never fetched on its localized srcset renditions', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-lazy-original-export-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'media', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'media', 'screenshots' ] } );
+		const outputDir = capture.build();
 		// A lazy loader names the full-size original in src/data-src/data-image and
 		// lets srcset carry the width renditions. Only the renditions were fetched.
 		const bare = 'https://images.cdn.example/content/portrait.jpg';
@@ -3077,35 +1978,18 @@ describe( 'exportWebsiteCapture', () => {
 		// An image with nothing localized still falls back to a blank, wherever
 		// its URL is named, including entity-quoted JSON.
 		const lost = 'https://images.cdn.example/content/lost.jpg';
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			`<html><body><img data-src="${ bare }" data-image="${ bare }" src="${ bare }" srcset="${ rendition(
+		capture.file( join( 'html', 'homepage.html' ), `<html><body><img data-src="${ bare }" data-image="${ bare }" src="${ bare }" srcset="${ rendition(
 				300
 			) } 300w, ${ rendition( 750 ) } 750w, ${ rendition( 2500 ) } 2500w" alt="Portrait">` +
-				`<img id="lost" src="${ lost }" alt=""><div data-config="{&quot;assetUrl&quot;:&quot;${ lost }&quot;}"></div></body></html>`
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
-			} )
-		);
+				`<img id="lost" src="${ lost }" alt=""><div data-config="{&quot;assetUrl&quot;:&quot;${ lost }&quot;}"></div></body></html>` );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },  } );
 		const media = MediaStubStore.load( outputDir );
 		for ( const width of [ 300, 750 ] ) {
-			writeFileSync( join( outputDir, 'media', `portrait-${ width }.jpg` ), `portrait ${ width }` );
+			capture.file( join( 'media', `portrait-${ width }.jpg` ), `portrait ${ width }` );
 			media.markSuccess( rendition( width ), join( outputDir, 'media', `portrait-${ width }.jpg` ) );
 		}
 		media.flush();
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'generic',
-			summary: {},
-			failures: [],
-		} );
-
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'generic',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
 		const image = $( 'img[alt="Portrait"]' );
@@ -3127,10 +2011,8 @@ describe( 'exportWebsiteCapture', () => {
 		// Blanking the uncaptured `rs=w:1160` used to splice every `rs=w:1160,…`
 		// sibling too, so the painted desktop rendition was dropped and only the
 		// mobile crop survived (#398: gray hero at desktop, fine at phone).
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-rendition-prefix-export-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'resources', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'resources', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const cdn = 'https://images.cdn.example';
 		const base = `${ cdn }/isteam/ip/abc123/IMG_2019.JPG/:/`;
 		const rendition = ( dims: string ) => `${ base }rs=w:${ dims }`;
@@ -3141,17 +2023,8 @@ describe( 'exportWebsiteCapture', () => {
 		const srcset = [ `${ mobile } 390w`, `${ truncated } 1160w`, `${ oversized } 1440w`, `${ desktop } 1160w` ].join(
 			', '
 		);
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			`<html><body><section class="hero"><img id="hero" alt="Studio" sizes="100vw" src="${ base }" srcset="${ srcset }"></section></body></html>`
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
-			} )
-		);
+		capture.file( join( 'html', 'homepage.html' ), `<html><body><section class="hero"><img id="hero" alt="Studio" sizes="100vw" src="${ base }" srcset="${ srcset }"></section></body></html>` );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },  } );
 		// The browser painted (and so captured) the bare original at mobile, the
 		// mobile crop, and the desktop crop; the source never served the
 		// truncated width-only and oversized candidates. Cross-origin resources
@@ -3167,26 +2040,11 @@ describe( 'exportWebsiteCapture', () => {
 			const suffix = url === base ? '' : `rs=w:${ url.split( 'rs=w:' )[ 1 ] }`;
 			const path = `external/${ externalHash }/isteam/ip/abc123/IMG_2019.JPG/:/${ suffix }.jpg`;
 			mkdirSync( dirname( join( outputDir, 'resources', path ) ), { recursive: true } );
-			writeFileSync( join( outputDir, 'resources', path ), bytes );
+			capture.file( join( 'resources', path ), bytes );
 			resources[ url ] = { path: `resources/${ path }`, contentType: 'image/jpeg' };
 		}
-		writeFileSync(
-			join( outputDir, 'resources', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				resources,
-				failures: [ truncated, oversized ].map( ( url ) => ( { url, error: 'HTTP 404' } ) ),
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'generic',
-			summary: {},
-			failures: [],
-		} );
-
+		capture.json( join( 'resources', 'manifest.json' ), {  version: 1,  resources,  failures: [ truncated, oversized ].map( ( url ) => ( { url, error: 'HTTP 404' } ) ),  } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'generic',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
 		const image = $( '#hero' );
@@ -3215,44 +2073,22 @@ describe( 'exportWebsiteCapture', () => {
 		);
 	} );
 
-
 	it( 'binds an image whose src is a density list to the localized file instead of the placeholder', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-srcset-src-export-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'media', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'media', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const thumb = 'https://cdn.example.test/item-1.jpg';
 		const thumb2x = 'https://cdn.example.test/item-1-2x.jpg';
 		const list = `${ thumb } 1x, ${ thumb2x } 2x`;
 		const lost = 'https://cdn.example.test/lost.jpg';
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			`<html><body><picture><source media="(min-width: 0px)" srcset="${ list }">` +
+		capture.file( join( 'html', 'homepage.html' ), `<html><body><picture><source media="(min-width: 0px)" srcset="${ list }">` +
 				`<img alt="Item 1" src="${ list }"></picture>` +
-				`<img id="lost" src="${ lost }" alt=""></body></html>`
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
-			} )
-		);
-		writeFileSync( join( outputDir, 'media', 'item-1.jpg' ), 'item 1' );
-		writeFileSync( join( outputDir, 'media', 'item-1-2x.jpg' ), 'item 1 2x' );
+				`<img id="lost" src="${ lost }" alt=""></body></html>` );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },  } );
 		const media = MediaStubStore.load( outputDir );
-		media.markSuccess( thumb, join( outputDir, 'media', 'item-1.jpg' ) );
-		media.markSuccess( thumb2x, join( outputDir, 'media', 'item-1-2x.jpg' ) );
+		capture.media( thumb, 'media/item-1.jpg', 'item 1' , media );
+		capture.media( thumb2x, 'media/item-1-2x.jpg', 'item 1 2x' , media );
 		media.flush();
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'generic',
-			summary: {},
-			failures: [],
-		} );
-
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'generic',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
 		const image = $( 'img[alt="Item 1"]' );
@@ -3264,91 +2100,36 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'does not read a lazy data-src as the src of an image that never loaded', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-lazy-data-src-export-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'media', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'media', 'screenshots' ] } );
+		const outputDir = capture.build();
 		// Two slides of the same image: the loader swapped a rendition into the
 		// visible one, while the off-screen one still names only its data-src.
 		const bare = 'https://images.cdn.example/content/slide.jpg';
 		const rendition = `${ bare }?format=500w`;
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			`<html><body><img id="loaded" data-src="${ bare }" src="${ rendition }" alt="">` +
-				`<img id="unloaded" data-src="${ bare }" alt=""></body></html>`
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
-			} )
-		);
-		writeFileSync( join( outputDir, 'media', 'slide-500.jpg' ), 'slide 500' );
+		capture.file( join( 'html', 'homepage.html' ), `<html><body><img id="loaded" data-src="${ bare }" src="${ rendition }" alt="">` +
+				`<img id="unloaded" data-src="${ bare }" alt=""></body></html>` );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },  } );
 		const media = MediaStubStore.load( outputDir );
-		media.markSuccess( rendition, join( outputDir, 'media', 'slide-500.jpg' ) );
+		capture.media( rendition, 'media/slide-500.jpg', 'slide 500' , media );
 		media.flush();
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'generic',
-			summary: {},
-			failures: [],
-		} );
-
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'generic',  summary: {},  failures: [],  } );
 		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
 		expect( $( '#loaded' ).attr( 'src' ) ).toBe( '/media/slide-500.jpg' );
 		expect( $( '#unloaded' ).attr( 'src' ) ).toBeUndefined();
 	} );
 
 	it( 'localizes deduplicated captured width renditions before returning early', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-lazy-image-resource-export-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'resources/media', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'resources/media', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const bare = 'https://example.com/media/plant.webp';
 		const firstRendition = `${ bare }?format=300w`;
 		const secondRendition = `${ bare }?format=600w`;
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			`<img data-src="${ bare }" src="${ firstRendition }"><img data-src="${ bare }" src="${ secondRendition }">`
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-			} )
-		);
-		writeFileSync( join( outputDir, 'resources', 'media', 'plant-300.webp' ), 'plant' );
-		writeFileSync( join( outputDir, 'resources', 'media', 'plant-600.webp' ), 'plant' );
-		writeFileSync(
-			join( outputDir, 'resources', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				resources: {
-					[ firstRendition ]: {
-						path: 'resources/media/plant-300.webp',
-						contentType: 'image/webp',
-					},
-					[ secondRendition ]: {
-						path: 'resources/media/plant-600.webp',
-						contentType: 'image/webp',
-					},
-				},
-				failures: [],
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'generic',
-			summary: {},
-			failures: [],
-		} );
-
+		capture.file( join( 'html', 'homepage.html' ), `<img data-src="${ bare }" src="${ firstRendition }"><img data-src="${ bare }" src="${ secondRendition }">` );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { html: 'html/homepage.html' } },  } );
+		capture.file( join( 'resources', 'media', 'plant-300.webp' ), 'plant' );
+		capture.file( join( 'resources', 'media', 'plant-600.webp' ), 'plant' );
+		capture.json( join( 'resources', 'manifest.json' ), {  version: 1,  resources: {  [ firstRendition ]: {  path: 'resources/media/plant-300.webp',  contentType: 'image/webp',  },  [ secondRendition ]: {  path: 'resources/media/plant-600.webp',  contentType: 'image/webp',  },  },  failures: [],  } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'generic',  summary: {},  failures: [],  } );
 		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
 		expect( $( 'img' ).eq( 0 ).attr( 'src' ) ).toBe( '/media/plant-300.webp' );
 		expect( $( 'img' ).eq( 1 ).attr( 'src' ) ).toBe( '/media/plant-300.webp' );
@@ -3356,35 +2137,16 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'writes one successful asset outcome with every captured route reference', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-asset-evidence-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'media', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'media', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const imageUrl = 'https://cdn.example/shared.png';
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			`<img src="${ imageUrl }"><img src="${ imageUrl }">`
-		);
-		writeFileSync( join( outputDir, 'html', 'about.html' ), `<img src="${ imageUrl }">` );
-		writeFileSync( join( outputDir, 'media', 'shared.png' ), 'shared' );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/': { html: 'html/homepage.html' },
-					'https://example.com/about': { html: 'html/about.html' },
-				},
-			} )
-		);
+		capture.file( join( 'html', 'homepage.html' ), `<img src="${ imageUrl }"><img src="${ imageUrl }">` );
+		capture.file( join( 'html', 'about.html' ), `<img src="${ imageUrl }">` );
+		capture.manifest( {  version: 1,  entries: {  'https://example.com/': { html: 'html/homepage.html' },  'https://example.com/about': { html: 'html/about.html' },  },  } );
 		const media = MediaStubStore.load( outputDir );
-		media.markSuccess( imageUrl, join( outputDir, 'media', 'shared.png' ) );
+		capture.media( imageUrl, 'media/shared.png', 'shared' , media );
 		media.flush();
-
-		exportWebsiteCapture( {
-			outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [],
-		} );
-
+		exportWebsiteCapture( {  outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [],  } );
 		const evidence = JSON.parse( readFileSync( join( outputDir, 'asset-evidence.json' ), 'utf8' ) );
 		expect( evidence ).toMatchObject( { schema: ASSET_EVIDENCE_SCHEMA } );
 		expect( evidence ).toMatchObject( {
@@ -3410,28 +2172,14 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'writes failed asset outcomes with every captured route reference', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-failed-asset-evidence-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const imageUrl = 'https://cdn.example/missing.png';
-		writeFileSync( join( outputDir, 'html', 'homepage.html' ), `<img src="${ imageUrl }">` );
-		writeFileSync( join( outputDir, 'html', 'about.html' ), `<img src="${ imageUrl }">` );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/': { html: 'html/homepage.html' },
-					'https://example.com/about': { html: 'html/about.html' },
-				},
-			} )
-		);
+		capture.file( join( 'html', 'homepage.html' ), `<img src="${ imageUrl }">` );
+		capture.file( join( 'html', 'about.html' ), `<img src="${ imageUrl }">` );
+		capture.manifest( {  version: 1,  entries: {  'https://example.com/': { html: 'html/homepage.html' },  'https://example.com/about': { html: 'html/about.html' },  },  } );
 		MediaStubStore.load( outputDir ).markFailure( imageUrl, 'HTTP 404' );
-
-		exportWebsiteCapture( {
-			outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [],
-		} );
-
+		exportWebsiteCapture( {  outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [],  } );
 		const evidence = JSON.parse( readFileSync( join( outputDir, 'asset-evidence.json' ), 'utf8' ) );
 		expect( evidence.assets ).toEqual( [ {
 			id: imageUrl,
@@ -3450,43 +2198,23 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'traces retained mobile documents and reachable CSS dependencies back to each route', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-asset-evidence-css-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'html-mobile', 'resources/css', 'resources/media', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'resources/css', 'resources/media', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const cssUrl = 'https://example.com/css/site.css';
 		const imageUrl = 'https://example.com/media/background.png';
 		const mobileUrl = 'https://cdn.example/mobile-only.png';
 		const missingFont = 'https://example.com/fonts/missing.woff2';
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			`<html><body><link rel="stylesheet" href="${ cssUrl }"><p>Home</p></body></html>`
-		);
-		writeFileSync(
-			join( outputDir, 'html', 'about.html' ),
-			`<html><body><link rel="stylesheet" href="${ cssUrl }"><p>About</p></body></html>`
-		);
-		writeFileSync(
-			join( outputDir, 'html-mobile', 'homepage.html' ),
-			`<html><body><aside id="mobile-menu">Menu</aside><img src="${ mobileUrl }"></body></html>`
-		);
-		writeFileSync( join( outputDir, 'resources/css/site.css' ), `body{background:url("${ imageUrl }")}@font-face{src:url("${ missingFont }")}` );
-		writeFileSync( join( outputDir, 'resources/media/background.png' ), 'image' );
-		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: {
-			'https://example.com/': { html: 'html/homepage.html' },
-			'https://example.com/about': { html: 'html/about.html' },
-		} } ) );
-		writeFileSync( join( outputDir, 'resources/manifest.json' ), JSON.stringify( { version: 1, resources: {
-			[ cssUrl ]: { path: 'resources/css/site.css', contentType: 'text/css' },
-			[ imageUrl ]: { path: 'resources/media/background.png', contentType: 'image/png' },
-		}, failures: [ { url: missingFont, error: 'HTTP 404' } ] } ) );
+		capture.file( join( 'html', 'homepage.html' ), `<html><body><link rel="stylesheet" href="${ cssUrl }"><p>Home</p></body></html>` );
+		capture.file( join( 'html', 'about.html' ), `<html><body><link rel="stylesheet" href="${ cssUrl }"><p>About</p></body></html>` );
+		capture.file( join( 'html-mobile', 'homepage.html' ), `<html><body><aside id="mobile-menu">Menu</aside><img src="${ mobileUrl }"></body></html>` );
+		capture.file( 'resources/css/site.css', `body{background:url("${ imageUrl }")}@font-face{src:url("${ missingFont }")}` );
+		capture.file( 'resources/media/background.png', 'image' );
+		capture.manifest( { version: 1, entries: {  'https://example.com/': { html: 'html/homepage.html' },  'https://example.com/about': { html: 'html/about.html' },  } } );
+		capture.json( 'resources/manifest.json', { version: 1, resources: {  [ cssUrl ]: { path: 'resources/css/site.css', contentType: 'text/css' },  [ imageUrl ]: { path: 'resources/media/background.png', contentType: 'image/png' },  }, failures: [ { url: missingFont, error: 'HTTP 404' } ] } );
 		const media = MediaStubStore.load( outputDir );
-		writeFileSync( join( outputDir, 'mobile.png' ), 'mobile' );
-		media.markSuccess( mobileUrl, join( outputDir, 'mobile.png' ) );
+		capture.media( mobileUrl, 'mobile.png', 'mobile' , media );
 		media.flush();
-
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
-
 		const evidence = JSON.parse( readFileSync( join( outputDir, 'asset-evidence.json' ), 'utf8' ) );
 		expect( evidence.coverage ).toMatchObject( { documentCount: 3, cssTraversal: 'reachable captured CSS resources only' } );
 		expect( evidence.assets.find( ( asset: { sourceUrl: string } ) => asset.sourceUrl === mobileUrl ) ).toMatchObject( {
@@ -3503,22 +2231,17 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'groups two deduplicated source URLs by one portable asset ID', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-asset-evidence-dedup-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'media', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'media', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const first = 'https://cdn.example/one.png';
 		const second = 'https://cdn.example/two.png';
-		writeFileSync( join( outputDir, 'html/homepage.html' ), `<img src="${ first }"><img src="${ second }">` );
-		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } ) );
-		writeFileSync( join( outputDir, 'media/one.png' ), 'same bytes' );
-		writeFileSync( join( outputDir, 'media/two.png' ), 'same bytes' );
+		capture.file( 'html/homepage.html', `<img src="${ first }"><img src="${ second }">` );
+		capture.manifest( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } );
 		const media = MediaStubStore.load( outputDir );
-		media.markSuccess( first, join( outputDir, 'media/one.png' ) );
-		media.markSuccess( second, join( outputDir, 'media/two.png' ) );
+		capture.media( first, 'media/one.png', 'same bytes' , media );
+		capture.media( second, 'media/two.png', 'same bytes' , media );
 		media.flush();
-
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
-
 		const assets = JSON.parse( readFileSync( join( outputDir, 'asset-evidence.json' ), 'utf8' ) ).assets;
 		const firstAsset = assets.find( ( asset: { sourceUrl: string } ) => asset.sourceUrl === first );
 		const secondAsset = assets.find( ( asset: { sourceUrl: string } ) => asset.sourceUrl === second );
@@ -3528,14 +2251,11 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'serializes many deduplicated source URLs without repeated alias arrays', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-asset-evidence-linear-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'media', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'media', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const sourceUrls = Array.from( { length: 200 }, ( _, index ) => `https://cdn.example/shared/${ index }.png` );
-		writeFileSync( join( outputDir, 'html/homepage.html' ), sourceUrls.map( ( url ) => `<img src="${ url }">` ).join( '' ) );
-		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: {
-			'https://example.com/': { html: 'html/homepage.html' },
-		} } ) );
+		capture.file( 'html/homepage.html', sourceUrls.map( ( url ) => `<img src="${ url }">` ).join( '' ) );
+		capture.manifest( { version: 1, entries: {  'https://example.com/': { html: 'html/homepage.html' },  } } );
 		const media = MediaStubStore.load( outputDir );
 		for ( const [ index, sourceUrl ] of sourceUrls.entries() ) {
 			const path = join( outputDir, 'media', `${ index }.png` );
@@ -3543,9 +2263,7 @@ describe( 'exportWebsiteCapture', () => {
 			media.markSuccess( sourceUrl, path );
 		}
 		media.flush();
-
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
-
 		const serialized = readFileSync( join( outputDir, 'asset-evidence.json' ), 'utf8' );
 		const evidence = JSON.parse( serialized );
 		expect( evidence.assets ).toHaveLength( sourceUrls.length );
@@ -3555,41 +2273,34 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'does not call a stale successful cache entry a successful portable transfer', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-asset-evidence-stale-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const imageUrl = 'https://cdn.example/missing-local.png';
-		writeFileSync( join( outputDir, 'html/homepage.html' ), `<img src="${ imageUrl }">` );
-		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } ) );
+		capture.file( 'html/homepage.html', `<img src="${ imageUrl }">` );
+		capture.manifest( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } );
 		const media = MediaStubStore.load( outputDir );
 		media.markSuccess( imageUrl, join( outputDir, 'gone.png' ) );
 		media.flush();
-
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
-
 		const asset = JSON.parse( readFileSync( join( outputDir, 'asset-evidence.json' ), 'utf8' ) ).assets[ 0 ];
 		expect( asset ).toMatchObject( { outcome: 'failed', retrieval: 'unknown', portable: 'not-included' } );
 	} );
 
 	it( 'counts every retained reference while bounding emitted reference locations', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-asset-evidence-bounds-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'media', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'media', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const imageUrl = 'https://cdn.example/shared.png';
 		const entries: Record< string, { html: string } > = {};
 		for ( let index = 0; index < 101; index++ ) {
 			const name = `${ index }.html`;
-			writeFileSync( join( outputDir, 'html', name ), `<img src="${ imageUrl }">` );
+			capture.file( join( 'html', name ), `<img src="${ imageUrl }">` );
 			entries[ `https://example.com/${ index }` ] = { html: `html/${ name}` };
 		}
-		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries } ) );
-		writeFileSync( join( outputDir, 'media/shared.png' ), 'shared' );
+		capture.manifest( { version: 1, entries } );
 		const media = MediaStubStore.load( outputDir );
-		media.markSuccess( imageUrl, join( outputDir, 'media/shared.png' ) );
+		capture.media( imageUrl, 'media/shared.png', 'shared' , media );
 		media.flush();
-
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/0', platform: 'generic', summary: {}, failures: [] } );
-
 		const evidence = JSON.parse( readFileSync( join( outputDir, 'asset-evidence.json' ), 'utf8' ) );
 		expect( evidence ).toMatchObject( { assetCount: 1, totalReferenceCount: 101, referenceLimit: 100 } );
 		expect( evidence.assets[ 0 ] ).toMatchObject( { referenceCount: 101, referencesTruncated: true } );
@@ -3614,159 +2325,42 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'exports captured routes and localized media as a website directory', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'html-mobile' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'media' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<!doctype html><html><head><style>.desktop{color:blue}</style></head><body><button id="contact" aria-haspopup="dialog">Contact</button><a href="https://example.com/shop/about?from=home#team">About</a><a href="https://example.com/shop/missing">Missing</a><a href="https://external.example/about">External</a><img src="https://cdn.example/logo.png"><img src="https://cdn.example/logo-copy.png"><img src="https://cdn.example/avatar.png&amp;quot;"><img src="/hero.png?w=128" srcset="/hero.png?w=128 128w, /hero.png?w=4096 4096w"><picture><source media="(min-width: 751px)" srcset="https://cdn.example/responsive.png?w=1200"><img src="https://cdn.example/responsive.png?w=320"></picture><img src="https://static.wixstatic.com/media/hash~mv2.jpg/v1/fill/w_1034,h_1349,al_b,q_90/hash~mv2.jpg" srcset="https://static.wixstatic.com/media/hash~mv2.jpg/v1/fill/w_567,h_740,al_b,q_90,enc_avif,quality_auto/hash~mv2.jpg 1x, https://static.wixstatic.com/media/hash~mv2.jpg/v1/fill/w_1034,h_1349,al_b,q_90,enc_avif,quality_auto/hash~mv2.jpg 2x"><h1>Home</h1><p>$100.00</p><noscript><main>This site requires JavaScript</main></noscript></body></html>'
-		);
-		writeFileSync( join( outputDir, 'html', 'about.html' ), '<h1>About</h1>' );
-		writeFileSync(
-			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<!doctype html><html><head><style>.mobile{color:red}body:not(.device-mobile-optimized) .desktop-only{display:flex}</style></head><body class="device-mobile-optimized"><main class="mobile"><h1>Mobile Home</h1><p>Mobile only</p><p>$100.00</p></main></body></html>'
-		);
-		writeFileSync( join( outputDir, 'media', 'logo.png' ), 'png' );
-		writeFileSync( join( outputDir, 'media', 'avatar.pngquot' ), 'avatar' );
-		writeFileSync( join( outputDir, 'media', 'hero.png' ), 'base' );
-		writeFileSync( join( outputDir, 'media', 'hero-2.png' ), '128' );
-		writeFileSync( join( outputDir, 'media', 'hero-3.png' ), Buffer.alloc( 6 * 1024 * 1024 ) );
-		writeFileSync( join( outputDir, 'media', 'responsive.png' ), Buffer.alloc( 6 * 1024 * 1024 ) );
-		writeFileSync( join( outputDir, 'media', 'responsive-mobile.png' ), 'responsive-mobile' );
-		writeFileSync( join( outputDir, 'media', 'wix.jpg' ), 'wix' );
-		writeFileSync( join( outputDir, 'media', 'localized.jpg' ), 'localized' );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/shop/': {
-						html: 'html/homepage.html',
-						interactions: {
-							schema: 'blocks-engine-capture/interaction-states/v2',
-							sourceUrl: 'https://example.com/shop/',
-							viewport: { width: 1440, height: 900 },
-							capturedAt: '2026-08-22T00:00:00.000Z',
-							states: [
-								{
-									status: 'captured',
-									trigger: {
-										selector: '#contact',
-										tag: 'button',
-										id: 'contact',
-										ariaHaspopup: 'dialog',
-										dataBindings: { 'data-modalid': 'contact' },
-									},
-									dialog: {
-										selector: '#contact-dialog',
-										tag: 'div',
-										id: 'contact-dialog',
-										role: 'dialog',
-										ariaModal: true,
-										html: '<div id="contact-dialog" role="dialog"><nav><a href="https://example.com/shop/about?from=menu#team">About</a><a href="https://external.example/contact">External</a></nav><form><input name="email"></form></div>',
-										htmlBytes: 193,
-										htmlTruncated: false,
-									},
-								},
-							],
-							initialDialogs: [
-								{
-									status: 'captured',
-									initiallyVisible: true,
-									dialog: {
-										selector: '#automatic-dialog',
-										tag: 'div',
-										id: 'automatic-dialog',
-										role: 'dialog',
-										ariaModal: true,
-										ariaLabel: 'Automatic popup',
-										html: '<div id="automatic-dialog" role="dialog"><p>Automatic popup</p><button id="automatic-close" aria-label="Close automatic popup">Close</button></div>',
-										htmlBytes: 150,
-										htmlTruncated: false,
-									},
-									dismissal: {
-										control: { selector: '#automatic-close', tag: 'button', label: 'Close automatic popup' },
-										verified: true,
-									},
-								},
-							],
-						},
-					},
-					'https://example.com/shop/about': { html: 'html/about.html' },
-					'https://example.com/': { html: 'html/corporate.html' },
-				},
-			} )
-		);
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots', 'media' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'html', 'homepage.html' ), '<!doctype html><html><head><style>.desktop{color:blue}</style></head><body><button id="contact" aria-haspopup="dialog">Contact</button><a href="https://example.com/shop/about?from=home#team">About</a><a href="https://example.com/shop/missing">Missing</a><a href="https://external.example/about">External</a><img src="https://cdn.example/logo.png"><img src="https://cdn.example/logo-copy.png"><img src="https://cdn.example/avatar.png&amp;quot;"><img src="/hero.png?w=128" srcset="/hero.png?w=128 128w, /hero.png?w=4096 4096w"><picture><source media="(min-width: 751px)" srcset="https://cdn.example/responsive.png?w=1200"><img src="https://cdn.example/responsive.png?w=320"></picture><img src="https://static.wixstatic.com/media/hash~mv2.jpg/v1/fill/w_1034,h_1349,al_b,q_90/hash~mv2.jpg" srcset="https://static.wixstatic.com/media/hash~mv2.jpg/v1/fill/w_567,h_740,al_b,q_90,enc_avif,quality_auto/hash~mv2.jpg 1x, https://static.wixstatic.com/media/hash~mv2.jpg/v1/fill/w_1034,h_1349,al_b,q_90,enc_avif,quality_auto/hash~mv2.jpg 2x"><h1>Home</h1><p>$100.00</p><noscript><main>This site requires JavaScript</main></noscript></body></html>' );
+		capture.file( join( 'html', 'about.html' ), '<h1>About</h1>' );
+		capture.file( join( 'html-mobile', 'homepage.html' ), '<!doctype html><html><head><style>.mobile{color:red}body:not(.device-mobile-optimized) .desktop-only{display:flex}</style></head><body class="device-mobile-optimized"><main class="mobile"><h1>Mobile Home</h1><p>Mobile only</p><p>$100.00</p></main></body></html>' );
+		capture.file( join( 'media', 'hero-3.png' ), Buffer.alloc( 6 * 1024 * 1024 ) );
+		capture.file( join( 'media', 'responsive.png' ), Buffer.alloc( 6 * 1024 * 1024 ) );
+		capture.manifest( {  version: 1,  entries: {  'https://example.com/shop/': {  html: 'html/homepage.html',  interactions: {  schema: 'blocks-engine-capture/interaction-states/v2',  sourceUrl: 'https://example.com/shop/',  viewport: { width: 1440, height: 900 },  capturedAt: '2026-08-22T00:00:00.000Z',  states: [  {  status: 'captured',  trigger: {  selector: '#contact',  tag: 'button',  id: 'contact',  ariaHaspopup: 'dialog',  dataBindings: { 'data-modalid': 'contact' },  },  dialog: {  selector: '#contact-dialog',  tag: 'div',  id: 'contact-dialog',  role: 'dialog',  ariaModal: true,  html: '<div id="contact-dialog" role="dialog"><nav><a href="https://example.com/shop/about?from=menu#team">About</a><a href="https://external.example/contact">External</a></nav><form><input name="email"></form></div>',  htmlBytes: 193,  htmlTruncated: false,  },  },  ],  initialDialogs: [  {  status: 'captured',  initiallyVisible: true,  dialog: {  selector: '#automatic-dialog',  tag: 'div',  id: 'automatic-dialog',  role: 'dialog',  ariaModal: true,  ariaLabel: 'Automatic popup',  html: '<div id="automatic-dialog" role="dialog"><p>Automatic popup</p><button id="automatic-close" aria-label="Close automatic popup">Close</button></div>',  htmlBytes: 150,  htmlTruncated: false,  },  dismissal: {  control: { selector: '#automatic-close', tag: 'button', label: 'Close automatic popup' },  verified: true,  },  },  ],  },  },  'https://example.com/shop/about': { html: 'html/about.html' },  'https://example.com/': { html: 'html/corporate.html' },  },  } );
 		const media = MediaStubStore.load( outputDir );
-		media.markSuccess( 'https://cdn.example/logo.png', join( outputDir, 'media', 'logo.png' ) );
-		media.markSuccess(
-			'https://cdn.example/logo-copy.png',
-			join( outputDir, 'media', 'logo.png' )
-		);
-		media.markSuccess(
-			'https://cdn.example/avatar.png&quot;',
-			join( outputDir, 'media', 'avatar.pngquot' )
-		);
-		media.markSuccess( 'https://example.com/hero.png', join( outputDir, 'media', 'hero.png' ) );
-		media.markSuccess(
-			'https://example.com/hero.png?w=128',
-			join( outputDir, 'media', 'hero-2.png' )
-		);
-		media.markSuccess(
-			'https://example.com/hero.png?w=4096',
-			join( outputDir, 'media', 'hero-3.png' )
-		);
-		media.markSuccess(
-			'https://example.com/only-huge.png',
-			join( outputDir, 'media', 'hero-3.png' )
-		);
-		media.markSuccess(
-			'https://cdn.example/responsive.png?w=1200',
-			join( outputDir, 'media', 'responsive.png' )
-		);
-		media.markSuccess(
-			'https://cdn.example/responsive.png?w=320',
-			join( outputDir, 'media', 'responsive-mobile.png' )
-		);
-		media.markSuccess(
-			'https://static.wixstatic.com/media/hash~mv2.jpg',
-			join( outputDir, 'media', 'wix.jpg' )
-		);
-		media.markSuccess(
-			'https://cdn.example/images/asset.jpg/v1/fit/w_3939,h_3939/source.jpg/v1/fit/w_704,h_853/rendered.jpg',
-			join( outputDir, 'media', 'localized.jpg' )
-		);
+		capture.media( 'https://cdn.example/logo.png', 'media/logo.png', 'png' , media );
+		media.markSuccess( 'https://cdn.example/logo-copy.png', join( outputDir, 'media', 'logo.png' ) );
+		capture.media( 'https://cdn.example/avatar.png&quot;', 'media/avatar.pngquot', 'avatar' , media );
+		capture.media( 'https://example.com/hero.png', 'media/hero.png', 'base' , media );
+		capture.media( 'https://example.com/hero.png?w=128', 'media/hero-2.png', '128' , media );
+		media.markSuccess( 'https://example.com/hero.png?w=4096', join( outputDir, 'media', 'hero-3.png' ) );
+		media.markSuccess( 'https://example.com/only-huge.png', join( outputDir, 'media', 'hero-3.png' ) );
+		media.markSuccess( 'https://cdn.example/responsive.png?w=1200', join( outputDir, 'media', 'responsive.png' ) );
+		capture.media( 'https://cdn.example/responsive.png?w=320', 'media/responsive-mobile.png', 'responsive-mobile' , media );
+		capture.media( 'https://static.wixstatic.com/media/hash~mv2.jpg', 'media/wix.jpg', 'wix' , media );
+		capture.media( 'https://cdn.example/images/asset.jpg/v1/fit/w_3939,h_3939/source.jpg/v1/fit/w_704,h_853/rendered.jpg', 'media/localized.jpg', 'localized' , media );
 		media.markFailure( 'https://example.com/missing.png?w=1280', 'HTTP 404' );
 		media.markFailure(
 			'https://cdn.example/images/asset.jpg/v1/fit/w_3939,h_3939/source.jpg/v1/fit/w_554,h_597/rendered.jpg',
 			'HTTP 404'
 		);
 		media.flush();
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			`${ readFileSync(
+		capture.file( join( 'html', 'homepage.html' ), `${ readFileSync(
 				join( outputDir, 'html', 'homepage.html' ),
 				'utf8'
-			) }<img src="/only-huge.png"><img src="https://cdn.example/images/asset.jpg/v1/fit/w_3939,h_3939/source.jpg/v1/fit/w_554,h_597/rendered.jpg"><script src="/uncaptured.js"></script   ><img src="images/blank.png"><div style="background-image:url(images/blank.png)"></div><div style="background-image:image-set(url('/missing.png?w=1280') 1x)"></div>`
-		);
-
-		const receiptPath = exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/shop/',
-			platform: 'fake',
-			title: 'Example',
-			summary: { pagesExtracted: 2 },
-			failures: [],
-		} );
-
+			) }<img src="/only-huge.png"><img src="https://cdn.example/images/asset.jpg/v1/fit/w_3939,h_3939/source.jpg/v1/fit/w_554,h_597/rendered.jpg"><script src="/uncaptured.js"></script   ><img src="images/blank.png"><div style="background-image:url(images/blank.png)"></div><div style="background-image:image-set(url('/missing.png?w=1280') 1x)"></div>` );
+		const receiptPath = exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/shop/',  platform: 'fake',  title: 'Example',  summary: { pagesExtracted: 2 },  failures: [],  } );
 		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
 		expect(
 			JSON.parse( readFileSync( join( outputDir, 'layout-geometry-report.json' ), 'utf8' ) )
 		).toMatchObject( {
-			schema: 'blocks-engine-capture/layout-geometry-proof/v1',
+			schema: 'blocks-engine/layout-geometry-proof/v1',
 			capture_omissions: { capture_missing: 4 },
 		} );
 		expect( receipt ).toMatchObject( {
@@ -3895,7 +2489,7 @@ describe( 'exportWebsiteCapture', () => {
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
 			'href="https://external.example/contact"'
 		);
-		const browser = await chromium.launch( { headless: true } );
+		const browser = await browserContext();
 		try {
 			const page = await browser.newPage();
 			await page.setContent( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
@@ -3950,10 +2544,8 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'exports many large responsive routes within a constrained heap', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-large-capture-export-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const routeCount = 16;
 		const content = 'x'.repeat( 256 * 1024 );
 		const entries: Record< string, { html: string } > = {};
@@ -3961,21 +2553,11 @@ describe( 'exportWebsiteCapture', () => {
 			const name = index === 0 ? 'homepage' : `page-${ index }`;
 			const route = index === 0 ? 'https://example.com/' : `https://example.com/page-${ index }`;
 			const next = index + 1 < routeCount ? `<a href="/page-${ index + 1 }">Next</a>` : '';
-			writeFileSync(
-				join( outputDir, 'html', `${ name }.html` ),
-				`<main><h1>Desktop ${ index }</h1>${ next }<p>${ content }</p></main>`
-			);
-			writeFileSync(
-				join( outputDir, 'html-mobile', `${ name }.html` ),
-				`<main><h1>Mobile ${ index }</h1>${ next }<p>${ content }</p></main>`
-			);
+			capture.file( join( 'html', `${ name }.html` ), `<main><h1>Desktop ${ index }</h1>${ next }<p>${ content }</p></main>` );
+			capture.file( join( 'html-mobile', `${ name }.html` ), `<main><h1>Mobile ${ index }</h1>${ next }<p>${ content }</p></main>` );
 			entries[ route ] = { html: `html/${ name }.html` };
 		}
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( { version: 1, entries } )
-		);
-
+		capture.manifest( { version: 1, entries } );
 		const runnerPath = join( outputDir, 'export-under-limit.ts' );
 		writeFileSync(
 			runnerPath,
@@ -4004,28 +2586,15 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			[ '--max-old-space-size=128', '--max-semi-space-size=1', '--import', 'tsx', runnerPath ],
 			{ cwd: process.cwd(), encoding: 'utf8', timeout: 60_000 }
 		);
-
 		expect( result.error ).toBeUndefined();
 		expect( result.status, result.stderr ).toBe( 0 );
 	}, 70_000 );
 
 	it( 'indexes structured semantic evidence into two bounded shards', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-compact-semantic-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync( join( outputDir, 'html', 'homepage.html' ), '<main><h1>Home</h1></main>' );
-		writeFileSync( join( outputDir, 'html', 'about.html' ), '<main><h1>About</h1></main>' );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' },
-					'https://example.com/about': { slug: 'about', html: 'html/about.html' },
-				},
-			} )
-		);
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/", '<main><h1>Home</h1></main>', { entry: { html: 'html/homepage.html',  slug: 'homepage' } } );
+		capture.page( "https://example.com/about", '<main><h1>About</h1></main>', { entry: { html: 'html/about.html',  slug: 'about' } } );
 		const spec = {
 			selector: 'main > section',
 			headings: [ 'Caminos y sabores 🍜' ],
@@ -4033,15 +2602,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		} as never;
 		SectionSpecsStore.load( outputDir ).set( 'https://example.com/', [ spec ], [] );
 		SectionSpecsStore.load( outputDir ).set( 'https://example.com/about', [ spec ], [] );
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'generic',
-			summary: {},
-			failures: [],
-		} );
-
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'generic',  summary: {},  failures: [],  } );
 		const index = JSON.parse( readFileSync( join( outputDir, 'semantic-evidence.index.json' ), 'utf8' ) );
 		const shards = index.shards.map( ( shard: { path: string } ) =>
 			JSON.parse( readFileSync( join( outputDir, shard.path ), 'utf8' ) )
@@ -4064,13 +2625,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		for ( const shard of shards )
 			expect( Buffer.byteLength( JSON.stringify( shard ) ) ).toBeLessThanOrEqual( 10 * 1024 * 1024 );
 		const first = [ index, ...shards ].map( ( value ) => JSON.stringify( value ) );
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'generic',
-			summary: {},
-			failures: [],
-		} );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'generic',  summary: {},  failures: [],  } );
 		const repeatedIndex = JSON.parse( readFileSync( join( outputDir, 'semantic-evidence.index.json' ), 'utf8' ) );
 		const repeated = [
 			repeatedIndex,
@@ -4082,112 +2637,18 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'preserves the rendered authoring tree when section reconstruction lacks visual proof', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'html-mobile' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'media' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'sections' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<!doctype html><html><head><title>Example Studio</title></head><body><header><a href="/">Desktop logo</a><a href="/work">Work</a></header><main><h1>Desktop duplicate</h1><img src="https://cdn.example/hero.jpg"></main><footer><a href="/privacy">Privacy</a></footer></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<!doctype html><html><body><header><a href="/">Example Studio</a><button aria-haspopup="dialog" data-modalid="contact">Contact</button><button aria-label="Menu"></button></header><main><h1>Mobile duplicate</h1></main><footer><a href="/privacy">Privacy</a></footer></body></html>'
-		);
-		writeFileSync( join( outputDir, 'media', 'hero.jpg' ), 'hero' );
-		writeFileSync(
-			join( outputDir, 'sections', 'homepage.json' ),
-			JSON.stringify( {
-				sourceUrl: 'https://example.com/',
-				sections: [
-					{
-						sectionIndex: 0,
-						interactionModel: 'columns',
-						top: 0,
-						height: 600,
-						headings: [ 'Built from evidence' ],
-						bodyText: [ 'One editable page tree.' ],
-						buttonLabels: [],
-						images: [
-							{
-								url: 'https://cdn.example/hero.jpg',
-								sourceUrl: 'https://cdn.example/hero.jpg',
-								alt: 'Project hero',
-								kind: 'img',
-								width: 1200,
-								height: 800,
-							},
-						],
-						icons: [],
-						backgroundBrightness: 255,
-						backgroundColor: 'rgb(255, 255, 255)',
-						gradient: null,
-						gradientSource: null,
-						motionProfile: { motionClass: 'none', signals: [], animatedElements: 0 },
-						dividerAbove: null,
-						dividerBelow: null,
-						layout: {
-							containerWidth: 1200,
-							padding: '0',
-							childLayout: 'flex-row',
-							columnCount: 2,
-							gap: '24px',
-						},
-						cells: [
-							{
-								heading: 'Modeling',
-								body: [ 'Precisely reconstructed.' ],
-								image: null,
-								icon: {
-									kind: 'svg',
-									markup: '<svg viewBox="0 0 24 24"><path d="M3 3h18v18H3z"/></svg>',
-									width: 48,
-									height: 48,
-								},
-								button: null,
-							},
-							{
-								heading: 'Rendering',
-								body: [ 'Ready for WordPress.' ],
-								image: null,
-								icon: null,
-								button: null,
-							},
-						],
-					},
-				],
-			} )
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/': {
-						html: 'html/homepage.html',
-						sections: 'sections/homepage.json',
-					},
-				},
-			} )
-		);
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'media', 'screenshots', 'sections' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'html-mobile', 'homepage.html' ), '<!doctype html><html><body><header><a href="/">Example Studio</a><button aria-haspopup="dialog" data-modalid="contact">Contact</button><button aria-label="Menu"></button></header><main><h1>Mobile duplicate</h1></main><footer><a href="/privacy">Privacy</a></footer></body></html>' );
+		capture.json( join( 'sections', 'homepage.json' ), {  sourceUrl: 'https://example.com/',  sections: [  {  sectionIndex: 0,  interactionModel: 'columns',  top: 0,  height: 600,  headings: [ 'Built from evidence' ],  bodyText: [ 'One editable page tree.' ],  buttonLabels: [],  images: [  {  url: 'https://cdn.example/hero.jpg',  sourceUrl: 'https://cdn.example/hero.jpg',  alt: 'Project hero',  kind: 'img',  width: 1200,  height: 800,  },  ],  icons: [],  backgroundBrightness: 255,  backgroundColor: 'rgb(255, 255, 255)',  gradient: null,  gradientSource: null,  motionProfile: { motionClass: 'none', signals: [], animatedElements: 0 },  dividerAbove: null,  dividerBelow: null,  layout: {  containerWidth: 1200,  padding: '0',  childLayout: 'flex-row',  columnCount: 2,  gap: '24px',  },  cells: [  {  heading: 'Modeling',  body: [ 'Precisely reconstructed.' ],  image: null,  icon: {  kind: 'svg',  markup: '<svg viewBox="0 0 24 24"><path d="M3 3h18v18H3z"/></svg>',  width: 48,  height: 48,  },  button: null,  },  {  heading: 'Rendering',  body: [ 'Ready for WordPress.' ],  image: null,  icon: null,  button: null,  },  ],  },  ],  } );
+		capture.page( "https://example.com/", '<!doctype html><html><head><title>Example Studio</title></head><body><header><a href="/">Desktop logo</a><a href="/work">Work</a></header><main><h1>Desktop duplicate</h1><img src="https://cdn.example/hero.jpg"></main><footer><a href="/privacy">Privacy</a></footer></body></html>', { entry: { html: 'html/homepage.html',  sections: 'sections/homepage.json' } } );
 		const media = MediaStubStore.load( outputDir );
-		media.markSuccess( 'https://cdn.example/hero.jpg', join( outputDir, 'media', 'hero.jpg' ) );
+		capture.media( 'https://cdn.example/hero.jpg', 'media/hero.jpg', 'hero' , media );
 		media.flush();
-
-		const receiptPath = exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
+		const receiptPath = exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
 		const $ = cheerio.load( html );
-
 		expect( html ).toContain( '<title>Example Studio</title>' );
 		// The captures' content survives on one reconciled tree; section
 		// reconstruction without visual proof changes nothing about it.
@@ -4206,41 +2667,12 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'keeps captured responsive HTML when section evidence is invalid', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'html-mobile' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'sections' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<html><body><main><h1>Desktop capture</h1></main></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><body><main><h1>Mobile capture</h1></main><nav>Menu</nav></body></html>'
-		);
-		writeFileSync( join( outputDir, 'sections', 'homepage.json' ), '{invalid' );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/': {
-						html: 'html/homepage.html',
-						sections: 'sections/homepage.json',
-					},
-				},
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots', 'sections' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'html-mobile', 'homepage.html' ), '<html><body><main><h1>Mobile capture</h1></main><nav>Menu</nav></body></html>' );
+		capture.file( join( 'sections', 'homepage.json' ), '{invalid' );
+		capture.page( "https://example.com/", '<html><body><main><h1>Desktop capture</h1></main></body></html>', { entry: { html: 'html/homepage.html',  sections: 'sections/homepage.json' } } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		expect( html ).toContain( 'Desktop capture' );
 		expect( html ).toContain( 'Mobile capture' );
@@ -4249,34 +2681,11 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'keeps one authoring body when responsive captures differ only in presentation', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'html-mobile' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<!doctype html><html><head></head><body><!-- desktop note --><canvas id="canvas" width="1440" height="900"></canvas><main class="desktop" style="width:900px"><img src="/hero-large.jpg"><h1>Home</h1><p id="runtime-status">Ready</p></main></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<!doctype html><html><head></head><body><canvas id="canvas" width="390" height="844"></canvas><main class="mobile" style="width:390px"><img src="/hero-small.jpg"><h1>Home</h1><p id="runtime-status">Synchronizing...</p><div class="runtime-mount"></div></main></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'html-mobile', 'homepage.html' ), '<!doctype html><html><head></head><body><canvas id="canvas" width="390" height="844"></canvas><main class="mobile" style="width:390px"><img src="/hero-small.jpg"><h1>Home</h1><p id="runtime-status">Synchronizing...</p><div class="runtime-mount"></div></main></body></html>' );
+		capture.page( "https://example.com/", '<!doctype html><html><head></head><body><!-- desktop note --><canvas id="canvas" width="1440" height="900"></canvas><main class="desktop" style="width:900px"><img src="/hero-large.jpg"><h1>Home</h1><p id="runtime-status">Ready</p></main></body></html>' , { entry: { html: 'html/homepage.html' } } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		expect( html ).not.toContain( 'data-blocks-engine-capture-desktop-document' );
 		expect( html ).not.toContain( 'data-blocks-engine-capture-mobile-document' );
@@ -4293,70 +2702,31 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'preserves mobile styles when matching responsive bodies style themselves differently', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'html-mobile' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<!doctype html><html><head><style>main{color:blue}</style><style media="print">main{margin:0}</style></head><body><main><h1>Home</h1></main></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>main{color:red}</style></head><body><main><h1>Home</h1></main></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'html-mobile', 'homepage.html' ), '<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>main{color:red}</style></head><body><main><h1>Home</h1></main></body></html>' );
+		capture.page( "https://example.com/", '<!doctype html><html><head><style>main{color:blue}</style><style media="print">main{margin:0}</style></head><body><main><h1>Home</h1></main></body></html>' , { entry: { html: 'html/homepage.html' } } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		expect( html ).not.toContain( 'data-blocks-engine-capture-desktop-document' );
 		expect( html ).not.toContain( 'data-blocks-engine-capture-mobile-document' );
 		expect( html ).toContain( '<style media="(min-width:768px)">main{color:blue}</style>' );
 		expect( html ).toContain(
-			'<style media="(min-width:768px) and (print)">main{margin:0}</style>'
+			'<style media="print and (min-width:768px)">main{margin:0}</style>'
 		);
 		expect( html ).toContain( '<style media="(max-width:767px)">main{color:red}</style>' );
 		expect( html ).toContain( 'name="viewport"' );
 	} );
 
 	it( 'keeps shared styles unwrapped when matching responsive bodies style themselves identically', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'html-mobile' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const document =
 			'<!doctype html><html><head><style>main{color:blue}</style></head><body><main><h1>Home</h1></main></body></html>';
-		writeFileSync( join( outputDir, 'html', 'homepage.html' ), document );
-		writeFileSync( join( outputDir, 'html-mobile', 'homepage.html' ), document );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
+		capture.file( join( 'html', 'homepage.html' ), document );
+		capture.file( join( 'html-mobile', 'homepage.html' ), document );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { html: 'html/homepage.html' } },  } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		expect( html ).not.toContain( 'data-blocks-engine-capture-desktop-document' );
 		expect( html ).not.toContain( 'data-blocks-engine-capture-mobile-document' );
@@ -4366,47 +2736,16 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'shares identical responsive styles when both authoring bodies are required', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'html-mobile' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const sharedStyle =
 			'<style media="screen and (min-width: 1px)">.layout{display:grid}@media(max-width:600px){.layout{display:block}}</style>';
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			`<!doctype html><html><head>${ sharedStyle }</head><body><main class="layout"><h1>Home</h1><a href="/about">About</a><aside>Desktop navigation</aside></main></body></html>`
-		);
-		writeFileSync(
-			join( outputDir, 'html-mobile', 'homepage.html' ),
-			`<!doctype html><html><head>${ sharedStyle }</head><body><main class="layout"><button>Menu</button><h1>Home</h1><a href="/about">About</a></main></body></html>`
-		);
-		writeFileSync(
-			join( outputDir, 'html', 'about.html' ),
-			`<!doctype html><html><head>${ sharedStyle }</head><body><main class="layout"><h1>About</h1><aside>Desktop navigation</aside></main></body></html>`
-		);
-		writeFileSync(
-			join( outputDir, 'html-mobile', 'about.html' ),
-			`<!doctype html><html><head>${ sharedStyle }</head><body><main class="layout"><button>Menu</button><h1>About</h1></main></body></html>`
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/': { html: 'html/homepage.html' },
-					'https://example.com/about': { html: 'html/about.html' },
-				},
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
+		capture.file( join( 'html', 'homepage.html' ), `<!doctype html><html><head>${ sharedStyle }</head><body><main class="layout"><h1>Home</h1><a href="/about">About</a><aside>Desktop navigation</aside></main></body></html>` );
+		capture.file( join( 'html-mobile', 'homepage.html' ), `<!doctype html><html><head>${ sharedStyle }</head><body><main class="layout"><button>Menu</button><h1>Home</h1><a href="/about">About</a></main></body></html>` );
+		capture.file( join( 'html', 'about.html' ), `<!doctype html><html><head>${ sharedStyle }</head><body><main class="layout"><h1>About</h1><aside>Desktop navigation</aside></main></body></html>` );
+		capture.file( join( 'html-mobile', 'about.html' ), `<!doctype html><html><head>${ sharedStyle }</head><body><main class="layout"><button>Menu</button><h1>About</h1></main></body></html>` );
+		capture.manifest( {  version: 1,  entries: {  'https://example.com/': { html: 'html/homepage.html' },  'https://example.com/about': { html: 'html/about.html' },  },  } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		// The pairs reconcile (the heading and About link correspond), so one
 		// tree carries both viewports' content and no authoring body is needed.
@@ -4422,35 +2761,13 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'keeps a stylesheet the mobile capture also contains applying below the switch width', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'html-mobile' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const sharedStyle = '<style>.shared{color:green}</style>';
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			`<!doctype html><html><head>${ sharedStyle }<style>.desktop-only{color:blue}</style></head><body><main><h1>Home</h1><aside>Desktop navigation</aside></main></body></html>`
-		);
-		writeFileSync(
-			join( outputDir, 'html-mobile', 'homepage.html' ),
-			`<!doctype html><html><head>${ sharedStyle }<style>.mobile-only{color:red}</style></head><body><main><button>Menu</button><h1>Home</h1></main></body></html>`
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
+		capture.file( join( 'html', 'homepage.html' ), `<!doctype html><html><head>${ sharedStyle }<style>.desktop-only{color:blue}</style></head><body><main><h1>Home</h1><aside>Desktop navigation</aside></main></body></html>` );
+		capture.file( join( 'html-mobile', 'homepage.html' ), `<!doctype html><html><head>${ sharedStyle }<style>.mobile-only{color:red}</style></head><body><main><button>Menu</button><h1>Home</h1></main></body></html>` );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { html: 'html/homepage.html' } },  } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
 		expect( $( '.data-blocks-engine-capture-desktop-document' ) ).toHaveLength( 0 );
@@ -4464,36 +2781,25 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it.each( [ false, true ] )( 'preserves mobile linked styles and their cascade when dual documents are %s', async ( dual ) => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-responsive-linked-css-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'html-mobile', 'screenshots', 'resources/css' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots', 'resources/css' ] } );
+		const outputDir = capture.build();
 		const common = '<link rel="stylesheet" href="https://cdn.example/shared.css">';
 		const body = '<main><div class="bar">Call Map Hours</div></main>';
-		writeFileSync( join( outputDir, 'html', 'homepage.html' ),
-			`<html><head>${ common }</head><body>${ body }${ dual ? '<aside>Desktop navigation</aside>' : '' }</body></html>` );
-		writeFileSync( join( outputDir, 'html-mobile', 'homepage.html' ),
-			`<html><head><link rel="stylesheet" href="https://cdn.example/widget.css">${ common }<link rel="stylesheet" media="screen and (min-width:300px), print" href="https://cdn.example/labels.css"><link rel="stylesheet" disabled href="https://cdn.example/disabled.css"></head><body>${ body }</body></html>` );
-		const styles = {
-			'widget.css': '.bar{position:fixed;bottom:0;height:64px;background:red;color:green}',
-			'shared.css': '.bar{background:rgb(235,235,235);color:blue}',
-			'labels.css': '.bar{text-transform:uppercase;color:purple}',
-			'disabled.css': '.bar{display:none}',
-		};
+		capture.file( join( 'html', 'homepage.html' ), `<html><head>${ common }</head><body>${ body }${ dual ? '<aside>Desktop navigation</aside>' : '' }</body></html>` );
+		capture.file( join( 'html-mobile', 'homepage.html' ), `<html><head><link rel="stylesheet" href="https://cdn.example/widget.css">${ common }<link rel="stylesheet" media="screen and (min-width:300px), print" href="https://cdn.example/labels.css"><link rel="stylesheet" disabled href="https://cdn.example/disabled.css"></head><body>${ body }</body></html>` );
+		const styles = { 'widget.css': '.bar{position:fixed;bottom:0;height:64px;background:red;color:green}', 'shared.css': '.bar{background:rgb(235,235,235);color:blue}', 'labels.css': '.bar{text-transform:uppercase;color:purple}', 'disabled.css': '.bar{display:none}', };
 		const resources: Record< string, { path: string; contentType: string } > = {};
 		for ( const [ name, css ] of Object.entries( styles ) ) {
-			writeFileSync( join( outputDir, 'resources/css', name ), css );
+			capture.file( join( 'resources/css', name ), css );
 			resources[ `https://cdn.example/${ name }` ] = { path: `resources/css/${ name }`, contentType: 'text/css' };
 		}
-		writeFileSync( join( outputDir, 'resources/manifest.json' ), JSON.stringify( { version: 1, resources, failures: [] } ) );
-		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( {
-			version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-		} ) );
+		capture.json( 'resources/manifest.json', { version: 1, resources, failures: [] } );
+		capture.manifest( {  version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } },  } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
-
-		const browser = await chromium.launch();
+		const browser = await browserContext();
 		try {
-			const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+			const page = await browser.newPage();
+				await page.setViewportSize( { width: 390, height: 844 } );
 			await page.route( 'https://portable.test/**', route => {
 				const pathname = new URL( route.request().url() ).pathname;
 				return route.fulfill( { contentType: pathname.endsWith( '.css' ) ? 'text/css' : 'text/html',
@@ -4517,25 +2823,20 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'hoists byte-identical safe styles across 186 documents without deleting local occurrences', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-style-hoist-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const entries: Record< string, { html: string } > = {
 			'https://example.com/': { html: 'html/page-0.html' },
 		};
 		const repeated = '<style type="text/css" media="screen">.card{color:rgb(1, 2, 3)}</style>';
 		for ( let index = 0; index < 186; index++ ) {
 			const slug = `page-${ index }`;
-			writeFileSync(
-				join( outputDir, 'html', `${ slug }.html` ),
-				`<!doctype html><html><head>${ repeated }${ repeated }</head><body><p class="card">${ index }</p></body></html>`
-			);
+			capture.file( join( 'html', `${ slug }.html` ), `<!doctype html><html><head>${ repeated }${ repeated }</head><body><p class="card">${ index }</p></body></html>` );
 			entries[ index === 0 ? 'https://example.com/' : `https://example.com/${ slug }` ] = {
 				html: `html/${ slug }.html`,
 			};
 		}
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries } ) );
-
+		capture.manifest( { version: 1, entries } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		expect( html.match( /<link rel="stylesheet" href="\/assets\/css\/capture-[a-f0-9]{64}\.css" media="screen">/g ) ).toHaveLength( 2 );
@@ -4543,26 +2844,17 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'hoists shared styles whose only extra attributes are inert runtime identifiers', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-style-hoist-inert-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
 		// The attribute shapes a Wix page puts on its component style tags.
 		const styles =
 			'<style id="css_masterPage" data-href="https://static.example/main.css" rel="stylesheet">.a{color:red}</style>' +
 			'<style data-ricos-style-hash="h1" type="text/css" media="screen" class="ricos">.b{color:blue}</style>' +
 			'<style data-blocks-engine-capture-disclosure="true">.marker{color:green}</style>';
 		for ( const slug of [ 'homepage', 'about' ] )
-			writeFileSync( join( outputDir, 'html', `${ slug }.html` ), `<html><head>${ styles }</head><body><p class="a b">${ slug }</p></body></html>` );
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
-			version: 1,
-			entries: {
-				'https://example.com/': { html: 'html/homepage.html' },
-				'https://example.com/about': { html: 'html/about.html' },
-			},
-		} ) );
-
+			capture.file( join( 'html', `${ slug }.html` ), `<html><head>${ styles }</head><body><p class="a b">${ slug }</p></body></html>` );
+		capture.manifest( {  version: 1,  entries: {  'https://example.com/': { html: 'html/homepage.html' },  'https://example.com/about': { html: 'html/about.html' },  },  } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
-
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		expect( html.match( /<link rel="stylesheet" href="\/assets\/css\/capture-[a-f0-9]{64}\.css">/g ) ).toHaveLength( 1 );
 		expect( html.match( /<link rel="stylesheet" href="\/assets\/css\/capture-[a-f0-9]{64}\.css" media="screen">/g ) ).toHaveLength( 1 );
@@ -4574,9 +2866,8 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it.each( [ 'device-visibility', 'disclosure', 'disclosure-base', 'fluid-rules' ] )( 'hoists device styles but keeps %s styles inline', ( marker ) => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-style-hoist-device-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const devices = [
 			[ 'desktop tablet', 'all' ],
 			[ 'phone', 'screen' ],
@@ -4599,14 +2890,8 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			`<style media="not all" data-blocks-engine-capture-device-style="${ device }" data-blocks-engine-capture-source-media="${ media }">${ css }</style>`
 		).join( '' ) + `<style data-blocks-engine-capture-${ marker }="true">${ css }</style>`;
 		for ( const slug of [ 'homepage', 'about' ] )
-			writeFileSync( join( outputDir, 'html', `${ slug }.html` ), `<html><head>${ styles }</head><body>${ slug }</body></html>` );
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
-			version: 1,
-			entries: {
-				'https://example.com/': { html: 'html/homepage.html' },
-				'https://example.com/about': { html: 'html/about.html' },
-			},
-		} ) );
+			capture.file( join( 'html', `${ slug }.html` ), `<html><head>${ styles }</head><body>${ slug }</body></html>` );
+		capture.manifest( {  version: 1,  entries: {  'https://example.com/': { html: 'html/homepage.html' },  'https://example.com/about': { html: 'html/about.html' },  },  } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
 		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
 		expect( diagnostics.styleHoist.hoistedStylesheets ).toBe( 1 );
@@ -4627,21 +2912,13 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'keeps unsafe and base-dependent styles inline with emitted diagnostics', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-style-hoist-diagnostics-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const css = '<style>.hero{background:url("image.png")}</style><style nonce="runtime">.runtime{color:red}</style><style></style><style>.broken{background:url()}</style>';
-		writeFileSync( join( outputDir, 'html', 'homepage.html' ), `<html><head>${ css }</head><body><p class="hero runtime">Home</p></body></html>` );
-		writeFileSync( join( outputDir, 'html', 'about.html' ), `<html><head>${ css }</head><body><p class="hero runtime">About</p></body></html>` );
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
-			version: 1,
-			entries: {
-				'https://example.com/': { html: 'html/homepage.html' },
-				'https://example.com/about/': { html: 'html/about.html' },
-			},
-		} ) );
+		capture.file( join( 'html', 'homepage.html' ), `<html><head>${ css }</head><body><p class="hero runtime">Home</p></body></html>` );
+		capture.file( join( 'html', 'about.html' ), `<html><head>${ css }</head><body><p class="hero runtime">About</p></body></html>` );
+		capture.manifest( {  version: 1,  entries: {  'https://example.com/': { html: 'html/homepage.html' },  'https://example.com/about/': { html: 'html/about.html' },  },  } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
-
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		expect( html ).toContain( 'nonce="runtime"' );
 		expect( html ).toContain( '<style>.hero{' );
@@ -4656,9 +2933,8 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'bounds unhoistable style diagnostics while retaining aggregate reasons', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-style-hoist-bounded-diagnostics-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
 		// 1,200 diagnostics exceed the 31 KiB sample budget without making
 		// this bounds check stress every other export pass with 24,000 nodes.
 		const styles = Array.from(
@@ -4666,17 +2942,9 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			( _value, index ) => `<style nonce="runtime-${ index }">.x${ index }{color:red}</style>`
 		).join( '' );
 		for ( const slug of [ 'homepage', 'about' ] )
-			writeFileSync( join( outputDir, 'html', `${ slug }.html` ), `<html><head>${ styles }</head><body><p class="x0">${ slug }</p></body></html>` );
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
-			version: 1,
-			entries: {
-				'https://example.com/': { html: 'html/homepage.html' },
-				'https://example.com/about': { html: 'html/about.html' },
-			},
-		} ) );
-
+			capture.file( join( 'html', `${ slug }.html` ), `<html><head>${ styles }</head><body><p class="x0">${ slug }</p></body></html>` );
+		capture.manifest( {  version: 1,  entries: {  'https://example.com/': { html: 'html/homepage.html' },  'https://example.com/about': { html: 'html/about.html' },  },  } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
-
 		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
 		expect( diagnostics.styleHoist.diagnosticCounts.unsafe_attributes ).toBe( 1_200 );
 		expect( diagnostics.styleHoist.diagnosticsTruncated ).toBe( true );
@@ -4685,26 +2953,16 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'retains base- and CSP-bearing document styles inline with their original attributes', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-style-hoist-policy-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const baseDocument = '<html><head><base href="https://cdn.example/theme/"><style>.base{color:red}</style></head><body><p class="base">Base</p></body></html>';
 		const cspDocument = '<html><head><meta http-equiv="Content-Security-Policy" content="style-src \'nonce-runtime\'"><style nonce="runtime">.csp{color:blue}</style></head><body><p class="csp">CSP</p></body></html>';
-		writeFileSync( join( outputDir, 'html', 'homepage.html' ), baseDocument );
-		writeFileSync( join( outputDir, 'html', 'about.html' ), baseDocument );
-		writeFileSync( join( outputDir, 'html', 'csp.html' ), cspDocument );
-		writeFileSync( join( outputDir, 'html', 'csp-two.html' ), cspDocument );
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
-			version: 1,
-			entries: {
-				'https://example.com/': { html: 'html/homepage.html' },
-				'https://example.com/about': { html: 'html/about.html' },
-				'https://example.com/csp': { html: 'html/csp.html' },
-				'https://example.com/csp-two': { html: 'html/csp-two.html' },
-			},
-		} ) );
+		capture.file( join( 'html', 'homepage.html' ), baseDocument );
+		capture.file( join( 'html', 'about.html' ), baseDocument );
+		capture.file( join( 'html', 'csp.html' ), cspDocument );
+		capture.file( join( 'html', 'csp-two.html' ), cspDocument );
+		capture.manifest( {  version: 1,  entries: {  'https://example.com/': { html: 'html/homepage.html' },  'https://example.com/about': { html: 'html/about.html' },  'https://example.com/csp': { html: 'html/csp.html' },  'https://example.com/csp-two': { html: 'html/csp-two.html' },  },  } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
-
 		const homepage = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const csp = readFileSync( join( outputDir, 'website', 'csp', 'index.html' ), 'utf8' );
 		expect( homepage ).toContain( '<style>.base{color:red}</style>' );
@@ -4719,21 +2977,18 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'hoists styles when base markup cannot change URL resolution', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-style-hoist-inert-base-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const bases = [ '<base>', '<base target="_blank">', '<base href="">', '<base href="   ">', '<base href= >', '<base href=\'\t\'>', '<basefont href="https://example.com/">' ];
 		const css = '<style>.shared{color:red}</style>';
 		const entries: Record< string, { html: string } > = {};
 		for ( const [ index, base ] of bases.entries() ) {
 			const slug = `page-${ index }`;
-			writeFileSync( join( outputDir, 'html', `${ slug }.html` ), `<html><head>${ base }${ css }</head><body><p class="shared">${ index }</p></body></html>` );
+			capture.file( join( 'html', `${ slug }.html` ), `<html><head>${ base }${ css }</head><body><p class="shared">${ index }</p></body></html>` );
 			entries[ index === 0 ? 'https://example.com/' : `https://example.com/${ slug }` ] = { html: `html/${ slug }.html` };
 		}
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries } ) );
-
+		capture.manifest( { version: 1, entries } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
-
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
 		expect( html ).toContain( 'capture-' );
@@ -4741,21 +2996,18 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'keeps styles inline for non-empty quoted and unquoted base href values', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-style-hoist-effective-base-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const bases = [ '<base href=\'https://cdn.example/\'>', '<base href=https://cdn.example/>' ];
 		const css = '<style>.shared{color:red}</style>';
 		const entries: Record< string, { html: string } > = {};
 		for ( const [ index, base ] of bases.entries() ) {
 			const slug = `page-${ index }`;
-			writeFileSync( join( outputDir, 'html', `${ slug }.html` ), `<html><head>${ base }${ css }</head><body><p class="shared">${ index }</p></body></html>` );
+			capture.file( join( 'html', `${ slug }.html` ), `<html><head>${ base }${ css }</head><body><p class="shared">${ index }</p></body></html>` );
 			entries[ index === 0 ? 'https://example.com/' : `https://example.com/${ slug }` ] = { html: `html/${ slug }.html` };
 		}
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries } ) );
-
+		capture.manifest( { version: 1, entries } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
-
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
 		expect( html ).toContain( '<style>.shared{color:red}</style>' );
@@ -4763,21 +3015,13 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'hoists only CSS URLs whose new stylesheet base preserves their semantics', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-style-hoist-url-kinds-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const css = '<style>.safe{background:url("https://cdn.example/image.png"),url("/image.png"),url("data:image/gif;base64,AA==")}</style><style>.fragment{filter:url("#filter")}</style>';
-		writeFileSync( join( outputDir, 'html', 'homepage.html' ), `<html><head>${ css }</head><body><p>Home</p></body></html>` );
-		writeFileSync( join( outputDir, 'html', 'about.html' ), `<html><head>${ css }</head><body><p>About</p></body></html>` );
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
-			version: 1,
-			entries: {
-				'https://example.com/': { html: 'html/homepage.html' },
-				'https://example.com/about': { html: 'html/about.html' },
-			},
-		} ) );
+		capture.file( join( 'html', 'homepage.html' ), `<html><head>${ css }</head><body><p>Home</p></body></html>` );
+		capture.file( join( 'html', 'about.html' ), `<html><head>${ css }</head><body><p>About</p></body></html>` );
+		capture.manifest( {  version: 1,  entries: {  'https://example.com/': { html: 'html/homepage.html' },  'https://example.com/about': { html: 'html/about.html' },  },  } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
-
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		expect( html ).toContain( 'capture-' );
 		expect( html ).toContain( '<style>.fragment{filter:url("#filter")}</style>' );
@@ -4791,21 +3035,13 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		// The sentinel is base-independent like data: and absolute URLs. Classifying
 		// it as an unknown scheme would silently disable hoisting for every document
 		// that lost an asset.
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-style-hoist-sentinel-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const css = '<style>.safe{background:url("https://cdn.example/missing.png")}</style>';
-		writeFileSync( join( outputDir, 'html', 'homepage.html' ), `<html><head>${ css }</head><body><p>Home</p></body></html>` );
-		writeFileSync( join( outputDir, 'html', 'about.html' ), `<html><head>${ css }</head><body><p>About</p></body></html>` );
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
-			version: 1,
-			entries: {
-				'https://example.com/': { html: 'html/homepage.html' },
-				'https://example.com/about': { html: 'html/about.html' },
-			},
-		} ) );
+		capture.file( join( 'html', 'homepage.html' ), `<html><head>${ css }</head><body><p>Home</p></body></html>` );
+		capture.file( join( 'html', 'about.html' ), `<html><head>${ css }</head><body><p>About</p></body></html>` );
+		capture.manifest( {  version: 1,  entries: {  'https://example.com/': { html: 'html/homepage.html' },  'https://example.com/about': { html: 'html/about.html' },  },  } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
-
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		expect( html ).toContain( 'capture-' );
 		const href = /href="([^"]*capture-[^"]*)"/.exec( html )?.[ 1 ];
@@ -4815,22 +3051,13 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'preserves computed cascade when shared styles are replaced in place', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-style-hoist-browser-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const source = '<!doctype html><html><head><style>.target{color:red}</style><style>.target{color:blue}</style></head><body><p class="target">Text</p></body></html>';
-		for ( const slug of [ 'one', 'two' ] ) writeFileSync( join( outputDir, 'html', `${ slug }.html` ), source );
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
-			version: 1,
-			entries: {
-				'https://example.com/': { html: 'html/one.html' },
-				'https://example.com/one': { html: 'html/one.html' },
-				'https://example.com/two': { html: 'html/two.html' },
-			},
-		} ) );
+		for ( const slug of [ 'one', 'two' ] ) capture.file( join( 'html', `${ slug }.html` ), source );
+		capture.manifest( {  version: 1,  entries: {  'https://example.com/': { html: 'html/one.html' },  'https://example.com/one': { html: 'html/one.html' },  'https://example.com/two': { html: 'html/two.html' },  },  } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
-
-		const browser = await chromium.launch();
+		const browser = await browserContext();
 		try {
 			const original = await browser.newPage();
 			await original.setContent( source );
@@ -4853,25 +3080,16 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'retains repeated relative CSS inline in the browser', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-style-hoist-relative-browser-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const source = '<!doctype html><html><head><style>.target{color:green;background-image:url("image.png")}</style></head><body><p class="target">Text</p></body></html>';
-		for ( const slug of [ 'one', 'two' ] ) writeFileSync( join( outputDir, 'html', `${ slug }.html` ), source );
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
-			version: 1,
-			entries: {
-				'https://example.com/': { html: 'html/one.html' },
-				'https://example.com/one': { html: 'html/one.html' },
-				'https://example.com/two': { html: 'html/two.html' },
-			},
-		} ) );
+		for ( const slug of [ 'one', 'two' ] ) capture.file( join( 'html', `${ slug }.html` ), source );
+		capture.manifest( {  version: 1,  entries: {  'https://example.com/': { html: 'html/one.html' },  'https://example.com/one': { html: 'html/one.html' },  'https://example.com/two': { html: 'html/two.html' },  },  } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
-
 		const exportedHtml = readFileSync( join( outputDir, 'website', 'one', 'index.html' ), 'utf8' );
 		expect( exportedHtml ).toContain( '<style>.target{color:green;' );
 		expect( exportedHtml ).not.toContain( 'capture-' );
-		const browser = await chromium.launch();
+		const browser = await browserContext();
 		try {
 			const page = await browser.newPage();
 			await page.setContent( `<base href="https://portable.test/one/">${ exportedHtml }` );
@@ -4882,30 +3100,10 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'does not treat JavaScript url calls as CSS dependencies', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<html><head><script>function resolve(e){return url(e)}</script></head><body><main>Example</main></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
-
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/", '<html><head><script>function resolve(e){return url(e)}</script></head><body><main>Example</main></body></html>' , { entry: { html: 'html/homepage.html' } } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
 		expect( html ).not.toContain( 'function resolve(e){return url(e)}' );
@@ -4913,61 +3111,22 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'does not treat fragment-only CSS urls as dependencies', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<html><head><style>.icon{clip-path:url(#icon-clip)}</style></head><body><svg><clipPath id="icon-clip"></clipPath></svg></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
-
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/", '<html><head><style>.icon{clip-path:url(#icon-clip)}</style></head><body><svg><clipPath id="icon-clip"></clipPath></svg></body></html>' , { entry: { html: 'html/homepage.html' } } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
 		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
 		expect( diagnostics.unresolvedDependencies ).toEqual( [] );
 	} );
 
 	it( 'preserves a self-contained data: image src instead of treating it as an unresolved dependency', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const dataUri =
 			"data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' width='1em' height='1em' viewBox='0 0 256 256'%3e%3c/svg%3e";
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			`<html><body><img src="${ dataUri }" width="40" height="40" alt="Trello logo"></body></html>`
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
-
+		capture.file( join( 'html', 'homepage.html' ), `<html><body><img src="${ dataUri }" width="40" height="40" alt="Trello logo"></body></html>` );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { html: 'html/homepage.html' } },  } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
 		expect( cheerio.load( html )( 'img' ).attr( 'src' ) ).toBe( dataUri );
@@ -4976,59 +3135,32 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'removes fixed provider acquisition chrome and its matching body reservation', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<!doctype html><html><head></head><body style="min-height:100%;padding-bottom:62px !important"><main><h1>Home</h1></main><div id="provider-promo" style="position:fixed !important;height:62px !important;bottom:0 !important"><a href="https://provider.example/signup">Powered by Provider. Create your own unique website. Get Started</a></div></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/", '<!doctype html><html><head></head><body style="min-height:100%;padding-bottom:62px !important"><main><h1>Home</h1></main><div id="provider-promo" style="position:fixed !important;height:62px !important;bottom:0 !important"><a href="https://provider.example/signup">Powered by Provider. Create your own unique website. Get Started</a></div></body></html>' , { entry: { html: 'html/homepage.html' } } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		expect( html ).not.toContain( 'provider-promo' );
 		expect( html ).not.toContain( 'padding-bottom:62px' );
 		expect( html ).toContain( '<h1>Home</h1>' );
 	} );
 
-	it( 'drops inert shell mounts and hidden detached navigation replicas', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<!doctype html><html><body><header><a href="/work">Work</a></header><main><h1>Home</h1><div class="layout-spacer"></div></main><div id="account-app"></div><footer style="bottom:-999px;position:fixed"></footer><div style="display:none;position:absolute"><a href="/work">Work</a></div></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-			} )
-		);
+	it( 'keeps headers after hidden runtime mounts with repeated legal-page navigation (#1949)', () => {
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		const nav = '<a href="/meet">MEET THE THERAPIST</a>'.repeat( 3 );
+		capture.page( 'https://example.com/privacy-policy', `<html><body><div><div style="display:none">Runtime mount</div><div><header id="site-header"><nav>${ nav }</nav></header><main><h1>Privacy Policy</h1></main></div></div></body></html>` );
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/privacy-policy', platform: 'generic', summary: {}, failures: [] } );
+		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+		expect( $( 'header nav a' ) ).toHaveLength( 3 );
+		expect( $( 'main h1' ).text() ).toBe( 'Privacy Policy' );
+	} );
 
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
+	it( 'drops inert shell mounts and hidden detached navigation replicas', () => {
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/", '<!doctype html><html><body><header><a href="/work">Work</a></header><main><h1>Home</h1><div class="layout-spacer"></div></main><div id="account-app"></div><footer style="bottom:-999px;position:fixed"></footer><div style="display:none;position:absolute"><a href="/work">Work</a></div></body></html>' , { entry: { html: 'html/homepage.html' } } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		expect( html ).toContain( 'layout-spacer' );
 		expect( html ).not.toContain( 'account-app' );
@@ -5038,29 +3170,10 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'keeps an in-flow empty footer landmark while dropping detached footer chrome', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<!doctype html><html><head><style>#SITE_FOOTER{height:152px;background:#eee}</style></head><body><main><h1>Home</h1></main><footer id="SITE_FOOTER" class="wixui-footer"><div class="footer-grid"><div class="footer-cell"></div></div></footer><div role="contentinfo" class="site-footer-band"></div><div id="footer-mount"></div><footer class="cookie-footer" style="position:fixed;bottom:0"></footer></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/", '<!doctype html><html><head><style>#SITE_FOOTER{height:152px;background:#eee}</style></head><body><main><h1>Home</h1></main><footer id="SITE_FOOTER" class="wixui-footer"><div class="footer-grid"><div class="footer-cell"></div></div></footer><div role="contentinfo" class="site-footer-band"></div><div id="footer-mount"></div><footer class="cookie-footer" style="position:fixed;bottom:0"></footer></body></html>' , { entry: { html: 'html/homepage.html' } } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		// The band a site footer reserves is carried by CSS, so the empty
 		// landmark has to survive or the page loses that height everywhere.
@@ -5074,26 +3187,16 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'keeps popup-behavior image sizing boxes while removing empty runtime roots', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			`<!doctype html><html><head><style>
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/", `<!doctype html><html><head><style>
 			.size-box{position:absolute}.element-main-box{position:relative;height:100%}
 			.element-background-image{position:absolute;inset:0;overflow:hidden}
 			</style></head><body><div class="size-box"><div class="element-main-box has-popup">
 			<div class="element-background-layer has-popup"><div class="element-background-image"><div class="image-box-image-wrapper" style="width:1275px;height:687px"><div class="image-box-background-image"></div></div></div></div>
 			<div class="element-border-box has-popup"><div class="element-content-box has-popup"><div class="content-container has-popup" style="width:1275px;min-height:687px"></div></div></div>
 			</div></div><div id="modal-root"></div><div class="ReactModalPortal"></div><div class="chakra-portal"></div><div class="portal"></div><div class="toast-root"></div><div id="mount"></div><div id="account-app"></div>
-			<div id="fixed-box" style="position:fixed"></div><div id="absolute-box" style="position:absolute"></div><div id="bottom-box" style="bottom:0"></div></body></html>`
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } )
-		);
-
+			<div id="fixed-box" style="position:fixed"></div><div id="absolute-box" style="position:absolute"></div><div id="bottom-box" style="bottom:0"></div></body></html>` );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
 		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
 		expect( $( '.element-border-box > .element-content-box > .content-container' ).attr( 'style' ) ).toBe( 'width:1275px;min-height:687px' );
@@ -5102,145 +3205,43 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'collapses responsive forms whose only difference is a generated target id', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'html-mobile' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<!doctype html><html><body><main><form target="form-target-1786654426341"><label>Email<input name="email"></label></form><iframe id="form-target-1786654426341" name="form-target-1786654426341"></iframe></main></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<!doctype html><html><body><main><form target="form-target-1786654432586"><label>Email<input name="email"></label></form><iframe id="form-target-1786654432586" name="form-target-1786654432586"></iframe></main></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'html-mobile', 'homepage.html' ), '<!doctype html><html><body><main><form target="form-target-1786654432586"><label>Email<input name="email"></label></form><iframe id="form-target-1786654432586" name="form-target-1786654432586"></iframe></main></body></html>' );
+		capture.page( "https://example.com/", '<!doctype html><html><body><main><form target="form-target-1786654426341"><label>Email<input name="email"></label></form><iframe id="form-target-1786654426341" name="form-target-1786654426341"></iframe></main></body></html>' , { entry: { html: 'html/homepage.html' } } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		expect( html ).not.toContain( 'data-blocks-engine-capture-desktop-document' );
 		expect( html.match( /<form/g ) ).toHaveLength( 1 );
 	} );
 
 	it( 'exports referenced same-origin runtime dependencies and diagnoses missing ones', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'media' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'resources', '_runtimes' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'resources', '_json' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'resources', '_fonts' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'resources', '_videos' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'resources', '.netlify', 'scripts' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'resources', 'assets', 'css' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'resources', 'assets', 'images' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<img src="https://example.com/hero.png"><img src="/assets/images/mobile-only.webp" srcset="/assets/images/mobile-only.webp 390w"><link rel="stylesheet" href="/assets/css/site.css"><link rel="preload" href="/_runtimes/site.js" as="script"><link rel="preload" href="/_json/site.json" as="fetch"><link rel="preload" href="/_json/missing.json" as="fetch"><style>@font-face{src:url("/_fonts/site.woff2")}@font-face{src:url("/_fonts/missing.woff2")}.hero{background:url(&quot;/assets/images/missing-background.webp&quot;)}</style><video><source src="/_videos/hero"></video><video><source src="/_videos/missing"></video><script src="/_runtimes/site.js" defer></script><script src="/.netlify/scripts/rum" async></script><script src="/_runtimes/missing-script.js" defer></script><script type="module">import { Site } from "/_runtimes/site.js"; import "/_runtimes/missing.js";</script>'
-		);
-		writeFileSync( join( outputDir, 'media', 'hero.png' ), 'png' );
-		writeFileSync( join( outputDir, 'resources', '_runtimes', 'site.js' ), 'export class Site {}' );
-		writeFileSync(
-			join( outputDir, 'resources', '_json', 'site.json' ),
-			'{"image":"https://example.com/hero.png"}'
-		);
-		writeFileSync( join( outputDir, 'resources', '_fonts', 'site.woff2' ), 'font' );
-		writeFileSync( join( outputDir, 'resources', '_videos', 'hero.mp4' ), 'video' );
-		writeFileSync( join( outputDir, 'resources', '.netlify', 'scripts', 'rum' ), 'rum();' );
-		writeFileSync(
-			join( outputDir, 'resources', 'assets', 'css', 'site.css' ),
-			'.hero{background:url("../images/hero.webp")}.missing{background:url("../images/missing.webp")}.badge{background:url("../images/badge.png")}'
-		);
-		writeFileSync( join( outputDir, 'resources', 'assets', 'images', 'hero.webp' ), 'webp' );
-		writeFileSync(
-			join( outputDir, 'resources', 'assets', 'images', 'mobile-only.webp' ),
-			'mobile'
-		);
-		writeFileSync(
-			join( outputDir, 'resources', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				resources: {
-					'https://example.com/_runtimes/site.js': {
-						path: 'resources/_runtimes/site.js',
-						contentType: 'text/javascript',
-					},
-					'https://example.com/_json/site.json': {
-						path: 'resources/_json/site.json',
-						contentType: 'application/json',
-					},
-					'https://example.com/_fonts/site.woff2': {
-						path: 'resources/_fonts/site.woff2',
-						contentType: 'font/woff2',
-					},
-					'https://example.com/_videos/hero': {
-						path: 'resources/_videos/hero.mp4',
-						contentType: 'video/mp4',
-					},
-					'https://example.com/.netlify/scripts/rum': {
-						path: 'resources/.netlify/scripts/rum',
-						contentType: 'application/javascript; charset=UTF-8',
-					},
-					'https://example.com/assets/css/site.css': {
-						path: 'resources/assets/css/site.css',
-						contentType: 'text/css',
-					},
-					'https://example.com/assets/images/hero.webp': {
-						path: 'resources/assets/images/hero.webp',
-						contentType: 'image/webp',
-					},
-					'https://example.com/assets/images/mobile-only.webp': {
-						path: 'resources/assets/images/mobile-only.webp',
-						contentType: 'image/webp',
-					},
-				},
-				failures: [],
-			} )
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-			} )
-		);
+		const capture = exportFixture( { directories: [ 'html', 'screenshots', 'media' ] } );
+		const outputDir = capture.build();
+		capture.directory( join( 'resources', '_runtimes' ) );
+		capture.directory( join( 'resources', '_json' ) );
+		capture.directory( join( 'resources', '_fonts' ) );
+		capture.directory( join( 'resources', '_videos' ) );
+		capture.directory( join( 'resources', '.netlify', 'scripts' ) );
+		capture.directory( join( 'resources', 'assets', 'css' ) );
+		capture.directory( join( 'resources', 'assets', 'images' ) );
+		capture.file( join( 'resources', '_runtimes', 'site.js' ), 'export class Site {}' );
+		capture.file( join( 'resources', '_json', 'site.json' ), '{"image":"https://example.com/hero.png"}' );
+		capture.file( join( 'resources', '_fonts', 'site.woff2' ), 'font' );
+		capture.file( join( 'resources', '_videos', 'hero.mp4' ), 'video' );
+		capture.file( join( 'resources', '.netlify', 'scripts', 'rum' ), 'rum();' );
+		capture.file( join( 'resources', 'assets', 'css', 'site.css' ), '.hero{background:url("../images/hero.webp")}.missing{background:url("../images/missing.webp")}.badge{background:url("../images/badge.png")}' );
+		capture.file( join( 'resources', 'assets', 'images', 'hero.webp' ), 'webp' );
+		capture.file( join( 'resources', 'assets', 'images', 'mobile-only.webp' ), 'mobile' );
+		capture.json( join( 'resources', 'manifest.json' ), {  version: 1,  resources: {  'https://example.com/_runtimes/site.js': {  path: 'resources/_runtimes/site.js',  contentType: 'text/javascript',  },  'https://example.com/_json/site.json': {  path: 'resources/_json/site.json',  contentType: 'application/json',  },  'https://example.com/_fonts/site.woff2': {  path: 'resources/_fonts/site.woff2',  contentType: 'font/woff2',  },  'https://example.com/_videos/hero': {  path: 'resources/_videos/hero.mp4',  contentType: 'video/mp4',  },  'https://example.com/.netlify/scripts/rum': {  path: 'resources/.netlify/scripts/rum',  contentType: 'application/javascript; charset=UTF-8',  },  'https://example.com/assets/css/site.css': {  path: 'resources/assets/css/site.css',  contentType: 'text/css',  },  'https://example.com/assets/images/hero.webp': {  path: 'resources/assets/images/hero.webp',  contentType: 'image/webp',  },  'https://example.com/assets/images/mobile-only.webp': {  path: 'resources/assets/images/mobile-only.webp',  contentType: 'image/webp',  },  },  failures: [],  } );
+		capture.page( "https://example.com/", '<img src="https://example.com/hero.png"><img src="/assets/images/mobile-only.webp" srcset="/assets/images/mobile-only.webp 390w"><link rel="stylesheet" href="/assets/css/site.css"><link rel="preload" href="/_runtimes/site.js" as="script"><link rel="preload" href="/_json/site.json" as="fetch"><link rel="preload" href="/_json/missing.json" as="fetch"><style>@font-face{src:url("/_fonts/site.woff2")}@font-face{src:url("/_fonts/missing.woff2")}.hero{background:url(&quot;/assets/images/missing-background.webp&quot;)}</style><video><source src="/_videos/hero"></video><video><source src="/_videos/missing"></video><script src="/_runtimes/site.js" defer></script><script src="/.netlify/scripts/rum" async></script><script src="/_runtimes/missing-script.js" defer></script><script type="module">import { Site } from "/_runtimes/site.js"; import "/_runtimes/missing.js";</script>' , { entry: { html: 'html/homepage.html' } } );
 		// Image acquisition verified this stylesheet-only image as a media original.
-		writeFileSync( join( outputDir, 'media', 'badge.png' ), 'badge' );
-		writeFileSync( join( outputDir, 'image-assets.json' ), JSON.stringify( { version: 1, images: [ {
-			kind: 'image',
-			source_urls: [ 'https://example.com/assets/images/badge.png' ],
-			references: [ { kind: 'CSS', document_url: 'https://example.com/assets/css/site.css', location: 'declaration:1:background', source_url: 'https://example.com/assets/images/badge.png' } ],
-			resolved_original: 'https://example.com/assets/images/badge.png',
-			original: { source_url: 'https://example.com/assets/images/badge.png', content_type: 'image/png', width: 16, height: 136, sha256: '8805cdea2b197df5fd555dc359a7f5beed2e6d65de498ce3df3de94d78e1e262' },
-			local_path: join( outputDir, 'media', 'badge.png' ),
-		} ] } ) );
+		capture.json( 'image-assets.json', { version: 1, images: [ {  kind: 'image',  source_urls: [ 'https://example.com/assets/images/badge.png' ],  references: [ { kind: 'CSS', document_url: 'https://example.com/assets/css/site.css', location: 'declaration:1:background', source_url: 'https://example.com/assets/images/badge.png' } ],  resolved_original: 'https://example.com/assets/images/badge.png',  original: { source_url: 'https://example.com/assets/images/badge.png', content_type: 'image/png', width: 16, height: 136, sha256: '8805cdea2b197df5fd555dc359a7f5beed2e6d65de498ce3df3de94d78e1e262' },  local_path: join( outputDir, 'media', 'badge.png' ),  } ] } );
 		const media = MediaStubStore.load( outputDir );
-		media.markSuccess( 'https://example.com/hero.png', join( outputDir, 'media', 'hero.png' ) );
-		media.markSuccess( 'https://example.com/assets/images/badge.png', join( outputDir, 'media', 'badge.png' ) );
+		capture.media( 'https://example.com/hero.png', 'media/hero.png', 'png' , media );
+		capture.media( 'https://example.com/assets/images/badge.png', 'media/badge.png', 'badge' , media );
 		media.flush();
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
-
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
 		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
 		expect( readFileSync( join( outputDir, 'website', '_fonts', 'site.woff2' ), 'utf8' ) ).toBe(
 			'font'
@@ -5291,34 +3292,11 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'preserves percent-encoded route segments in artifact paths and links', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<h1>Home</h1><a href="https://example.com/comms-%26-use-cases">Cases</a>'
-		);
-		writeFileSync( join( outputDir, 'html', 'cases.html' ), '<h1>Cases</h1>' );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/': { html: 'html/homepage.html' },
-					'https://example.com/comms-%26-use-cases': { html: 'html/cases.html' },
-				},
-			} )
-		);
-
-		const receiptPath = exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
-
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/", '<h1>Home</h1><a href="https://example.com/comms-%26-use-cases">Cases</a>' , { entry: { html: 'html/homepage.html' } } );
+		capture.page( "https://example.com/comms-%26-use-cases", '<h1>Cases</h1>' , { entry: { html: 'html/cases.html' } } );
+		const receiptPath = exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
 		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
 		expect( receipt.routes ).toContainEqual( {
 			url: 'https://example.com/comms-%26-use-cases',
@@ -5329,74 +3307,24 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		).toContain( 'href="/comms-%26-use-cases/index.html"' );
 	} );
 
-	it( 'rejects encoded route paths that escape the website directory', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<h1>Home</h1><a href="/%2e%2e%2fescape">Escape</a>'
-		);
-		writeFileSync( join( outputDir, 'html', 'escape.html' ), '<h1>Escape</h1>' );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/': { html: 'html/homepage.html' },
-					'https://example.com/%2e%2e%2fescape': { html: 'html/escape.html' },
-				},
-			} )
-		);
-
+	it( 'rejects an entrypoint whose encoded path escapes the website directory', () => {
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/", '<h1>Home</h1><a href="/%2e%2e%2fescape">Escape</a>' , { entry: { html: 'html/homepage.html' } } );
+		capture.page( "https://example.com/%2e%2e%2fescape", '<h1>Escape</h1>' , { entry: { html: 'html/escape.html' } } );
 		expect( () =>
-			exportWebsiteCapture( {
-				outputDir,
-				sourceUrl: 'https://example.com/',
-				platform: 'fake',
-				summary: {},
-				failures: [],
-			} )
+			exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/%2e%2e%2fescape',  platform: 'fake',  summary: {},  failures: [],  } )
 		).toThrow( 'escapes the website directory' );
 	} );
 
 	it( 'uses a route whose canonical URL identifies it as the source homepage', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'home.html' ),
-			'<h1>Canonical home</h1><a href="/shop/about">About</a><a href="/downloads/guide.pdf">Guide</a>'
-		);
-		writeFileSync( join( outputDir, 'html', 'about.html' ), '<h1>About</h1>' );
-		writeFileSync( join( outputDir, 'html', 'orphan.html' ), '<h1>Unlinked draft</h1>' );
-		writeFileSync( join( outputDir, 'html', 'guide.html' ), '<h1>Download guide</h1>' );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/shop/home': {
-						html: 'html/home.html',
-						metadata: { openGraph: { 'og:url': 'https://example.com/shop' } },
-					},
-					'https://example.com/shop/about': { html: 'html/about.html' },
-					'https://example.com/shop/orphan': { html: 'html/orphan.html' },
-					'https://example.com/downloads/guide.pdf': { html: 'html/guide.html' },
-				},
-			} )
-		);
-
-		const receiptPath = exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/shop',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
-
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/shop/home", '<h1>Canonical home</h1><a href="/shop/about">About</a><a href="/downloads/guide.pdf">Guide</a>', { entry: { html: 'html/home.html',  metadata: { openGraph: { 'og:url': 'https://example.com/shop' } } } } );
+		capture.page( "https://example.com/shop/about", '<h1>About</h1>' , { entry: { html: 'html/about.html' } } );
+		capture.page( "https://example.com/shop/orphan", '<h1>Unlinked draft</h1>' , { entry: { html: 'html/orphan.html' } } );
+		capture.page( "https://example.com/downloads/guide.pdf", '<h1>Download guide</h1>' , { entry: { html: 'html/guide.html' } } );
+		const receiptPath = exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/shop',  platform: 'fake',  summary: {},  failures: [],  } );
 		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
 		expect( receipt.routes ).toEqual( [
 			{ url: 'https://example.com/shop/home', path: 'website/index.html' },
@@ -5424,24 +3352,10 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		// while routes.length silently dropped, and nothing named which route
 		// or why. The manifest reflects that outcome directly: the failed
 		// route has no `html` key, exactly like a real timed-out capture.
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync( join( outputDir, 'html', 'home.html' ), '<h1>Home</h1>' );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/': { html: 'html/home.html' },
-					// No `html` key: capturePerViewport's desktop goto attempts all
-					// timed out, so entry.html was never set.
-					'https://example.com/photos.html': {},
-				},
-			} )
-		);
-
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'html', 'home.html' ), '<h1>Home</h1>' );
+		capture.manifest( {  version: 1,  entries: {  'https://example.com/': { html: 'html/home.html' },  /*  No `html` key: capturePerViewport's desktop goto attempts all */  /*  timed out, so entry.html was never set. */  'https://example.com/photos.html': {},  },  } );
 		// Shaped like the real FailureEntry from screenshots/failures.json (url,
 		// viewport, stage, error, ...), but the export function only depends on
 		// the loose {url,error} contract it declares.
@@ -5459,14 +3373,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 				error: 'page.goto: Timeout 30000ms exceeded.',
 			},
 		];
-		const receiptPath = exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures,
-		} );
-
+		const receiptPath = exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures,  } );
 		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
 		expect( receipt.routes ).toEqual( [
 			{ url: 'https://example.com/', path: 'website/index.html' },
@@ -5479,7 +3386,6 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 					'desktop/goto: page.goto: Timeout 30000ms exceeded.; mobile/goto: page.goto: Timeout 30000ms exceeded.',
 			},
 		] );
-
 		const diagnostics = JSON.parse(
 			readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' )
 		);
@@ -5487,22 +3393,10 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'names a discovered HTTP 404 as route_not_found instead of a capture failure', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync( join( outputDir, 'html', 'home.html' ), '<h1>Home</h1>' );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/': { html: 'html/home.html' },
-					'https://example.com/shop/p/the-echo-vase': {},
-				},
-			} )
-		);
-
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'html', 'home.html' ), '<h1>Home</h1>' );
+		capture.manifest( {  version: 1,  entries: {  'https://example.com/': { html: 'html/home.html' },  'https://example.com/shop/p/the-echo-vase': {},  },  } );
 		const failures: Array< { url: string; viewport: string; stage: string; error: string } > = [
 			{
 				url: 'https://example.com/shop/p/the-echo-vase',
@@ -5517,14 +3411,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 				error: 'HTTP 404',
 			},
 		];
-		const receiptPath = exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: { routesFailed: 0, routesSkipped: 1 },
-			failures,
-		} );
-
+		const receiptPath = exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: { routesFailed: 0, routesSkipped: 1 },  failures,  } );
 		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
 		expect( receipt.routes ).toEqual( [
 			{ url: 'https://example.com/', path: 'website/index.html' },
@@ -5540,23 +3427,16 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( receipt.summary.routesFailed ).toBe( 0 );
 	} );
 
-	it.each( [ 404, 410, 'rendered 404' ] )( 'reports a source-absent %s link without failing capture or cleanup completeness', ( absence ) => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-source-absence-' ) );
-		dirs.push( outputDir );
-		for ( const dir of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, dir ), { recursive: true } );
+	it.each( [ 404, 410, '404 (render matches absent nonce sibling)', 'rendered 404' ] )( 'reports a source-absent %s link without failing capture or cleanup completeness', ( absence ) => {
+		const capture = exportFixture();
+		const outputDir = capture.build();
+		for ( const dir of [ 'html', 'screenshots' ] ) capture.directory( dir );
 		const sourceUrl = 'https://example.com/';
 		const absentUrl = 'https://example.com/gone.html';
-		writeFileSync( join( outputDir, 'html', 'home.html' ), '<h1>Home</h1><a href="gone.html#details">Gone</a>' );
-		writeFileSync( join( outputDir, 'html', 'gone.html' ), '<h1>404</h1><p>Page not found</p>' );
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
-			version: 1, entries: {
-				[ sourceUrl ]: { html: 'html/home.html', cleanup: { policy: cleanupPolicy(), reports: [ { failures: [], residual: 0 } ] } },
-				[ absentUrl ]: absence === 'rendered 404' ? { html: 'html/gone.html' } : {},
-			},
-		} ) );
-		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
-			outputDir, sourceUrl, platform: 'generic', summary: { routesFailed: 0 },
-			failures: absence === 'rendered 404' ? [] : [ { url: absentUrl, error: `HTTP ${ absence }` } ],
+		capture.file( join( 'html', 'home.html' ), '<h1>Home</h1><a href="gone.html#details">Gone</a>' );
+		capture.file( join( 'html', 'gone.html' ), '<h1>404</h1><p>Page not found</p>' );
+		capture.manifest( {  version: 1, entries: {  [ sourceUrl ]: { html: 'html/home.html', cleanup: { policy: cleanupPolicy(), reports: [ { failures: [], residual: 0 } ] } },  [ absentUrl ]: absence === 'rendered 404' ? { html: 'html/gone.html' } : {},  },  } );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {  outputDir, sourceUrl, platform: 'generic', summary: { routesFailed: 0 },  failures: absence === 'rendered 404' ? [] : [ { url: absentUrl, error: `HTTP ${ absence }` } ],
 		} ), 'utf8' ) );
 		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
 		expect( receipt.cleanup.complete ).toBe( true );
@@ -5570,48 +3450,27 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it.each( [ 'missing policy', 'missing reports', 'failure', 'residual', 'different policy' ] )( 'still fails cleanup for an exported page with %s', ( problem ) => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-retained-cleanup-' ) );
-		dirs.push( outputDir );
-		for ( const dir of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, dir ), { recursive: true } );
-		writeFileSync( join( outputDir, 'html', 'home.html' ), '<h1>Home</h1>' );
-		writeFileSync( join( outputDir, 'html', 'other.html' ), '<h1>Other</h1>' );
+		const capture = exportFixture();
+		const outputDir = capture.build();
+		for ( const dir of [ 'html', 'screenshots' ] ) capture.directory( dir );
 		const policy = cleanupPolicy();
 		const reports = [ { failures: [] as string[], residual: 0 } ];
-		const cleanup = {
-			...( problem === 'missing policy' ? {} : { policy: problem === 'different policy' ? { ...policy, rules: [] } : policy } ),
-			...( problem === 'missing reports' ? {} : { reports: [ {
-				failures: problem === 'failure' ? [ 'cleanup failed' ] : [], residual: problem === 'residual' ? 1 : 0,
-			} ] } ),
-		};
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
-			version: 1, entries: {
-				'https://example.com/': { html: 'html/home.html', cleanup: { policy, reports } },
-				'https://example.com/other': { html: 'html/other.html', cleanup },
-			},
-		} ) );
-		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
-			outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [],
-		} ), 'utf8' ) );
+		const cleanup = { ...( problem === 'missing policy' ? {} : { policy: problem === 'different policy' ? { ...policy, rules: [] } : policy } ), ...( problem === 'missing reports' ? {} : { reports: [ { failures: problem === 'failure' ? [ 'cleanup failed' ] : [], residual: problem === 'residual' ? 1 : 0, } ] } ), };
+		capture.page( "https://example.com/", '<h1>Home</h1>', { entry: { html: 'html/homepage.html',  cleanup: { policy, reports } } } );
+		capture.page( "https://example.com/other", '<h1>Other</h1>', { entry: { html: 'html/other.html',  cleanup } } );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {  outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [],  } ), 'utf8' ) );
 		expect( receipt.cleanup.complete ).toBe( false );
 	} );
 
 	it.each( [ 'https://example.com/sitemap-only', 'https://example.com/gone?view=current' ] )( 'keeps missing cleanup evidence blocking for unlinked route %s', ( missingUrl ) => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-missing-capture-cleanup-' ) );
-		dirs.push( outputDir );
-		for ( const dir of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, dir ), { recursive: true } );
+		const capture = exportFixture();
+		const outputDir = capture.build();
+		for ( const dir of [ 'html', 'screenshots' ] ) capture.directory( dir );
 		const sourceUrl = 'https://example.com/';
 		const absentUrl = 'https://example.com/gone?view=removed';
-		writeFileSync( join( outputDir, 'html', 'home.html' ), '<h1>Home</h1>' );
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
-			version: 1, entries: {
-				[ sourceUrl ]: { html: 'html/home.html', cleanup: { policy: cleanupPolicy(), reports: [ { failures: [], residual: 0 } ] } },
-				[ missingUrl ]: { html: 'html/missing.html' },
-				[ absentUrl ]: {},
-			},
-		} ) );
-		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
-			outputDir, sourceUrl, platform: 'generic', summary: { routesFailed: 0 }, failures: [ { url: absentUrl, error: 'HTTP 404' } ],
-		} ), 'utf8' ) );
+		capture.file( join( 'html', 'home.html' ), '<h1>Home</h1>' );
+		capture.manifest( {  version: 1, entries: {  [ sourceUrl ]: { html: 'html/home.html', cleanup: { policy: cleanupPolicy(), reports: [ { failures: [], residual: 0 } ] } },  [ missingUrl ]: { html: 'html/missing.html' },  [ absentUrl ]: {},  },  } );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {  outputDir, sourceUrl, platform: 'generic', summary: { routesFailed: 0 }, failures: [ { url: absentUrl, error: 'HTTP 404' } ],  } ), 'utf8' ) );
 		expect( receipt.cleanup.complete ).toBe( false );
 		expect( receipt.excludedRoutes ).toEqual( [ absentUrl ] );
 		expect( receipt.discoveryDiagnostics ).toContainEqual( expect.objectContaining( { code: 'route_capture_failed', url: missingUrl } ) );
@@ -5619,20 +3478,16 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it.each( [ 'HTTP 500', 'Timeout exceeded', 'mixed 404 and timeout', 'unattempted' ] )( 'does not call an uncaptured %s route absent at source', ( error ) => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-unproven-absence-' ) );
-		dirs.push( outputDir );
-		for ( const dir of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, dir ), { recursive: true } );
+		const capture = exportFixture();
+		const outputDir = capture.build();
+		for ( const dir of [ 'html', 'screenshots' ] ) capture.directory( dir );
 		const sourceUrl = 'https://example.com/';
 		const url = 'https://example.com/other';
-		writeFileSync( join( outputDir, 'html', 'home.html' ), '<h1>Home</h1><a href="/other">Other</a>' );
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
-			version: 1, entries: { [ sourceUrl ]: { html: 'html/home.html' }, ...( error === 'unattempted' ? {} : { [ url ]: {} } ) },
-		} ) );
+		capture.file( join( 'html', 'home.html' ), '<h1>Home</h1><a href="/other">Other</a>' );
+		capture.manifest( {  version: 1, entries: { [ sourceUrl ]: { html: 'html/home.html' }, ...( error === 'unattempted' ? {} : { [ url ]: {} } ) },  } );
 		const failures = error === 'unattempted' ? [] : error === 'mixed 404 and timeout'
 			? [ { url, error: 'HTTP 404' }, { url, error: 'Timeout exceeded' } ] : [ { url, error } ];
-		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
-			outputDir, sourceUrl, platform: 'generic', summary: { routesFailed: 0 }, failures,
-		} ), 'utf8' ) );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {  outputDir, sourceUrl, platform: 'generic', summary: { routesFailed: 0 }, failures,  } ), 'utf8' ) );
 		expect( receipt.excludedRoutes ).toEqual( [] );
 		expect( receipt.summary.complete ).toBe( false );
 		expect( JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) ).unresolvedAnchors ).toEqual( [ {
@@ -5647,45 +3502,18 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		// template -- <h1>404</h1> plus a couple of short lines -- parameterized
 		// only by the route name the visitor asked for. A real thin route (here,
 		// an "Access Denied" gate) must survive untouched.
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const notFoundHtml = ( routeName: string ) =>
 			`<html><body><div class="text-center"><h1>404</h1><h2>Page Not Found</h2>` +
 			`<p>The page "${ routeName }" could not be found in this application.</p>` +
 			`<button>Go Home</button></div></body></html>`;
-		writeFileSync(
-			join( outputDir, 'html', 'home.html' ),
-			'<html><body><h1>Real Home</h1><p>Welcome to the real homepage, with real content on it.</p></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'html', 'admin.html' ),
-			'<html><body><h1>Access Denied</h1></body></html>'
-		);
-		writeFileSync( join( outputDir, 'html', 'favorites.html' ), notFoundHtml( 'Favorites' ) );
-		writeFileSync( join( outputDir, 'html', 'sellerprofile.html' ), notFoundHtml( 'SellerProfile' ) );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/Home': { html: 'html/home.html' },
-					'https://example.com/AdminDashboard': { html: 'html/admin.html' },
-					'https://example.com/Favorites': { html: 'html/favorites.html' },
-					'https://example.com/SellerProfile': { html: 'html/sellerprofile.html' },
-				},
-			} )
-		);
-
-		const receiptPath = exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/Home',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
-
+		capture.file( join( 'html', 'home.html' ), '<html><body><h1>Real Home</h1><p>Welcome to the real homepage, with real content on it.</p></body></html>' );
+		capture.file( join( 'html', 'admin.html' ), '<html><body><h1>Access Denied</h1></body></html>' );
+		capture.file( join( 'html', 'favorites.html' ), notFoundHtml( 'Favorites' ) );
+		capture.file( join( 'html', 'sellerprofile.html' ), notFoundHtml( 'SellerProfile' ) );
+		capture.manifest( {  version: 1,  entries: {  'https://example.com/Home': { html: 'html/home.html' },  'https://example.com/AdminDashboard': { html: 'html/admin.html' },  'https://example.com/Favorites': { html: 'html/favorites.html' },  'https://example.com/SellerProfile': { html: 'html/sellerprofile.html' },  },  } );
+		const receiptPath = exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/Home',  platform: 'fake',  summary: {},  failures: [],  } );
 		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
 		expect( receipt.routes.map( ( r: { url: string } ) => r.url ) ).toEqual( [
 			'https://example.com/Home',
@@ -5725,39 +3553,16 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		// a body with no text and no content-bearing elements. Exported, that blank
 		// page later fails the whole WordPress import, so it must be excluded like
 		// an absent document. The source URL stays in even when it renders empty.
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const emptyHtml =
 			'<!DOCTYPE html><html><head><title>t</title></head><body>\n' +
 			'<script>console.log("boot");</script><style>body{margin:0}</style>\n</body></html>';
-		writeFileSync( join( outputDir, 'html', 'home.html' ), emptyHtml );
-		writeFileSync( join( outputDir, 'html', 'blank.html' ), emptyHtml );
-		writeFileSync(
-			join( outputDir, 'html', 'gallery.html' ),
-			'<html><body><img src="/photo.jpg" alt=""></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/': { html: 'html/home.html' },
-					'https://example.com/blank': { html: 'html/blank.html' },
-					'https://example.com/gallery': { html: 'html/gallery.html' },
-				},
-			} )
-		);
-
-		const receiptPath = exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
-
+		capture.file( join( 'html', 'home.html' ), emptyHtml );
+		capture.file( join( 'html', 'blank.html' ), emptyHtml );
+		capture.file( join( 'html', 'gallery.html' ), '<html><body><img src="/photo.jpg" alt=""></body></html>' );
+		capture.manifest( {  version: 1,  entries: {  'https://example.com/': { html: 'html/home.html' },  'https://example.com/blank': { html: 'html/blank.html' },  'https://example.com/gallery': { html: 'html/gallery.html' },  },  } );
+		const receiptPath = exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
 		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
 		expect( receipt.routes.map( ( r: { url: string } ) => r.url ) ).toEqual( [
 			'https://example.com/',
@@ -5777,32 +3582,11 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'names a route whose HTML file went missing on disk after capture claimed success', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync( join( outputDir, 'html', 'home.html' ), '<h1>Home</h1>' );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/': { html: 'html/home.html' },
-					// Manifest claims success, but the file it points at never
-					// landed on disk (or was since removed).
-					'https://example.com/gone.html': { html: 'html/gone.html' },
-				},
-			} )
-		);
-
-		const receiptPath = exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
-
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'html', 'home.html' ), '<h1>Home</h1>' );
+		capture.manifest( {  version: 1,  entries: {  'https://example.com/': { html: 'html/home.html' },  /*  Manifest claims success, but the file it points at never */  /*  landed on disk (or was since removed). */  'https://example.com/gone.html': { html: 'html/gone.html' },  },  } );
+		const receiptPath = exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
 		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
 		expect( receipt.routes ).toEqual( [
 			{ url: 'https://example.com/', path: 'website/index.html' },
@@ -5821,34 +3605,10 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		// rather than adding a second, parallel reporting mechanism: both discovery-time
 		// and capture-time route losses are reported through the same {code,url,reason}
 		// list in the receipt and diagnostics.json.
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync( join( outputDir, 'html', 'home.html' ), '<h1>Home</h1>' );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { html: 'html/home.html' } },
-			} )
-		);
-
-		const receiptPath = exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-			discoveryDiagnostics: [
-				{
-					code: 'sitemap_url_rejected',
-					url: 'https://other-origin.example/page',
-					reason: 'origin differs from the entry URL',
-				},
-			],
-		} );
-
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/", '<h1>Home</h1>' , { entry: { html: 'html/homepage.html' } } );
+		const receiptPath = exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  discoveryDiagnostics: [  {  code: 'sitemap_url_rejected',  url: 'https://other-origin.example/page',  reason: 'origin differs from the entry URL',  },  ],  } );
 		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
 		expect( receipt.discoveryDiagnostics ).toEqual( [
 			{
@@ -5860,37 +3620,11 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'uses rendered Open Graph metadata when the manifest metadata is absent', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'home.html' ),
-			'<html><head><meta property="og:url" content="https://example.com"></head><body><h1>Canonical home</h1><a href="/about">About</a></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'html', 'about.html' ),
-			'<html><head><meta property="og:url" content="https://example.com/about"></head><body><h1>About</h1></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/home': { html: 'html/home.html' },
-					'https://example.com/about': { html: 'html/about.html' },
-				},
-			} )
-		);
-
-		const receiptPath = exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
-
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/home", '<html><head><meta property="og:url" content="https://example.com"></head><body><h1>Canonical home</h1><a href="/about">About</a></body></html>' , { entry: { html: 'html/home.html' } } );
+		capture.page( "https://example.com/about", '<html><head><meta property="og:url" content="https://example.com/about"></head><body><h1>About</h1></body></html>' , { entry: { html: 'html/about.html' } } );
+		const receiptPath = exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com',  platform: 'fake',  summary: {},  failures: [],  } );
 		expect( JSON.parse( readFileSync( receiptPath, 'utf8' ) ).routes ).toEqual( [
 			{ url: 'https://example.com/home', path: 'website/index.html' },
 			{ url: 'https://example.com/about', path: 'website/about/index.html' },
@@ -5901,40 +3635,11 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'resolves relative manifest Open Graph canonical URLs and rewrites their aliases', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'home.html' ),
-			'<h1>Home</h1><a href="https://example.com/docs/company">Company</a>'
-		);
-		writeFileSync( join( outputDir, 'html', 'team.html' ), '<h1>Team</h1>' );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/home': {
-						html: 'html/home.html',
-						metadata: { openGraph: { 'og:url': '/' } },
-					},
-					'https://example.com/docs/team': {
-						html: 'html/team.html',
-						metadata: { openGraph: { 'og:url': './company' } },
-					},
-				},
-			} )
-		);
-
-		const receiptPath = exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
-
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/home", '<h1>Home</h1><a href="https://example.com/docs/company">Company</a>', { entry: { html: 'html/home.html',  metadata: { openGraph: { 'og:url': '/' } } } } );
+		capture.page( "https://example.com/docs/team", '<h1>Team</h1>', { entry: { html: 'html/team.html',  metadata: { openGraph: { 'og:url': './company' } } } } );
+		const receiptPath = exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
 		expect( JSON.parse( readFileSync( receiptPath, 'utf8' ) ).routes ).toEqual( [
 			{ url: 'https://example.com/home', path: 'website/index.html' },
 			{ url: 'https://example.com/docs/team', path: 'website/docs/team/index.html' },
@@ -5945,37 +3650,11 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'roots the export at a discovered origin even when the entry is a deep link', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'home.html' ),
-			'<h1>Home</h1><a href="/social-kit">Kit</a>'
-		);
-		writeFileSync(
-			join( outputDir, 'html', 'kit.html' ),
-			'<h1>Kit</h1><a href="/">Home</a><a href="./">Same dir</a>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/social-kit': { html: 'html/kit.html' },
-					'https://example.com/': { html: 'html/home.html' },
-				},
-			} )
-		);
-
-		const receiptPath = exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/social-kit',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
-
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/social-kit", '<h1>Kit</h1><a href="/">Home</a><a href="./">Same dir</a>' , { entry: { html: 'html/kit.html' } } );
+		capture.page( "https://example.com/", '<h1>Home</h1><a href="/social-kit">Kit</a>' , { entry: { html: 'html/home.html' } } );
+		const receiptPath = exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/social-kit',  platform: 'fake',  summary: {},  failures: [],  } );
 		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
 		expect( receipt.entrypoint ).toBe( 'website/index.html' );
 		expect( receipt.websiteRoot ).toBe( 'website' );
@@ -6000,15 +3679,11 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'rebases relative links in documents captured under a subpath', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync( join( outputDir, 'html', 'home.html' ), '<h1>Home</h1>' );
-		writeFileSync( join( outputDir, 'html', 'css.html' ), '<h1 id="box">CSS</h1>' );
-		writeFileSync(
-			join( outputDir, 'html', 'interactive.html' ),
-			[
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'html', 'home.html' ), '<h1>Home</h1>' );
+		capture.file( join( 'html', 'css.html' ), '<h1 id="box">CSS</h1>' );
+		capture.file( join( 'html', 'interactive.html' ), [
 				'<h1 id="top">Interactive</h1>',
 				'<a href="/bootcamp/">Root-relative home</a>',
 				'<a href="/bootcamp/css">Root-relative route</a>',
@@ -6022,36 +3697,13 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 				'<a href="tel:+15555550100">Call</a>',
 				'<a href="https://external.example/bootcamp/css">External</a>',
 				'<a href="/bootcamp/static/zoom.png"><img src="/bootcamp/static/zoom.png"></a>',
-			].join( '' )
-		);
-		mkdirSync( join( outputDir, 'media' ), { recursive: true } );
-		writeFileSync( join( outputDir, 'media', 'zoom.png' ), 'zoom' );
+			].join( '' ) );
+		capture.directory( 'media' );
 		const media = MediaStubStore.load( outputDir );
-		media.markSuccess(
-			'https://example.com/bootcamp/static/zoom.png',
-			join( outputDir, 'media', 'zoom.png' )
-		);
+		capture.media( 'https://example.com/bootcamp/static/zoom.png', 'media/zoom.png', 'zoom' , media );
 		media.flush();
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/bootcamp/': { html: 'html/home.html' },
-					'https://example.com/bootcamp/css': { html: 'html/css.html' },
-					'https://example.com/bootcamp/interactive': { html: 'html/interactive.html' },
-				},
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/bootcamp/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
-
+		capture.manifest( {  version: 1,  entries: {  'https://example.com/bootcamp/': { html: 'html/home.html' },  'https://example.com/bootcamp/css': { html: 'html/css.html' },  'https://example.com/bootcamp/interactive': { html: 'html/interactive.html' },  },  } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/bootcamp/',  platform: 'fake',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'interactive', 'index.html' ), 'utf8' );
 		expect( html ).toContain( '<a href="/index.html">Root-relative home</a>' );
 		expect( html ).toContain( '<a href="/css/index.html">Root-relative route</a>' );
@@ -6076,37 +3728,11 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'resolves relative rendered Open Graph canonical URLs and rewrites their aliases', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'home.html' ),
-			'<meta property="og:url" content="/"><h1>Home</h1><a href="https://example.com/docs/company">Company</a>'
-		);
-		writeFileSync(
-			join( outputDir, 'html', 'team.html' ),
-			'<meta property="og:url" content="./company"><h1>Team</h1>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/home': { html: 'html/home.html' },
-					'https://example.com/docs/team': { html: 'html/team.html' },
-				},
-			} )
-		);
-
-		const receiptPath = exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
-
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/home", '<meta property="og:url" content="/"><h1>Home</h1><a href="https://example.com/docs/company">Company</a>' , { entry: { html: 'html/home.html' } } );
+		capture.page( "https://example.com/docs/team", '<meta property="og:url" content="./company"><h1>Team</h1>' , { entry: { html: 'html/team.html' } } );
+		const receiptPath = exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
 		expect( JSON.parse( readFileSync( receiptPath, 'utf8' ) ).routes ).toEqual( [
 			{ url: 'https://example.com/home', path: 'website/index.html' },
 			{ url: 'https://example.com/docs/team', path: 'website/docs/team/index.html' },
@@ -6118,35 +3744,14 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 
 	it( 'ignores malformed and unsupported canonical metadata while retaining different documents', () => {
 		for ( const canonicalUrl of [ '', 'mailto:hello@example.com', 'https://[invalid' ] ) {
-			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-			dirs.push( outputDir );
-			mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-			mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-			writeFileSync( join( outputDir, 'html', 'homepage.html' ), '<h1>Home</h1>' );
-			writeFileSync( join( outputDir, 'html', 'about.html' ), '<h1>About</h1>' );
-			writeFileSync( join( outputDir, 'html', 'about-slash.html' ), '<h1>About us</h1>' );
-			writeFileSync(
-				join( outputDir, 'screenshots', 'manifest.json' ),
-				JSON.stringify( {
-					version: 1,
-					entries: {
-						'https://example.com/': { html: 'html/homepage.html' },
-						'https://example.com/about': { html: 'html/about.html' },
-						'https://example.com/about/': {
-							html: 'html/about-slash.html',
-							metadata: { openGraph: { 'og:url': canonicalUrl } },
-						},
-					},
-				} )
-			);
-
-			const receiptPath = exportWebsiteCapture( {
-					outputDir,
-					sourceUrl: 'https://example.com/',
-					platform: 'fake',
-					summary: {},
-					failures: [],
-				} );
+			const capture = exportFixture();
+			const outputDir = capture.build();
+			capture.directory( 'html' );
+			capture.directory( 'screenshots' );
+			capture.page( "https://example.com/", '<h1>Home</h1>' , { entry: { html: 'html/homepage.html' } } );
+		capture.page( "https://example.com/about", '<h1>About</h1>' , { entry: { html: 'html/about.html' } } );
+		capture.page( "https://example.com/about/", '<h1>About us</h1>', { entry: { html: 'html/about-slash.html',  metadata: { openGraph: { 'og:url': canonicalUrl } } } } );
+			const receiptPath = exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
 			const receipt = JSON.parse(readFileSync(receiptPath, 'utf8'));
 			expect(receipt.routes).toEqual([
 				{url: 'https://example.com/', path: 'website/index.html'},
@@ -6160,37 +3765,11 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'prefers the exact source route over stale canonical metadata on another route', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<a href="https://example.com/">Home</a><h1>Exact home</h1>'
-		);
-		writeFileSync(
-			join( outputDir, 'html', 'projects.html' ),
-			'<meta property="og:url" content="https://example.com"><h1>Projects</h1>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/': { html: 'html/homepage.html' },
-					'https://example.com/projects': { html: 'html/projects.html' },
-				},
-			} )
-		);
-
-		const receiptPath = exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
-
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/", '<a href="https://example.com/">Home</a><h1>Exact home</h1>' , { entry: { html: 'html/homepage.html' } } );
+		capture.page( "https://example.com/projects", '<meta property="og:url" content="https://example.com"><h1>Projects</h1>' , { entry: { html: 'html/projects.html' } } );
+		const receiptPath = exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
 		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
 		expect( receipt.routes ).toEqual( [
 			{ url: 'https://example.com/', path: 'website/index.html' },
@@ -6201,43 +3780,53 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		);
 	} );
 
+	it( 'rebases only the entrypoint-proven canonical host when collapsing query renditions', async () => {
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		const sourceUrl = 'https://site.example.net/';
+		const fixtures = [
+			[ '', 'https://www.example.test/' ],
+			[ 'shop', 'https://www.example.test/shop' ],
+			[ 'shop?order=a', 'https://www.example.test/shop' ],
+			[ 'shop?order=b', 'https://www.example.test/shop' ],
+			[ 'about', 'https://unrelated.example.org/about' ],
+		];
+		const entries = Object.fromEntries( fixtures.map( ( [ route, canonical ], index ) => {
+			const html = `html/${ index }.html`;
+			capture.file( html, `<link rel="canonical" href="${ canonical }"><meta property="og:url" content="${ canonical }"><h1>Route ${ index }</h1>` );
+			return [ new URL( route, sourceUrl ).href, { html } ];
+		} ) );
+		capture.manifest( { version: 1, entries } );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {  outputDir, sourceUrl, platform: 'fake', summary: {}, failures: [],  routeScope: { origin: 'https://site.example.net', pathPrefixes: [ '/' ] },  } ), 'utf8' ) );
+		expect( receipt.routes ).toEqual( [
+			{ url: sourceUrl, path: 'website/index.html' },
+			{ url: `${ sourceUrl }shop`, path: 'website/shop/index.html' },
+			{ url: `${ sourceUrl }about`, path: 'website/about/index.html' },
+		] );
+		expect( receipt.duplicateRoutes ).toEqual( [ 'a', 'b' ].map( order => ( {
+			url: `${ sourceUrl }shop?order=${ order }`, canonicalUrl: `${ sourceUrl }shop`, path: 'website/shop/index.html',
+		} ) ) );
+		expect( readdirSync( join( outputDir, 'website', 'shop' ) ) ).toEqual( [ 'index.html' ] );
+		expect( existsSync( join( outputDir, 'website', 'about', 'index.html' ) ) ).toBe( true );
+		const probe = await probeCanonicalRouteAliases( {
+			sourceUrl, urls: Object.keys( entries ),
+			routeScope: { origin: 'https://site.example.net', pathPrefixes: [ '/' ] },
+		}, { fetch: async url => ( {
+			finalUrl: url, status: 200, headers: new Headers( { 'content-type': 'text/html' } ),
+			body: readFileSync( join( outputDir, entries[ url ].html ) ),
+		} ) } );
+		expect( probe.aliases ).toEqual( [ 'a', 'b' ].map( order => ( {
+			url: `${ sourceUrl }shop?order=${ order }`, canonicalUrl: `${ sourceUrl }shop`,
+		} ) ) );
+	} );
+
 	it( 'keeps one route when an alternate address declares the claimed route as canonical', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<meta property="og:url" content="https://example.com/"><script type="application/ld+json">{"@type":"WebSite"}</script><h1>Home</h1><a href="https://example.com/about">About</a>'
-		);
-		writeFileSync(
-			join( outputDir, 'html', 'index.html.html' ),
-			'<meta property="og:url" content="https://example.com/"><script type="application/ld+json">{"@type":"Organization"}</script><h1>Home</h1>'
-		);
-		writeFileSync(
-			join( outputDir, 'html', 'about.html' ),
-			'<h1>About</h1><a href="https://example.com/index.html">Home</a>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/': { html: 'html/homepage.html' },
-					'https://example.com/index.html': { html: 'html/index.html.html' },
-					'https://example.com/about': { html: 'html/about.html' },
-				},
-			} )
-		);
-
-		const receiptPath = exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
-
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/", '<meta property="og:url" content="https://example.com/"><script type="application/ld+json">{"@type":"WebSite"}</script><h1>Home</h1><a href="https://example.com/about">About</a>' , { entry: { html: 'html/homepage.html' } } );
+		capture.page( "https://example.com/index.html", '<meta property="og:url" content="https://example.com/"><script type="application/ld+json">{"@type":"Organization"}</script><h1>Home</h1>' , { entry: { html: 'html/index.html.html' } } );
+		capture.page( "https://example.com/about", '<h1>About</h1><a href="https://example.com/index.html">Home</a>' , { entry: { html: 'html/about.html' } } );
+		const receiptPath = exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com',  platform: 'fake',  summary: {},  failures: [],  } );
 		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
 		expect( receipt.routes ).toEqual( [
 			{ url: 'https://example.com/', path: 'website/index.html' },
@@ -6268,9 +3857,9 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		{ directory: '/docs/', explicitSource: false, reversed: true, reservedDirectory: false },
 		{ directory: '/', explicitSource: false, reversed: true, reservedDirectory: true },
 	] )( 'preserves distinct default-document captures: %j', ( { directory, explicitSource, reversed, reservedDirectory } ) => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-default-document-' ) );
-		dirs.push( outputDir );
-		for ( const dir of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, dir ), { recursive: true } );
+		const capture = exportFixture();
+		const outputDir = capture.build();
+		for ( const dir of [ 'html', 'screenshots' ] ) capture.directory( dir );
 		const directoryUrl = `https://example.com${ directory }`;
 		const documentUrl = `${ directoryUrl }index.html`;
 		const reservedRoute = reservedDirectory ? 'index-2.html/child' : 'index-2.html';
@@ -6287,19 +3876,17 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 				dialog: { selector: '#menu-dialog', tag: 'nav', ariaModal: true, html: dialogHtml, htmlBytes: Buffer.byteLength( dialogHtml ), htmlTruncated: false },
 			} ],
 		} );
-		writeFileSync( join( outputDir, 'html', 'directory.html' ), `<h1 id="directory">Directory content</h1>${ links }${ menu }` );
-		writeFileSync( join( outputDir, 'html', 'document.html' ), `<h1 id="document">Different document content</h1>${ links }${ menu }<img src="https://example.com/missing.jpg">` );
-		writeFileSync( join( outputDir, 'html', 'reserved.html' ), `<h1 id="reserved">Reserved filename</h1>${ links }` );
+		capture.file( join( 'html', 'directory.html' ), `<h1 id="directory">Directory content</h1>${ links }${ menu }` );
+		capture.file( join( 'html', 'document.html' ), `<h1 id="document">Different document content</h1>${ links }${ menu }<img src="https://example.com/missing.jpg">` );
+		capture.file( join( 'html', 'reserved.html' ), `<h1 id="reserved">Reserved filename</h1>${ links }` );
 		const entries = [
 			[ directoryUrl, { html: 'html/directory.html', interactions: interactions( directoryUrl ) } ],
 			[ documentUrl, { html: 'html/document.html', interactions: interactions( documentUrl ) } ],
 			[ `${ directoryUrl }${ reservedRoute }`, { html: 'html/reserved.html' } ],
 		];
 		if ( reversed ) entries.reverse();
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries: Object.fromEntries( entries ) } ) );
-		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
-			outputDir, sourceUrl: explicitSource ? documentUrl : directoryUrl, platform: 'generic', summary: {}, failures: [],
-		} ), 'utf8' ) );
+		capture.manifest( { version: 1, entries: Object.fromEntries( entries ) } );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {  outputDir, sourceUrl: explicitSource ? documentUrl : directoryUrl, platform: 'generic', summary: {}, failures: [],  } ), 'utf8' ) );
 		const directoryPath = explicitSource ? 'index-3.html' : 'index.html';
 		const documentPath = explicitSource ? 'index.html' : 'index-3.html';
 		expect( receipt.routes ).toHaveLength( 3 );
@@ -6329,36 +3916,12 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 
 	it.each( [ 'https:', 'http:' ] )( 'resolves a server redirect to a captured %s target instead of failing it', ( protocol ) => {
 		const target = `${ protocol }//example.com/new`;
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-redirect-alias-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			`<h1>Home</h1><a href="/old">Old</a><a href="${ target }">New</a>`
-		);
-		writeFileSync( join( outputDir, 'html', 'new.html' ), '<h1>New</h1>' );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/': { html: 'html/homepage.html' },
-					'https://example.com/old': { redirectedTo: target },
-					[ target ]: { html: 'html/new.html' },
-					'https://example.com/gone': { redirectedTo: 'https://example.com/missing' },
-				},
-			} )
-		);
-
-		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'generic',
-			summary: {},
-			failures: [],
-		} ), 'utf8' ) );
-
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'html', 'homepage.html' ), `<h1>Home</h1><a href="/old">Old</a><a href="${ target }">New</a>` );
+		capture.file( join( 'html', 'new.html' ), '<h1>New</h1>' );
+		capture.manifest( {  version: 1,  entries: {  'https://example.com/': { html: 'html/homepage.html' },  'https://example.com/old': { redirectedTo: target },  [ target ]: { html: 'html/new.html' },  'https://example.com/gone': { redirectedTo: 'https://example.com/missing' },  },  } );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'generic',  summary: {},  failures: [],  } ), 'utf8' ) );
 		expect( receipt.routes.map( ( route: { url: string } ) => route.url ) ).toEqual( [
 			'https://example.com/',
 			target,
@@ -6385,38 +3948,22 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'rewrites a scheme variant link to the page captured on the capture origin', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-scheme-variant-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync( join( outputDir, 'html', 'home.html' ), '<h1>Home</h1><a href="http://example.com/about.html#team">About</a>' );
-		writeFileSync( join( outputDir, 'html', 'about.html' ), '<h1>About</h1>' );
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries: {
-			'https://example.com/': { html: 'html/home.html' },
-			'https://example.com/about.html': { html: 'html/about.html' },
-		} } ) );
-
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/", '<h1>Home</h1><a href="http://example.com/about.html#team">About</a>' , { entry: { html: 'html/home.html' } } );
+		capture.page( "https://example.com/about.html", '<h1>About</h1>' , { entry: { html: 'html/about.html' } } );
 		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } ), 'utf8' ) );
-
 		expect( receipt.discoveryDiagnostics ?? [] ).toEqual( [] );
 		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
 		expect( $( 'a' ).attr( 'href' ) ).toBe( `/${ receipt.routes.find( ( route: { url: string } ) => route.url === 'https://example.com/about.html' ).path.replace( /^website\//, '' ) }#team` );
 	} );
 
 	it( 'accepts a proven unscheduled external redirect but keeps genuinely missing HTML blocking', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-unscheduled-anchor-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync( join( outputDir, 'html', 'home.html' ), '<h1>Home</h1><a href="/unscheduled">External</a><a href="/absent">Absent</a><a href="/missing-html">Missing</a>' );
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries: {
-			'https://example.com/': { html: 'html/home.html' },
-			'https://example.com/unscheduled': { externalRedirect: true },
-			'https://example.com/absent': { sourceAbsentStatus: 404 },
-		} } ) );
-		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
-			outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [],
-		} ), 'utf8' ) );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'html', 'home.html' ), '<h1>Home</h1><a href="/unscheduled">External</a><a href="/absent">Absent</a><a href="/missing-html">Missing</a>' );
+		capture.manifest( { version: 1, entries: {  'https://example.com/': { html: 'html/home.html' },  'https://example.com/unscheduled': { externalRedirect: true },  'https://example.com/absent': { sourceAbsentStatus: 404 },  } } );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {  outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [],  } ), 'utf8' ) );
 		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
 		expect( diagnostics.unresolvedAnchors ).toEqual( [
 			{ sourceUrl: 'https://example.com/', url: 'https://example.com/absent', reason: 'target route is absent at source' },
@@ -6433,35 +3980,12 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'records an html alias of a directory route in website/_redirects', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-redirect-html-alias-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<h1>Home</h1><a href="/blog.html">Blog</a>'
-		);
-		writeFileSync( join( outputDir, 'html', 'blog.html' ), '<h1>Blog</h1>' );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/': { html: 'html/homepage.html' },
-					'https://example.com/blog.html': { redirectedTo: 'https://example.com/blog' },
-					'https://example.com/blog': { html: 'html/blog.html' },
-				},
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'generic',
-			summary: {},
-			failures: [],
-		} );
-
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'html', 'homepage.html' ), '<h1>Home</h1><a href="/blog.html">Blog</a>' );
+		capture.file( join( 'html', 'blog.html' ), '<h1>Blog</h1>' );
+		capture.manifest( {  version: 1,  entries: {  'https://example.com/': { html: 'html/homepage.html' },  'https://example.com/blog.html': { redirectedTo: 'https://example.com/blog' },  'https://example.com/blog': { html: 'html/blog.html' },  },  } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'generic',  summary: {},  failures: [],  } );
 		expect( existsSync( join( outputDir, 'website', 'blog.html' ) ) ).toBe( false );
 		expect( existsSync( join( outputDir, 'website', 'blog', 'index.html' ) ) ).toBe( true );
 		expect( readFileSync( join( outputDir, 'website', '_redirects' ), 'utf8' ) ).toBe(
@@ -6470,31 +3994,11 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'pairs a query-bearing entry URL with its default-document capture by normalized URL, deduping identical content', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-default-document-query-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync( join( outputDir, 'html', 'homepage.html' ), '<h1>Home</h1>' );
-		writeFileSync( join( outputDir, 'html', 'homepage-index.html' ), '<h1>Home</h1>' );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/?token=abc': { html: 'html/homepage.html' },
-					'https://example.com/index.html': { html: 'html/homepage-index.html' },
-				},
-			} )
-		);
-
-		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/?token=abc',
-			platform: 'generic',
-			summary: {},
-			failures: [],
-		} ), 'utf8' ) );
-
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/?token=abc", '<h1>Home</h1>' , { entry: { html: 'html/homepage.html' } } );
+		capture.page( "https://example.com/index.html", '<h1>Home</h1>' , { entry: { html: 'html/homepage.html' } } );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/?token=abc',  platform: 'generic',  summary: {},  failures: [],  } ), 'utf8' ) );
 		expect( receipt.routes ).toEqual( [
 			{ url: 'https://example.com/?token=abc', path: 'website/index.html' },
 		] );
@@ -6507,31 +4011,11 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'pairs a fragment-bearing entry URL with its default-document capture the same way', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-default-document-fragment-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync( join( outputDir, 'html', 'homepage.html' ), '<h1>Home</h1>' );
-		writeFileSync( join( outputDir, 'html', 'homepage-index.html' ), '<h1>Home</h1>' );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/#top': { html: 'html/homepage.html' },
-					'https://example.com/index.html': { html: 'html/homepage-index.html' },
-				},
-			} )
-		);
-
-		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/#top',
-			platform: 'generic',
-			summary: {},
-			failures: [],
-		} ), 'utf8' ) );
-
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/#top", '<h1>Home</h1>' , { entry: { html: 'html/homepage.html' } } );
+		capture.page( "https://example.com/index.html", '<h1>Home</h1>' , { entry: { html: 'html/homepage.html' } } );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/#top',  platform: 'generic',  summary: {},  failures: [],  } ), 'utf8' ) );
 		expect( receipt.routes ).toEqual( [
 			{ url: 'https://example.com/#top', path: 'website/index.html' },
 		] );
@@ -6543,31 +4027,11 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'keeps a query-bearing entry URL and its default-document capture distinct when their content differs', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-default-document-query-distinct-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync( join( outputDir, 'html', 'homepage.html' ), '<h1>Home</h1>' );
-		writeFileSync( join( outputDir, 'html', 'homepage-index.html' ), '<h1>A different default document</h1>' );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/?token=abc': { html: 'html/homepage.html' },
-					'https://example.com/index.html': { html: 'html/homepage-index.html' },
-				},
-			} )
-		);
-
-		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/?token=abc',
-			platform: 'generic',
-			summary: {},
-			failures: [],
-		} ), 'utf8' ) );
-
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/?token=abc", '<h1>Home</h1>' , { entry: { html: 'html/homepage.html' } } );
+		capture.page( "https://example.com/index.html", '<h1>A different default document</h1>' , { entry: { html: 'html/homepage-index.html' } } );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/?token=abc',  platform: 'generic',  summary: {},  failures: [],  } ), 'utf8' ) );
 		expect( receipt.duplicateRoutes ).toEqual( [] );
 		expect(
 			Object.fromEntries( receipt.routes.map( ( route: { url: string; path: string } ) => [ route.url, route.path ] ) )
@@ -6582,37 +4046,11 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'rewrites a literal canonical link that names a captured route to its local path', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<link rel="canonical" href="https://example.com/"><h1>Home</h1><a href="https://example.com/about">About</a>'
-		);
-		writeFileSync(
-			join( outputDir, 'html', 'about.html' ),
-			'<link rel="canonical" href="https://example.com/about"><h1>About</h1>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/': { html: 'html/homepage.html' },
-					'https://example.com/about': { html: 'html/about.html' },
-				},
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
-
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/", '<link rel="canonical" href="https://example.com/"><h1>Home</h1><a href="https://example.com/about">About</a>' , { entry: { html: 'html/homepage.html' } } );
+		capture.page( "https://example.com/about", '<link rel="canonical" href="https://example.com/about"><h1>About</h1>' , { entry: { html: 'html/about.html' } } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com',  platform: 'fake',  summary: {},  failures: [],  } );
 		const homepage = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const about = readFileSync( join( outputDir, 'website', 'about', 'index.html' ), 'utf8' );
 		expect( homepage ).toContain( 'rel="canonical" href="/index.html"' );
@@ -6622,37 +4060,19 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'drops a site builder default icon from the exported head but keeps an owner-uploaded icon', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-default-icon-' ) );
-		dirs.push( outputDir );
-		for ( const directory of [ 'html', 'screenshots', 'resources' ] )
-			mkdirSync( join( outputDir, directory ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots', 'resources' ] } );
+		const outputDir = capture.build();
 		const custom = 'https://static.wixstatic.com/media/c168cb_c777%7Emv2.png/v1/fill/w_192%2Ch_192/c168cb_c777%7Emv2.png';
-		writeFileSync( join( outputDir, 'html/homepage.html' ),
-			'<html><head><link rel="icon" sizes="192x192" href="https://www.wix.com/favicon.ico" type="image/x-icon"><link rel="shortcut icon" href="https://www.wix.com/favicon.ico" type="image/x-icon"><link rel="apple-touch-icon" href="https://www.wix.com/favicon.ico" type="image/x-icon"><!-- <link rel="mask-icon" href="https://www.wix.com/favicon.ico"> -->' +
+		capture.file( 'html/homepage.html', '<html><head><link rel="icon" sizes="192x192" href="https://www.wix.com/favicon.ico" type="image/x-icon"><link rel="shortcut icon" href="https://www.wix.com/favicon.ico" type="image/x-icon"><link rel="apple-touch-icon" href="https://www.wix.com/favicon.ico" type="image/x-icon"><!-- <link rel="mask-icon" href="https://www.wix.com/favicon.ico"> -->' +
 			`<link rel="icon" href="https://static.parastorage.com/client/pfavico.ico"><link rel="apple-touch-icon" href="${ custom }"></head><body><h1>Home</h1></body></html>` );
 		// The mobile document can lack an icon the desktop one has; neither may leak through assembly.
-		mkdirSync( join( outputDir, 'html-mobile' ), { recursive: true } );
-		writeFileSync( join( outputDir, 'html-mobile/homepage.html' ),
-			`<html><head><link rel="icon" href="https://www.wix.com/favicon.ico"><link rel="apple-touch-icon" href="${ custom }"></head><body><h1>Home</h1></body></html>` );
-		writeFileSync( join( outputDir, 'resources/wix-favicon.ico' ), 'wix' );
-		writeFileSync( join( outputDir, 'resources/owner.png' ), 'owner' );
-		writeFileSync( join( outputDir, 'resources/manifest.json' ), JSON.stringify( {
-			version: 1,
-			resources: {
-				'https://www.wix.com/favicon.ico': { path: 'resources/wix-favicon.ico', contentType: 'image/x-icon' },
-				[ custom ]: { path: 'resources/owner.png', contentType: 'image/png' },
-			},
-			failures: [],
-		} ) );
-		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( {
-			version: 1,
-			entries: { 'https://ellenbauer37.wixsite.com/my-site-2': { html: 'html/homepage.html' } },
-		} ) );
-		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://ellenbauer37.wixsite.com/my-site-2',
-			platform: 'wix', summary: {}, failures: [],
-		} ), 'utf8' ) );
+		capture.directory( 'html-mobile' );
+		capture.file( 'html-mobile/homepage.html', `<html><head><link rel="icon" href="https://www.wix.com/favicon.ico"><link rel="apple-touch-icon" href="${ custom }"></head><body><h1>Home</h1></body></html>` );
+		capture.file( 'resources/wix-favicon.ico', 'wix' );
+		capture.file( 'resources/owner.png', 'owner' );
+		capture.json( 'resources/manifest.json', {  version: 1,  resources: {  'https://www.wix.com/favicon.ico': { path: 'resources/wix-favicon.ico', contentType: 'image/x-icon' },  [ custom ]: { path: 'resources/owner.png', contentType: 'image/png' },  },  failures: [],  } );
+		capture.manifest( {  version: 1,  entries: { 'https://ellenbauer37.wixsite.com/my-site-2': { html: 'html/homepage.html' } },  } );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://ellenbauer37.wixsite.com/my-site-2',  platform: 'wix', summary: {}, failures: [],  } ), 'utf8' ) );
 		const html = readFileSync( join( outputDir, receipt.entrypoint ), 'utf8' );
 		const document = cheerio.load( html );
 		expect( html ).not.toMatch( /wix\.com\/favicon\.ico|pfavico/ );
@@ -6665,35 +4085,14 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'preserves captured and uncaptured document relations when their documents move', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-document-relations-' ) );
-		dirs.push( outputDir );
-		for ( const directory of [ 'html', 'screenshots', 'resources' ] )
-			mkdirSync( join( outputDir, directory ), { recursive: true } );
-		writeFileSync( join( outputDir, 'html/homepage.html' ),
-			'<html><head><link rel="NEXT" href="page-2.html#photos"><link rel="prev" href="../older/index.html"><link rel="alternate search" href="feed.xml"><link rel="canonical" href="index.html"><link rel="alternate stylesheet" href="theme.css"><link rel="icon" href="favicon.ico"></head><body><h1>Gallery</h1></body></html>' );
-		writeFileSync( join( outputDir, 'html/next.html' ), '<h1 id="photos">More photos</h1>' );
-		writeFileSync( join( outputDir, 'resources/theme.css' ), 'body{color:navy}' );
-		writeFileSync( join( outputDir, 'resources/favicon.ico' ), 'icon' );
-		writeFileSync( join( outputDir, 'resources/manifest.json' ), JSON.stringify( {
-			version: 1,
-			resources: {
-				'https://example.com/archive/gallery/theme.css': { path: 'resources/theme.css', contentType: 'text/css' },
-				'https://example.com/archive/gallery/favicon.ico': { path: 'resources/favicon.ico', contentType: 'image/x-icon' },
-			},
-			failures: [],
-		} ) );
-		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( {
-			version: 1,
-			entries: {
-				'https://example.com/archive/gallery/index.html': { html: 'html/homepage.html' },
-				'https://example.com/archive/gallery/page-2.html': { html: 'html/next.html' },
-			},
-		} ) );
-		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/archive/gallery/index.html',
-			platform: 'generic', summary: {}, failures: [],
-		} ), 'utf8' ) );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots', 'resources' ] } );
+		const outputDir = capture.build();
+		capture.file( 'resources/theme.css', 'body{color:navy}' );
+		capture.file( 'resources/favicon.ico', 'icon' );
+		capture.json( 'resources/manifest.json', {  version: 1,  resources: {  'https://example.com/archive/gallery/theme.css': { path: 'resources/theme.css', contentType: 'text/css' },  'https://example.com/archive/gallery/favicon.ico': { path: 'resources/favicon.ico', contentType: 'image/x-icon' },  },  failures: [],  } );
+		capture.page( "https://example.com/archive/gallery/index.html", '<html><head><link rel="NEXT" href="page-2.html#photos"><link rel="prev" href="../older/index.html"><link rel="alternate search" href="feed.xml"><link rel="canonical" href="index.html"><link rel="alternate stylesheet" href="theme.css"><link rel="icon" href="favicon.ico"></head><body><h1>Gallery</h1></body></html>' , { entry: { html: 'html/homepage.html' } } );
+		capture.page( "https://example.com/archive/gallery/page-2.html", '<h1 id="photos">More photos</h1>' , { entry: { html: 'html/next.html' } } );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/archive/gallery/index.html',  platform: 'generic', summary: {}, failures: [],  } ), 'utf8' ) );
 		const document = cheerio.load( readFileSync( join( outputDir, receipt.entrypoint ), 'utf8' ) );
 		const nextRoute = receipt.routes.find( ( route: { url: string } ) => route.url.endsWith( '/page-2.html' ) );
 		expect( document( 'link[rel="NEXT"]' ).attr( 'href' ) ).toBe( `/${ nextRoute.path.replace( /^website\//, '' ) }#photos` );
@@ -6708,32 +4107,12 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'retains independent slash documents without inferring a canonical alias', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync( join( outputDir, 'html', 'homepage.html' ), '<h1>Home</h1>' );
-		writeFileSync( join( outputDir, 'html', 'about.html' ), '<h1>About</h1>' );
-		writeFileSync( join( outputDir, 'html', 'about-slash.html' ), '<h1>About us</h1>' );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: {
-					'https://example.com/': { html: 'html/homepage.html' },
-					'https://example.com/about': { html: 'html/about.html' },
-					'https://example.com/about/': { html: 'html/about-slash.html' },
-				},
-			} )
-		);
-
-		const receiptPath = exportWebsiteCapture( {
-				outputDir,
-				sourceUrl: 'https://example.com',
-				platform: 'fake',
-				summary: {},
-				failures: [],
-			} );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/", '<h1>Home</h1>' , { entry: { html: 'html/homepage.html' } } );
+		capture.page( "https://example.com/about", '<h1>About</h1>' , { entry: { html: 'html/about.html' } } );
+		capture.page( "https://example.com/about/", '<h1>About us</h1>' , { entry: { html: 'html/about-slash.html' } } );
+		const receiptPath = exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com',  platform: 'fake',  summary: {},  failures: [],  } );
 		const receipt = JSON.parse(readFileSync(receiptPath, 'utf8'));
 		expect(receipt.routes).toEqual([
 			{url: 'https://example.com/', path: 'website/index.html'},
@@ -6746,17 +4125,11 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'localizes external lazy, responsive, preload, icon, and recursive CSS render dependencies', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-portable-render-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots', 'resources/cdn/css', 'resources/cdn/media' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<html><head><link rel="canonical" href="https://example.com/canonical"><meta property="og:image" content="https://cdn.example/social.jpg"><link rel="icon" href="https://cdn.example/favicon.ico"><link rel="preload" as="font" href="https://cdn.example/font.woff2"><link rel="preload" as="image" href="https://cdn.example/preload.jpg"><link rel="stylesheet" href="https://cdn.example/site.css"><style>.missing{background:url("https://cdn.example/missing.jpg")}</style></head><body><img loading="lazy" src="https://cdn.example/lazy.jpg" srcset="https://cdn.example/lazy-1.jpg 1x, https://cdn.example/lazy-2.jpg 2x"><picture><source srcset="https://cdn.example/picture.jpg 1x"><img src="https://cdn.example/fallback.jpg"></picture></body></html>'
-		);
+		const capture = exportFixture( { directories: [ 'html', 'screenshots', 'resources/cdn/css', 'resources/cdn/media' ] } );
+		const outputDir = capture.build();
 		const resources: Record< string, { path: string; contentType: string } > = {};
 		const add = ( url: string, path: string, contentType: string, content: string ) => {
-			writeFileSync( join( outputDir, 'resources', path ), content );
+			capture.file( join( 'resources', path ), content );
 			resources[ url ] = { path: `resources/${ path }`, contentType };
 		};
 		add(
@@ -6783,24 +4156,9 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			[ 'preload.jpg', 'image/jpeg' ],
 		] as const )
 			add( `https://cdn.example/${ name }`, `cdn/media/${ name }`, type, name );
-		writeFileSync(
-			join( outputDir, 'resources', 'manifest.json' ),
-			JSON.stringify( { version: 1, resources, failures: [] } )
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-			} )
-		);
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
+		capture.json( join( 'resources', 'manifest.json' ), { version: 1, resources, failures: [] } );
+		capture.page( "https://example.com/", '<html><head><link rel="canonical" href="https://example.com/canonical"><meta property="og:image" content="https://cdn.example/social.jpg"><link rel="icon" href="https://cdn.example/favicon.ico"><link rel="preload" as="font" href="https://cdn.example/font.woff2"><link rel="preload" as="image" href="https://cdn.example/preload.jpg"><link rel="stylesheet" href="https://cdn.example/site.css"><style>.missing{background:url("https://cdn.example/missing.jpg")}</style></head><body><img loading="lazy" src="https://cdn.example/lazy.jpg" srcset="https://cdn.example/lazy-1.jpg 1x, https://cdn.example/lazy-2.jpg 2x"><picture><source srcset="https://cdn.example/picture.jpg 1x"><img src="https://cdn.example/fallback.jpg"></picture></body></html>' , { entry: { html: 'html/homepage.html' } } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const css = readFileSync( join( outputDir, 'website', 'cdn', 'css', 'site.css' ), 'utf8' );
 		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
@@ -6817,37 +4175,20 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'localizes compact cross-origin CSS imports and nested font faces with their media and stylesheet bases', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-nested-fonts-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots', 'resources/css', 'resources/fonts' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots', 'resources/css', 'resources/fonts' ] } );
+		const outputDir = capture.build();
 		const sourceCss = 'https://example.com/assets/site.css';
 		const importedCss = 'https://styles.example.net/css/theme.css';
 		const nestedCss = 'https://styles.example.net/css/nested/face.css';
 		const font = 'https://styles.example.net/css/fonts/serif.woff2';
-		writeFileSync( join( outputDir, 'html/homepage.html' ),
-			`<html><head><link rel="stylesheet" href="${ sourceCss }"></head><body><main>Typography</main></body></html>` );
-		writeFileSync( join( outputDir, 'resources/css/site.css' ),
-			`@import"${ importedCss }" screen;main{font-family:"Portable Serif",serif}` );
-		writeFileSync( join( outputDir, 'resources/css/theme.css' ),
-			'@import url("nested/face.css") screen and (min-width: 768px);' );
-		writeFileSync( join( outputDir, 'resources/css/face.css' ),
-			'@font-face{font-family:"Portable Serif";src:url("../fonts/serif.woff2") format("woff2");font-weight:400}main{font-family:"Portable Serif",serif}' );
-		writeFileSync( join( outputDir, 'resources/fonts/serif.woff2' ), 'font-bytes' );
-		writeFileSync( join( outputDir, 'resources/manifest.json' ), JSON.stringify( {
-			version: 1, resources: {
-				[ sourceCss ]: { path: 'resources/css/site.css', contentType: 'text/css' },
-				[ importedCss ]: { path: 'resources/css/theme.css', contentType: 'text/css' },
-				[ nestedCss ]: { path: 'resources/css/face.css', contentType: 'text/css' },
-				[ font ]: { path: 'resources/fonts/serif.woff2', contentType: 'font/woff2' },
-			}, failures: [],
-		} ) );
-		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( {
-			version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-		} ) );
-
+		capture.file( 'html/homepage.html', `<html><head><link rel="stylesheet" href="${ sourceCss }"></head><body><main>Typography</main></body></html>` );
+		capture.file( 'resources/css/site.css', `@import"${ importedCss }" screen;main{font-family:"Portable Serif",serif}` );
+		capture.file( 'resources/css/theme.css', '@import url("nested/face.css") screen and (min-width: 768px);' );
+		capture.file( 'resources/css/face.css', '@font-face{font-family:"Portable Serif";src:url("../fonts/serif.woff2") format("woff2");font-weight:400}main{font-family:"Portable Serif",serif}' );
+		capture.file( 'resources/fonts/serif.woff2', 'font-bytes' );
+		capture.json( 'resources/manifest.json', {  version: 1, resources: {  [ sourceCss ]: { path: 'resources/css/site.css', contentType: 'text/css' },  [ importedCss ]: { path: 'resources/css/theme.css', contentType: 'text/css' },  [ nestedCss ]: { path: 'resources/css/face.css', contentType: 'text/css' },  [ font ]: { path: 'resources/fonts/serif.woff2', contentType: 'font/woff2' },  }, failures: [],  } );
+		capture.manifest( {  version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } },  } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
-
 		const website = join( outputDir, 'website' );
 		expect( readFileSync( join( website, 'css/site.css' ), 'utf8' ) )
 			.toContain( '@import"/css/theme.css" screen;' );
@@ -6860,11 +4201,12 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( readFileSync( join( website, 'fonts/serif.woff2' ), 'utf8' ) ).toBe( 'font-bytes' );
 		expect( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) ).not.toContain( 'referenced same-origin dependency was not captured' );
 		const server = await startStaticServer( website );
-		let browser: Awaited< ReturnType< typeof chromium.launch > > | undefined;
+		let browser: BrowserContext | undefined;
 		try {
-			browser = await chromium.launch();
+			browser = await browserContext();
 			for ( const width of [ 390, 768, 1440 ] ) {
-				const page = await browser.newPage( { viewport: { width, height: 800 } } );
+				const page = await browser.newPage();
+				await page.setViewportSize( { width, height: 800 } );
 				const external: string[] = [];
 				const localFonts: string[] = [];
 				page.on( 'request', ( request ) => {
@@ -6887,58 +4229,20 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'omits failed @font-face src sentinels so captured woff and ttf can load', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-font-face-src-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots', 'resources/css', 'resources/fonts' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots', 'resources/css', 'resources/fonts' ] } );
+		const outputDir = capture.build();
 		const cssUrl = 'https://cdn.example/css/site.css';
 		const eotUrl = 'https://cdn.example/fonts/icon.eot';
 		const woffUrl = 'https://cdn.example/fonts/icon.woff';
 		const ttfUrl = 'https://cdn.example/fonts/icon.ttf';
 		const missingBackground = 'https://cdn.example/images/missing.jpg';
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			`<html><head><link rel="stylesheet" href="${ cssUrl }"></head><body><span class="icon"></span></body></html>`
-		);
-		writeFileSync(
-			join( outputDir, 'resources', 'css', 'site.css' ),
-			`@font-face{font-family:"icon";src:url("${ eotUrl }");src:url("${ eotUrl }?#iefix") format("embedded-opentype"),url("${ woffUrl }") format("woff"),url("${ ttfUrl }") format("truetype")}.hero{background:url("${ missingBackground }")}`
-		);
-		writeFileSync( join( outputDir, 'resources', 'fonts', 'icon.woff' ), 'woff' );
-		writeFileSync( join( outputDir, 'resources', 'fonts', 'icon.ttf' ), 'ttf' );
-		writeFileSync(
-			join( outputDir, 'resources', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				resources: {
-					[ cssUrl ]: { path: 'resources/css/site.css', contentType: 'text/css' },
-					[ woffUrl ]: { path: 'resources/fonts/icon.woff', contentType: 'font/woff' },
-					[ ttfUrl ]: { path: 'resources/fonts/icon.ttf', contentType: 'font/ttf' },
-				},
-				failures: [
-					{
-						url: eotUrl,
-						error: 'render dependency has unsupported content type application/vnd.ms-fontobject',
-					},
-				],
-			} )
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-			} )
-		);
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
-
+		capture.file( join( 'html', 'homepage.html' ), `<html><head><link rel="stylesheet" href="${ cssUrl }"></head><body><span class="icon"></span></body></html>` );
+		capture.file( join( 'resources', 'css', 'site.css' ), `@font-face{font-family:"icon";src:url("${ eotUrl }");src:url("${ eotUrl }?#iefix") format("embedded-opentype"),url("${ woffUrl }") format("woff"),url("${ ttfUrl }") format("truetype")}.hero{background:url("${ missingBackground }")}` );
+		capture.file( join( 'resources', 'fonts', 'icon.woff' ), 'woff' );
+		capture.file( join( 'resources', 'fonts', 'icon.ttf' ), 'ttf' );
+		capture.json( join( 'resources', 'manifest.json' ), {  version: 1,  resources: {  [ cssUrl ]: { path: 'resources/css/site.css', contentType: 'text/css' },  [ woffUrl ]: { path: 'resources/fonts/icon.woff', contentType: 'font/woff' },  [ ttfUrl ]: { path: 'resources/fonts/icon.ttf', contentType: 'font/ttf' },  },  failures: [  {  url: eotUrl,  error: 'render dependency has unsupported content type application/vnd.ms-fontobject',  },  ],  } );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { html: 'html/homepage.html' } },  } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
 		const css = readFileSync( join( outputDir, 'website', 'css', 'site.css' ), 'utf8' );
 		expect( css ).not.toMatch( /@font-face\{[^}]*data:application\/octet-stream;base64,/ );
 		expect( css ).toContain( 'url("/fonts/icon.woff") format("woff")' );
@@ -6951,34 +4255,25 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'exports query-based WOFF2 bytes served as text/html as an exact font file', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-font-mime-' ) );
-		dirs.push( outputDir );
+		const capture = exportFixture();
+		const outputDir = capture.build();
 		const fontDir = 'resources/external/0123456789abcdef/l';
 		for ( const path of [ 'html', 'screenshots', 'resources/css', fontDir ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+			capture.directory( path );
 		const cssUrl = 'https://example.com/assets/site.css';
 		const fontUrl = 'https://fonts.example.net/l/font?kit=abc123&skey=def456&v=v1';
 		// WOFF2 signature followed by bytes that are not valid UTF-8, so any text
 		// decoding or HTML serialization changes the file.
 		const fontBytes = Buffer.concat( [ Buffer.from( 'wOF2' ), Buffer.from( [ 0, 1, 0, 0, 0x80, 0xff, 0xfe, 0xc3, 0x28 ] ) ] );
 		const sha256 = ( bytes: Buffer ) => createHash( 'sha256' ).update( bytes ).digest( 'hex' );
-		writeFileSync( join( outputDir, 'html/homepage.html' ),
-			`<html><head><link rel="stylesheet" href="${ cssUrl }"></head><body><main>Typography</main></body></html>` );
-		writeFileSync( join( outputDir, 'resources/css/site.css' ),
-			`@font-face{font-family:"Kit Sans";src:url("${ fontUrl }") format("woff2")}main{font-family:"Kit Sans",sans-serif}` );
-		writeFileSync( join( outputDir, fontDir, 'font-0123456789ab' ), fontBytes );
-		writeFileSync( join( outputDir, 'resources/manifest.json' ), JSON.stringify( {
-			version: 1, resources: {
-				[ cssUrl ]: { path: 'resources/css/site.css', contentType: 'text/css' },
-				[ fontUrl ]: { path: `${ fontDir }/font-0123456789ab`, contentType: 'text/html; charset=utf-8' },
+		capture.file( 'html/homepage.html', `<html><head><link rel="stylesheet" href="${ cssUrl }"></head><body><main>Typography</main></body></html>` );
+		capture.file( 'resources/css/site.css', `@font-face{font-family:"Kit Sans";src:url("${ fontUrl }") format("woff2")}main{font-family:"Kit Sans",sans-serif}` );
+		capture.file( join( fontDir, 'font-0123456789ab' ), fontBytes );
+		capture.json( 'resources/manifest.json', {  version: 1, resources: {  [ cssUrl ]: { path: 'resources/css/site.css', contentType: 'text/css' },  [ fontUrl ]: { path: `${ fontDir }/font-0123456789ab`, contentType: 'text/html; charset=utf-8' },
 			}, failures: [],
-		} ) );
-		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( {
-			version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-		} ) );
-
+		} );
+		capture.manifest( {  version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } },  } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
-
 		const website = join( outputDir, 'website' );
 		const fontPath = 'external/0123456789abcdef/l/font-0123456789ab';
 		expect( existsSync( join( website, `${ fontPath }.html` ) ) ).toBe( false );
@@ -6990,35 +4285,18 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'preserves downloaded backgrounds with HTML-escaped CDN queries in the portable page', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-css-media-export-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'html-mobile', 'screenshots', 'media' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots', 'media' ] } );
+		const outputDir = capture.build();
 		const sourceUrl = 'https://images.builderservices.io/s/cdn/v1.0/i/m?url=https%3A%2F%2Fstorage.googleapis.com%2Fproduction-ipower-v1-0-7%2F477%2F530477%2F36o4dN0U%2F7476a6728a1b4e788fcaf0dd3f1610a8&methods=resize%2C2000%2C5000';
 		const mobileUrl = 'https://cdn.example/image?url=https%3A%2F%2Fimages.example%2Fphoto%2520one.jpg%3Fa%3D1%26b%3D2&width=600&format=webp';
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			`<html><body>${ readFileSync( fileURLToPath( new URL( '../../test/fixtures/clearlake-css-background.html', import.meta.url ) ), 'utf8' ) }</body></html>`
-		);
-		writeFileSync(
-			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><body><main><div class="mobile-background" style="background-image:url(&quot;https://cdn.example/image?url=https%3A%2F%2Fimages.example%2Fphoto%2520one.jpg%3Fa%3D1%26b%3D2&amp;width=600&amp;format=webp&quot;)">Mobile</div><div class="missing-background" style="background:url(https://cdn.example/missing.jpg?width=600&amp;format=webp)">Missing</div></main></body></html>'
-		);
-		writeFileSync( join( outputDir, 'media', 'background.jpg' ), 'desktop-image' );
-		writeFileSync( join( outputDir, 'media', 'background-mobile.webp' ), 'mobile-image' );
+		capture.file( join( 'html', 'homepage.html' ), `<html><body>${ readFileSync( fileURLToPath( new URL( '../../test/fixtures/clearlake-css-background.html', import.meta.url ) ), 'utf8' ) }</body></html>` );
+		capture.file( join( 'html-mobile', 'homepage.html' ), '<html><body><main><div class="mobile-background" style="background-image:url(&quot;https://cdn.example/image?url=https%3A%2F%2Fimages.example%2Fphoto%2520one.jpg%3Fa%3D1%26b%3D2&amp;width=600&amp;format=webp&quot;)">Mobile</div><div class="missing-background" style="background:url(https://cdn.example/missing.jpg?width=600&amp;format=webp)">Missing</div></main></body></html>' );
 		const media = MediaStubStore.load( outputDir );
-		media.markSuccess( sourceUrl, join( outputDir, 'media', 'background.jpg' ) );
-		media.markSuccess( mobileUrl, join( outputDir, 'media', 'background-mobile.webp' ) );
+		capture.media( sourceUrl, 'media/background.jpg', 'desktop-image' , media );
+		capture.media( mobileUrl, 'media/background-mobile.webp', 'mobile-image' , media );
 		media.save();
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( { version: 1, entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } } } )
-		);
-
-		const receiptPath = exportWebsiteCapture( {
-			outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [],
-		} );
-
+		capture.manifest( { version: 1, entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } } } );
+		const receiptPath = exportWebsiteCapture( {  outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [],  } );
 		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
 		expect( $( '.kv-background-inner' ).attr( 'style' ) ).toContain( "background-image: url('/media/background.jpg')" );
 		expect( $( '.kv-background-inner' ).attr( 'style' ) ).not.toContain( 'data:' );
@@ -7033,30 +4311,18 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'localizes downloaded media and browser resources before hoisting shared CSS', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-shared-css-media-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots', 'media', 'resources/cdn' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots', 'media', 'resources/cdn' ] } );
+		const outputDir = capture.build();
 		const style = '<style>.hero{background:url("https://cdn.example/photo.jpg?width=600&format=webp")}.icon{background:url("https://cdn.example/icon.svg")}</style>';
-		writeFileSync( join( outputDir, 'html', 'homepage.html' ), `<html><head>${ style }</head><body><main class="hero">Home</main></body></html>` );
-		writeFileSync( join( outputDir, 'html', 'about.html' ), `<html><head>${ style }</head><body><main class="hero">About</main></body></html>` );
-		writeFileSync( join( outputDir, 'media', 'photo.webp' ), 'photo' );
-		writeFileSync( join( outputDir, 'resources', 'cdn', 'icon.svg' ), '<svg></svg>' );
+		capture.file( join( 'html', 'homepage.html' ), `<html><head>${ style }</head><body><main class="hero">Home</main></body></html>` );
+		capture.file( join( 'html', 'about.html' ), `<html><head>${ style }</head><body><main class="hero">About</main></body></html>` );
+		capture.file( join( 'resources', 'cdn', 'icon.svg' ), '<svg></svg>' );
 		const media = MediaStubStore.load( outputDir );
-		media.markSuccess( 'https://cdn.example/photo.jpg?width=600&format=webp', join( outputDir, 'media', 'photo.webp' ) );
+		capture.media( 'https://cdn.example/photo.jpg?width=600&format=webp', 'media/photo.webp', 'photo' , media );
 		media.save();
-		writeFileSync( join( outputDir, 'resources', 'manifest.json' ), JSON.stringify( {
-			version: 1, resources: { 'https://cdn.example/icon.svg': { path: 'resources/cdn/icon.svg', contentType: 'image/svg+xml' } }, failures: [],
-		} ) );
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
-			version: 1, entries: {
-				'https://example.com/': { html: 'html/homepage.html' },
-				'https://example.com/about': { html: 'html/about.html' },
-			},
-		} ) );
-
+		capture.json( join( 'resources', 'manifest.json' ), {  version: 1, resources: { 'https://cdn.example/icon.svg': { path: 'resources/cdn/icon.svg', contentType: 'image/svg+xml' } }, failures: [],  } );
+		capture.manifest( {  version: 1, entries: {  'https://example.com/': { html: 'html/homepage.html' },  'https://example.com/about': { html: 'html/about.html' },  },  } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
-
 		const homepage = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
 		const about = cheerio.load( readFileSync( join( outputDir, 'website', 'about', 'index.html' ), 'utf8' ) );
 		const stylesheet = homepage( 'link[rel="stylesheet"]' ).attr( 'href' )!;
@@ -7087,64 +4353,22 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			expectedUrl: 'about:blank',
 		},
 	] )( '$name', ( { mediaStatus, browserResource, expectedUrl } ) => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-stylesheet-media-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots', 'media', 'resources/css', 'resources/images' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots', 'media', 'resources/css', 'resources/images' ] } );
+		const outputDir = capture.build();
 		const imageUrl = 'https://example.com/images/background.jpg';
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			`<html><head><link rel="stylesheet" href="https://example.com/css/site.css"></head><body><img src="${ imageUrl }"><main class="hero">Home</main></body></html>`
-		);
-		writeFileSync(
-			join( outputDir, 'resources', 'css', 'site.css' ),
-			`.hero{background-image:url("${ imageUrl }")}`
-		);
+		capture.file( join( 'html', 'homepage.html' ), `<html><head><link rel="stylesheet" href="https://example.com/css/site.css"></head><body><img src="${ imageUrl }"><main class="hero">Home</main></body></html>` );
+		capture.file( join( 'resources', 'css', 'site.css' ), `.hero{background-image:url("${ imageUrl }")}` );
 		if ( browserResource )
-			writeFileSync( join( outputDir, 'resources', 'images', 'background.jpg' ), 'captured-image' );
-		writeFileSync( join( outputDir, 'media', 'background.jpg' ), 'downloaded-image' );
-		writeFileSync(
-			join( outputDir, 'resources', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				resources: {
-					'https://example.com/css/site.css': {
-						path: 'resources/css/site.css',
-						contentType: 'text/css',
-					},
-					...( browserResource
-						? {
-								[ imageUrl ]: {
-									path: 'resources/images/background.jpg',
-									contentType: 'image/jpeg',
-								},
-						  }
-						: {} ),
-				},
-				failures: [],
-			} )
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-			} )
-		);
+			capture.file( join( 'resources', 'images', 'background.jpg' ), 'captured-image' );
+		capture.file( join( 'media', 'background.jpg' ), 'downloaded-image' );
+		capture.json( join( 'resources', 'manifest.json' ), {  version: 1,  resources: {  'https://example.com/css/site.css': {  path: 'resources/css/site.css',  contentType: 'text/css',  },  ...( browserResource  ? {  [ imageUrl ]: {  path: 'resources/images/background.jpg',  contentType: 'image/jpeg',  },  }  : {} ),  },  failures: [],  } );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { html: 'html/homepage.html' } },  } );
 		const media = MediaStubStore.load( outputDir );
 		if ( mediaStatus === 'success' )
 			media.markSuccess( imageUrl, join( outputDir, 'media', 'background.jpg' ) );
 		else media.markFailure( imageUrl, 'HTTP 403' );
 		media.flush();
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'generic',
-			summary: {},
-			failures: [],
-		} );
-
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'generic',  summary: {},  failures: [],  } );
 		expect( readFileSync( join( outputDir, 'website', 'css', 'site.css' ), 'utf8' ) ).toBe(
 			`.hero{background-image:url("${ expectedUrl }")}`
 		);
@@ -7156,21 +4380,16 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it.each( [ true, false ] )( 'preserves social image identities across HTTP/HTTPS (captured: %s)', captured => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-social-image-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots', 'resources/media' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots', 'resources/media' ] } );
+		const outputDir = capture.build();
 		const pageUrl = 'https://example.com/item';
 		const imageUrl = 'https://example.com/cdn/files/item.jpg?v=1';
 		const fields = [ 'og:image', 'og:image:url', 'og:image:secure_url', 'twitter:image', 'twitter:image:src' ];
 		const authoredUrl = ( field: string ) => field === 'og:image' ? imageUrl.replace( 'https:', 'http:' ) : imageUrl;
-		writeFileSync( join( outputDir, 'html/page.html' ), `<html><head>${ fields.map( field => `<meta ${ field.startsWith( 'twitter' ) ? 'name' : 'property' }="${ field }" content="${ authoredUrl( field ) }">` ).join( '' ) }</head><body><img src="/cdn/files/item.jpg?v=1"><h1>Item</h1></body></html>` );
-		writeFileSync( join( outputDir, 'resources/media/item.jpg' ), 'image-bytes' );
-		writeFileSync( join( outputDir, 'resources/manifest.json' ), JSON.stringify( {
-			version: 1, resources: captured ? { [ imageUrl ]: { path: 'resources/media/item.jpg', contentType: 'image/jpeg' } } : {}, failures: [],
-		} ) );
-		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: {
-			[ pageUrl ]: { html: 'html/page.html', documents: { desktop: { url: pageUrl, baseUrl: pageUrl } } },
-		} } ) );
+		capture.file( 'html/page.html', `<html><head>${ fields.map( field => `<meta ${ field.startsWith( 'twitter' ) ? 'name' : 'property' }="${ field }" content="${ authoredUrl( field ) }">` ).join( '' ) }</head><body><img src="/cdn/files/item.jpg?v=1"><h1>Item</h1></body></html>` );
+		capture.file( 'resources/media/item.jpg', 'image-bytes' );
+		capture.json( 'resources/manifest.json', {  version: 1, resources: captured ? { [ imageUrl ]: { path: 'resources/media/item.jpg', contentType: 'image/jpeg' } } : {}, failures: [],  } );
+		capture.manifest( { version: 1, entries: {  [ pageUrl ]: { html: 'html/page.html', documents: { desktop: { url: pageUrl, baseUrl: pageUrl } } },  } } );
 		exportWebsiteCapture( { outputDir, sourceUrl: pageUrl, platform: 'generic', summary: {}, failures: [] } );
 		const $ = cheerio.load( readFileSync( join( outputDir, 'website/index.html' ), 'utf8' ) );
 		fields.forEach( field => {
@@ -7181,38 +4400,16 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'keeps a CSS background that is also the og:image and an img', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-og-image-background-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots', 'media', 'resources/media' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots', 'media', 'resources/media' ] } );
+		const outputDir = capture.build();
 		const imageUrl = 'https://example.com/media/photo.jpg';
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<html><head><meta property="og:image" content="media/photo.jpg"><style>.hero .bg{background:url("media/photo.jpg") center/cover}</style></head><body><section class="hero"><div class="bg"></div><h1>Hero</h1></section><p><img src="media/photo.jpg" alt="Photo"></p></body></html>'
-		);
-		writeFileSync( join( outputDir, 'resources', 'media', 'photo.jpg' ), 'image-bytes' );
-		writeFileSync( join( outputDir, 'media', 'photo.jpg' ), 'image-bytes' );
-		writeFileSync(
-			join( outputDir, 'resources', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				resources: { [ imageUrl ]: { path: 'resources/media/photo.jpg', contentType: 'image/jpeg' } },
-				failures: [],
-			} )
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( { version: 1, entries: { 'https://example.com/': {
-				html: 'html/homepage.html',
-				documents: { desktop: { url: 'https://example.com/', baseUrl: 'https://example.com/' } },
-			} } } )
-		);
+		capture.file( join( 'resources', 'media', 'photo.jpg' ), 'image-bytes' );
+		capture.json( join( 'resources', 'manifest.json' ), {  version: 1,  resources: { [ imageUrl ]: { path: 'resources/media/photo.jpg', contentType: 'image/jpeg' } },  failures: [],  } );
+		capture.page( "https://example.com/", '<html><head><meta property="og:image" content="media/photo.jpg"><style>.hero .bg{background:url("media/photo.jpg") center/cover}</style></head><body><section class="hero"><div class="bg"></div><h1>Hero</h1></section><p><img src="media/photo.jpg" alt="Photo"></p></body></html>', { entry: { html: 'html/homepage.html',  documents: { desktop: { url: 'https://example.com/', baseUrl: 'https://example.com/' } } } } );
 		const media = MediaStubStore.load( outputDir );
-		media.markSuccess( imageUrl, join( outputDir, 'media', 'photo.jpg' ) );
+		capture.media( imageUrl, 'media/photo.jpg', 'image-bytes' , media );
 		media.flush();
-
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
-
 		const homepage = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( homepage );
 		expect( $( 'style' ).text() ).toContain( 'url("/media/photo.jpg")' );
@@ -7223,28 +4420,10 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'drops leftover remote asset requests while keeping editorial links', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-self-contain-export-' ) );
-		dirs.push( outputDir );
-		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
-		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<html><head><link rel="canonical" href="https://example.com/"><link rel="preconnect" href="https://siteassets.example.com"><link rel="dns-prefetch" href="//cdn.example"><link rel="stylesheet" href="https://runtime.example/theme.css"><style>.x{background:url("https://runtime.example/bg.jpg")}</style></head><body><a href="https://external.example/about">About</a></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-			} )
-		);
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/", '<html><head><link rel="canonical" href="https://example.com/"><link rel="preconnect" href="https://siteassets.example.com"><link rel="dns-prefetch" href="//cdn.example"><link rel="stylesheet" href="https://runtime.example/theme.css"><style>.x{background:url("https://runtime.example/bg.jpg")}</style></head><body><a href="https://external.example/about">About</a></body></html>' , { entry: { html: 'html/homepage.html' } } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		expect( html ).not.toContain( 'siteassets.example.com' );
 		expect( html ).not.toContain( 'runtime.example' );
@@ -7255,49 +4434,17 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'does not treat the source root as a global media replacement', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-root-media-export-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots', 'media', 'resources/cdn' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots', 'media', 'resources/cdn' ] } );
+		const outputDir = capture.build();
 		const sourceHtml = '<html><head><link rel="stylesheet" href="https://cdn.example/site.css"></head><body><img src="/"><p data-kind="image/x-icon">Icon</p><a href="/about/">About</a></body></html>';
-		writeFileSync( join( outputDir, 'html', 'homepage.html' ), sourceHtml );
-		writeFileSync( join( outputDir, 'media', 'homepage.jpg' ), 'not-an-image' );
-		writeFileSync(
-			join( outputDir, 'resources', 'cdn', 'site.css' ),
-			'.icon{background-image:url("data:image/svg+xml;base64,PHN2Zz4=")}'
-		);
-		writeFileSync(
-			join( outputDir, 'resources', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				resources: {
-					'https://cdn.example/site.css': {
-						path: 'resources/cdn/site.css',
-						contentType: 'text/css',
-					},
-				},
-				failures: [],
-			} )
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-			} )
-		);
+		capture.file( join( 'html', 'homepage.html' ), sourceHtml );
+		capture.file( join( 'resources', 'cdn', 'site.css' ), '.icon{background-image:url("data:image/svg+xml;base64,PHN2Zz4=")}' );
+		capture.json( join( 'resources', 'manifest.json' ), {  version: 1,  resources: {  'https://cdn.example/site.css': {  path: 'resources/cdn/site.css',  contentType: 'text/css',  },  },  failures: [],  } );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { html: 'html/homepage.html' } },  } );
 		const media = MediaStubStore.load( outputDir );
-		media.markSuccess( 'https://example.com/', join( outputDir, 'media', 'homepage.jpg' ) );
+		capture.media( 'https://example.com/', 'media/homepage.jpg', 'not-an-image' , media );
 		media.flush();
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
-
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const css = readFileSync( join( outputDir, 'website', 'cdn', 'site.css' ), 'utf8' );
 		expect( html ).toContain( 'data-kind="image/x-icon"' );
@@ -7307,47 +4454,16 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'uses a captured browser image when the primary media download failed', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-browser-media-fallback-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots', 'resources/external' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots', 'resources/external' ] } );
+		const outputDir = capture.build();
 		const source = 'https://cdn.example/icons/feature.png?resize=88%2C87';
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			`<main><img src="${ source }" width="41" height="87"></main>`
-		);
-		writeFileSync( join( outputDir, 'resources', 'external', 'feature.webp' ), 'webp' );
-		writeFileSync(
-			join( outputDir, 'resources', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				resources: {
-					[ source ]: {
-						path: 'resources/external/feature.webp',
-						contentType: 'image/webp',
-					},
-				},
-				failures: [],
-			} )
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-			} )
-		);
+		capture.file( join( 'html', 'homepage.html' ), `<main><img src="${ source }" width="41" height="87"></main>` );
+		capture.file( join( 'resources', 'external', 'feature.webp' ), 'webp' );
+		capture.json( join( 'resources', 'manifest.json' ), {  version: 1,  resources: {  [ source ]: {  path: 'resources/external/feature.webp',  contentType: 'image/webp',  },  },  failures: [],  } );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { html: 'html/homepage.html' } },  } );
 		const media = MediaStubStore.load( outputDir );
 		media.markFailure( source, 'HTTP 403' );
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
-
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		expect( html ).toContain( 'src="/external/feature.webp"' );
 		expect( html ).not.toContain( 'data:image/gif;base64,' );
@@ -7357,32 +4473,22 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'serves a captured browser image whose on-disk transform path contains literal percent signs', async () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-percent-resource-export-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots', 'resources/external/crop' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots', 'resources/external/crop' ] } );
+		const outputDir = capture.build();
 		const source = 'https://cdn.example/crop/rs=h:100%25,cg:true';
 		const file = 'resources/external/crop/rs=h:100%,cg:true.png';
-		writeFileSync( join( outputDir, file ), Buffer.from(
+		capture.file( file, Buffer.from(
 			'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
 			'base64'
 		) );
-		writeFileSync( join( outputDir, 'html', 'homepage.html' ), `<main><img src="${ source }" alt="Logo"></main>` );
-		writeFileSync( join( outputDir, 'resources', 'manifest.json' ), JSON.stringify( {
-			version: 1,
-			resources: { [ source ]: { path: file, contentType: 'image/png' } },
-			failures: [],
-		} ) );
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
-			version: 1,
-			entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-		} ) );
+		capture.file( join( 'html', 'homepage.html' ), `<main><img src="${ source }" alt="Logo"></main>` );
+		capture.json( join( 'resources', 'manifest.json' ), {  version: 1,  resources: { [ source ]: { path: file, contentType: 'image/png' } },  failures: [],  } );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { html: 'html/homepage.html' } },  } );
 		MediaStubStore.load( outputDir ).markFailure( source, 'HTTP 403' );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
-
 		const websiteDir = join( outputDir, 'website' );
 		const server = await startStaticServer( websiteDir );
-		const browser = await chromium.launch();
+		const browser = await browserContext();
 		try {
 			const page = await browser.newPage();
 			await page.goto( server.url );
@@ -7400,39 +4506,19 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'keeps portable media within the artifact capacity left after routes and resources', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-budget-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots', 'media' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots', 'media' ] } );
+		const outputDir = capture.build();
 		const filler = 'x'.repeat( 300 * 1024 );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			`<main><h1>Home</h1><p>${ filler }</p><img src="https://cdn.example/first.png"><img src="https://cdn.example/second.png"></main>`
-		);
-		writeFileSync( join( outputDir, 'media', 'first.png' ), Buffer.alloc( 120 * 1024, 1 ) );
-		writeFileSync( join( outputDir, 'media', 'second.png' ), Buffer.alloc( 120 * 1024, 2 ) );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-			} )
-		);
+		capture.file( join( 'html', 'homepage.html' ), `<main><h1>Home</h1><p>${ filler }</p><img src="https://cdn.example/first.png"><img src="https://cdn.example/second.png"></main>` );
+		capture.file( join( 'media', 'first.png' ), Buffer.alloc( 120 * 1024, 1 ) );
+		capture.file( join( 'media', 'second.png' ), Buffer.alloc( 120 * 1024, 2 ) );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { html: 'html/homepage.html' } },  } );
 		const media = MediaStubStore.load( outputDir );
 		media.markSuccess( 'https://cdn.example/first.png', join( outputDir, 'media', 'first.png' ) );
 		media.markSuccess( 'https://cdn.example/second.png', join( outputDir, 'media', 'second.png' ) );
 		media.flush();
-
 		const artifactTotalBytes = 500 * 1024;
-		const receiptPath = exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-			limits: { portableMediaTotalBytes: artifactTotalBytes },
-		} );
-
+		const receiptPath = exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  limits: { portableMediaTotalBytes: artifactTotalBytes },  } );
 		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
 		expect( receipt.portableMedia ).toMatchObject( {
 			selected_count: 2,
@@ -7442,198 +4528,104 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'keeps generated reports beside the portable website', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-report-budget-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots', 'media' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			`<main>${ 'x'.repeat( 300 * 1024 ) }<img src="https://cdn.example/image.png"></main>`
-		);
-		writeFileSync( join( outputDir, 'media', 'image.png' ), Buffer.alloc( 170 * 1024, 1 ) );
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
-			version: 1,
-			entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-		} ) );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots', 'media' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'html', 'homepage.html' ), `<main>${ 'x'.repeat( 300 * 1024 ) }<img src="https://cdn.example/image.png"></main>` );
+		capture.file( join( 'media', 'image.png' ), Buffer.alloc( 170 * 1024, 1 ) );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { html: 'html/homepage.html' } },  } );
 		const media = MediaStubStore.load( outputDir );
 		media.markSuccess( 'https://cdn.example/image.png', join( outputDir, 'media', 'image.png' ) );
 		media.flush();
-
-		const receiptPath = exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-			limits: { portableMediaTotalBytes: 480 * 1024 },
-		} );
-
+		const receiptPath = exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  limits: { portableMediaTotalBytes: 480 * 1024 },  } );
 		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
 		expect( receipt.portableMedia.selected_count ).toBe( 1 );
 		expect( existsSync( join( outputDir, 'diagnostics.json' ) ) ).toBe( true );
 		expect( existsSync( join( outputDir, 'source-profile.json' ) ) ).toBe( true );
 		expect( existsSync( join( outputDir, 'artifact.json' ) ) ).toBe( false );
 	} );
-
 	// This writes and exports 4,097 route files; allow for filesystem contention
 	// when the full gate runs alongside the browser suites.
+
 	it( 'retains every route beyond a former compiler file boundary', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-file-boundary-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const entries: Record< string, { html: string } > = {};
 		// The former compiler boundary is 4,096 routes; one route past it is the
 		// smallest fixture that proves the exporter does not truncate at that cap.
 		for ( let index = 0; index < 4_097; index++ ) {
 			const slug = `page-${ index }`;
-			writeFileSync( join( outputDir, 'html', `${ slug }.html` ), '<main>Page</main>' );
+			capture.file( join( 'html', `${ slug }.html` ), '<main>Page</main>' );
 			entries[ index === 0 ? 'https://example.com/' : `https://example.com/${ slug }` ] = {
 				html: `html/${ slug }.html`,
 			};
 		}
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries } ) );
-
+		capture.manifest( { version: 1, entries } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
-
 		const receipt = JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) );
 		expect( receipt.routes ).toHaveLength( 4_097 );
 		expect( existsSync( join( outputDir, 'website', 'page-4096', 'index.html' ) ) ).toBe( true );
 	}, 360_000 );
 
 	it( 'reserves repeated hoisted stylesheets before allocating constrained artifact media', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-style-budget-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots', 'media' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots', 'media' ] } );
+		const outputDir = capture.build();
 		const sharedCss = `.shared{content:"${ 'x'.repeat( 80 * 1024 ) }"}`;
 		for ( const slug of [ 'homepage', 'about' ] )
-			writeFileSync(
-				join( outputDir, 'html', `${ slug }.html` ),
-				`<html><head><style>${ sharedCss }</style></head><body><p>${ 'x'.repeat( 50 * 1024 ) }</p><img src="https://cdn.example/image.png"></body></html>`
-			);
-		writeFileSync( join( outputDir, 'media', 'image.png' ), Buffer.alloc( 100 * 1024, 1 ) );
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
-			version: 1,
-			entries: {
-				'https://example.com/': { html: 'html/homepage.html' },
-				'https://example.com/about': { html: 'html/about.html' },
-			},
-		} ) );
+			capture.file( join( 'html', `${ slug }.html` ), `<html><head><style>${ sharedCss }</style></head><body><p>${ 'x'.repeat( 50 * 1024 ) }</p><img src="https://cdn.example/image.png"></body></html>` );
+		capture.file( join( 'media', 'image.png' ), Buffer.alloc( 100 * 1024, 1 ) );
+		capture.manifest( {  version: 1,  entries: {  'https://example.com/': { html: 'html/homepage.html' },  'https://example.com/about': { html: 'html/about.html' },  },  } );
 		const media = MediaStubStore.load( outputDir );
 		media.markSuccess( 'https://cdn.example/image.png', join( outputDir, 'media', 'image.png' ) );
 		media.flush();
-
-		const receiptPath = exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-			limits: { portableMediaTotalBytes: 400 * 1024 },
-		} );
+		const receiptPath = exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  limits: { portableMediaTotalBytes: 400 * 1024 },  } );
 		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
 		expect( receipt.portableMedia.selected_count ).toBe( 1 );
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain( '/assets/css/capture-' );
 	} );
 
 	it( 'hoists repeated 80 KiB safe styles without an artifact budget', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-net-style-budget-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const sharedCss = `.shared{content:"${ 'x'.repeat( 80 * 1024 ) }"}`;
 		for ( const slug of [ 'homepage', 'about' ] )
-			writeFileSync(
-				join( outputDir, 'html', `${ slug }.html` ),
-				`<html><head><style>${ sharedCss }</style></head><body><p>Page</p></body></html>`
-			);
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
-			version: 1,
-			entries: {
-				'https://example.com/': { html: 'html/homepage.html' },
-				'https://example.com/about': { html: 'html/about.html' },
-			},
-		} ) );
-
+			capture.file( join( 'html', `${ slug }.html` ), `<html><head><style>${ sharedCss }</style></head><body><p>Page</p></body></html>` );
+		capture.manifest( {  version: 1,  entries: {  'https://example.com/': { html: 'html/homepage.html' },  'https://example.com/about': { html: 'html/about.html' },  },  } );
 		const limit = 170 * 1024;
 		const oldInflatedBytes =
 			Buffer.byteLength( readFileSync( join( outputDir, 'html', 'homepage.html' ), 'utf8' ) ) * 2 +
 			Buffer.byteLength( sharedCss );
 		expect( oldInflatedBytes ).toBeGreaterThan( limit );
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-			limits: { portableMediaTotalBytes: limit },
-		} );
-
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  limits: { portableMediaTotalBytes: limit },  } );
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain( '/assets/css/capture-' );
 	} );
 
 	it( 'retains routes when capture reports exceed a former compiler cap', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-capture-export-report-preflight-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const entries: Record< string, { html: string } > = {};
 		for ( let index = 0; index < 100; index++ ) {
 			const slug = `page-${ index }`;
-			writeFileSync( join( outputDir, 'html', `${ slug }.html` ), '<main>Page</main>' );
+			capture.file( join( 'html', `${ slug }.html` ), '<main>Page</main>' );
 			entries[ index === 0 ? 'https://example.com/' : `https://example.com/${ slug }` ] = {
 				html: `html/${ slug }.html`,
 			};
 		}
-		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries } ) );
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-			limits: { portableMediaTotalBytes: 3 * 1024 },
-		} );
+		capture.manifest( { version: 1, entries } );
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  limits: { portableMediaTotalBytes: 3 * 1024 },  } );
 		expect( existsSync( join( outputDir, 'website', 'page-99', 'index.html' ) ) ).toBe( true );
 		expect( existsSync( join( outputDir, 'artifact.json' ) ) ).toBe( false );
 	} );
 
 	it( 'does not treat empty img src as page-URL media or rewrite every slash', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-empty-src-export-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots', 'media' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<!doctype html><html><body><div class="hero"><p>Home</p><img alt="Wix placeholder" src=""><img src="https://cdn.example/logo.png"></div></body></html>'
-		);
-		writeFileSync(
-			join( outputDir, 'media', 'image-1788009152544.jpg' ),
-			Buffer.alloc( 6 * 1024 * 1024, 1 )
-		);
-		writeFileSync( join( outputDir, 'media', 'logo.png' ), 'png' );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-			} )
-		);
+		const capture = exportFixture( { directories: [ 'html', 'screenshots', 'media' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'media', 'image-1788009152544.jpg' ), Buffer.alloc( 6 * 1024 * 1024, 1 ) );
+		capture.page( "https://example.com/", '<!doctype html><html><body><div class="hero"><p>Home</p><img alt="Wix placeholder" src=""><img src="https://cdn.example/logo.png"></div></body></html>' , { entry: { html: 'html/homepage.html' } } );
 		const media = MediaStubStore.load( outputDir );
-		media.markSuccess(
-			'https://example.com/',
-			join( outputDir, 'media', 'image-1788009152544.jpg' )
-		);
-		media.markSuccess( 'https://cdn.example/logo.png', join( outputDir, 'media', 'logo.png' ) );
+		media.markSuccess( 'https://example.com/', join( outputDir, 'media', 'image-1788009152544.jpg' ) );
+		capture.media( 'https://cdn.example/logo.png', 'media/logo.png', 'png' , media );
 		media.flush();
-
-		const receiptPath = exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
-
+		const receiptPath = exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		expect( html ).toContain( '</div>' );
 		expect( html ).toContain( '</p>' );
@@ -7650,38 +4642,15 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'preserves document syntax when a replacement map includes a bare slash', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-degenerate-slash-export-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots', 'media' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			'<html><body><div class="hero-wrap"><div class="hero-inner"><img src="/hero.png"><img src="https://cdn.example/logo.png"></div></div><style>.hero-inner{background-image:url(/)}</style></body></html>'
-		);
-		writeFileSync( join( outputDir, 'media', 'hero.png' ), 'hero' );
-		writeFileSync( join( outputDir, 'media', 'logo.png' ), 'logo' );
-		writeFileSync( join( outputDir, 'media', 'root.png' ), 'root' );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-			} )
-		);
+		const capture = exportFixture( { directories: [ 'html', 'screenshots', 'media' ] } );
+		const outputDir = capture.build();
+		capture.page( "https://example.com/", '<html><body><div class="hero-wrap"><div class="hero-inner"><img src="/hero.png"><img src="https://cdn.example/logo.png"></div></div><style>.hero-inner{background-image:url(/)}</style></body></html>' , { entry: { html: 'html/homepage.html' } } );
 		const media = MediaStubStore.load( outputDir );
-		media.markSuccess( 'https://example.com/', join( outputDir, 'media', 'root.png' ) );
-		media.markSuccess( 'https://example.com/hero.png', join( outputDir, 'media', 'hero.png' ) );
-		media.markSuccess( 'https://cdn.example/logo.png', join( outputDir, 'media', 'logo.png' ) );
+		capture.media( 'https://example.com/', 'media/root.png', 'root' , media );
+		capture.media( 'https://example.com/hero.png', 'media/hero.png', 'hero' , media );
+		capture.media( 'https://cdn.example/logo.png', 'media/logo.png', 'logo' , media );
 		media.flush();
-
-		exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
-
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
 		expect( html ).toContain( '</div>' );
@@ -7696,32 +4665,21 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	} );
 
 	it( 'selects raw punctuation, comma, entity, and percent references that are not DOM src values', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-exact-media-spellings-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots', 'media' ] )
-			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots', 'media' ] } );
+		const outputDir = capture.build();
 		const quoted = "https://static.wixstatic.com/media/Happy%20Women's%20Day.jpg";
 		const comma = 'https://cdn.example/media/asset~mv2.png/v1/fill/w_58,h_57,al_c/file.png';
 		const entity = 'https://cdn.example/q.png?w=1&h=2';
 		const percent = 'https://cdn.example/crop/rs=h:100%25,cg:true';
 		const prefix = 'https://cdn.example/hero.png';
-		writeFileSync(
-			join( outputDir, 'html', 'homepage.html' ),
-			`<main>` +
+		capture.file( join( 'html', 'homepage.html' ), `<main>` +
 				`<img data-src="${ quoted }">` +
 				`<img data-src="${ comma }">` +
 				`<img data-src="${ entity.replace( /&/g, '&amp;' ) }">` +
 				`<img data-src="${ percent }">` +
 				`<img data-src="${ prefix }?w=128">` +
-				`</main>`
-		);
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( {
-				version: 1,
-				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-			} )
-		);
+				`</main>` );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { html: 'html/homepage.html' } },  } );
 		const media = MediaStubStore.load( outputDir );
 		const selected = [
 			[ quoted, 'quoted.jpg' ],
@@ -7730,21 +4688,12 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			[ percent, 'percent.png' ],
 		] as const;
 		for ( const [ url, name ] of selected ) {
-			writeFileSync( join( outputDir, 'media', name ), name );
+			capture.file( join( 'media', name ), name );
 			media.markSuccess( url, join( outputDir, 'media', name ) );
 		}
-		writeFileSync( join( outputDir, 'media', 'prefix.png' ), 'prefix' );
-		media.markSuccess( prefix, join( outputDir, 'media', 'prefix.png' ) );
+		capture.media( prefix, 'media/prefix.png', 'prefix' , media );
 		media.flush();
-
-		const receiptPath = exportWebsiteCapture( {
-			outputDir,
-			sourceUrl: 'https://example.com/',
-			platform: 'fake',
-			summary: {},
-			failures: [],
-		} );
-
+		const receiptPath = exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
 		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
 		expect( receipt.assets.map( ( asset: { sourceUrl: string } ) => asset.sourceUrl ) ).toEqual( [
 			quoted,
@@ -7755,10 +4704,30 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( existsSync( join( outputDir, 'website', 'media', 'prefix.png' ) ) ).toBe( false );
 	} );
 
+	it( 'reports only retained image failures and names missing verified files', () => {
+		const capture = exportFixture( { directories: [ 'html', 'screenshots', 'media' ] } );
+		const outputDir = capture.build();
+		const retained = 'https://media.base44.com/images/public/app/retained.jpg';
+		const discarded = 'https://media.base44.com/images/public/app/discarded.jpg';
+		capture.file( 'html/homepage.html', `<main><img src="${ retained }"></main>` );
+		capture.manifest( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } );
+		const stubs = MediaStubStore.load( outputDir );
+		const images = [ retained, discarded ].map( ( url, index ) => {
+			const localPath = join( outputDir, 'media', `${ index }.jpg` );
+			stubs.markSuccess( url, localPath );
+			return { kind: 'image', source_urls: [ url ], references: [], resolved_original: url, local_path: localPath,
+				original: { source_url: url, content_type: 'image/jpeg', width: 20, height: 10, sha256: 'missing' } };
+		} );
+		stubs.flush();
+		capture.json( 'image-assets.json', { version: 1, images } );
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
+		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
+		expect( diagnostics.discoveryDiagnostics.filter( ( item: { code: string } ) => item.code === 'image_resource_unresolved' ) ).toEqual( [ expect.objectContaining( { url: retained, reason: 'verified resource file is missing from disk' } ) ] );
+	} );
+
 	it( 'keeps original and hard-crop references with their own pictures in one media family', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-hard-crop-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots', 'media' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots', 'media' ] } );
+		const outputDir = capture.build();
 		const images = [
 			{ name: 'photo.jpg', width: 1140, page: 'homepage', route: '' },
 			{ name: 'photo-750x350.jpg', width: 750, page: 'crop', route: 'crop/' },
@@ -7769,18 +4738,15 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			const localPath = join( outputDir, 'media', name );
 			const bytes = Buffer.alloc( 1000 - index, index + 1 );
 			writeFileSync( localPath, bytes );
-			writeFileSync( join( outputDir, 'html', `${ page }.html` ), `<main><img width="${ width }" height="350" src="${ url }"></main>` );
+			capture.file( join( 'html', `${ page }.html` ), `<main><img width="${ width }" height="350" src="${ url }"></main>` );
 			stubs.markSuccess( url, localPath );
 			return { kind: 'image', source_urls: [ url ], references: [], resolved_original: url, local_path: localPath,
 				original: { source_url: url, content_type: 'image/jpeg', width, height: 350, sha256: createHash( 'sha256' ).update( bytes ).digest( 'hex' ) } };
 		} );
 		stubs.flush();
-		writeFileSync( join( outputDir, 'image-assets.json' ), JSON.stringify( { version: 1, images: records } ) );
-		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1,
-			entries: Object.fromEntries( images.map( ( { page, route } ) => [ `https://example.com/${ route }`, { html: `html/${ page }.html` } ] ) ) } ) );
-
+		capture.json( 'image-assets.json', { version: 1, images: records } );
+		capture.manifest( { version: 1,  entries: Object.fromEntries( images.map( ( { page, route } ) => [ `https://example.com/${ route }`, { html: `html/${ page }.html` } ] ) ) } );
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
-
 		for ( const { name, route } of images ) {
 			const html = readFileSync( join( outputDir, 'website', route, 'index.html' ), 'utf8' );
 			expect( html ).toContain( `src="/media/${ name }"` );
@@ -7790,13 +4756,12 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 
 	it( 'localizes independently verified responsive bytes before budget blanking, or counts a blank when unavailable', () => {
 		for ( const budget of [ 600, 3000 ] ) for ( const available of [ true, false ] ) {
-			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-responsive-budget-' ) );
-			dirs.push( outputDir );
-			for ( const path of [ 'html', 'screenshots', 'media' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+			const capture = exportFixture( { directories: [ 'html', 'screenshots', 'media' ] } );
+			const outputDir = capture.build();
 			const originalUrl = 'https://cdn.example/photo.png';
 			const smallUrl = `${ originalUrl }?width=300`;
-			writeFileSync( join( outputDir, 'html/homepage.html' ), `<main><img style="width:250px" src="${ originalUrl }" srcset="${ smallUrl } 300w, ${ originalUrl } 1800w"></main>` );
-			writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } ) );
+			capture.file( 'html/homepage.html', `<main><img style="width:250px" src="${ originalUrl }" srcset="${ smallUrl } 300w, ${ originalUrl } 1800w"></main>` );
+			capture.manifest( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } );
 			const original = Buffer.alloc( 2000, 1 ), small = Buffer.alloc( 500, 2 );
 			const originalPath = join( outputDir, 'media/original.png' ), smallPath = join( outputDir, 'media/small.png' );
 			writeFileSync( originalPath, original );
@@ -7806,11 +4771,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			for ( const url of [ originalUrl, smallUrl ] ) stubs.markSuccess( url, originalPath );
 			stubs.flush();
 			const metadata = ( url: string, bytes: Buffer, width: number ) => ( { source_url: url, content_type: 'image/png', width, height: width, sha256: createHash( 'sha256' ).update( bytes ).digest( 'hex' ) } );
-			writeFileSync( join( outputDir, 'image-assets.json' ), JSON.stringify( { version: 1, images: [ {
-				kind: 'image', source_urls: [ originalUrl, smallUrl ], references: [], resolved_original: originalUrl,
-				local_path: originalPath, original: metadata( originalUrl, original, 1800 ),
-				renditions: available ? [ { kind: 'image', source_urls: [ smallUrl ], references: [], resolved_original: smallUrl, local_path: smallPath, original: metadata( smallUrl, small, 300 ) } ] : [],
-			} ] } ) );
+			capture.json( 'image-assets.json', { version: 1, images: [ {  kind: 'image', source_urls: [ originalUrl, smallUrl ], references: [], resolved_original: originalUrl,  local_path: originalPath, original: metadata( originalUrl, original, 1800 ),  renditions: available ? [ { kind: 'image', source_urls: [ smallUrl ], references: [], resolved_original: smallUrl, local_path: smallPath, original: metadata( smallUrl, small, 300 ) } ] : [],  } ] } );
 			const receipt = JSON.parse( readFileSync( exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [], limits: { portableMediaTotalBytes: budget } } ), 'utf8' ) );
 			const urls = receipt.assets.flatMap( ( asset: { source_urls?: string[] } ) => asset.source_urls ?? [] );
 			expect( new Set( urls ).size ).toBe( urls.length );
@@ -7829,25 +4790,14 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 
 	it( 'keeps the smaller eligible family when homepage priority ties, independent of stub order', () => {
 		for ( const order of [ 'large-first', 'small-first' ] as const ) {
-			const outputDir = mkdtempSync( join( tmpdir(), `liberation-media-budget-bytes-${ order }-` ) );
-			dirs.push( outputDir );
-			for ( const path of [ 'html', 'screenshots', 'media' ] )
-				mkdirSync( join( outputDir, path ), { recursive: true } );
+			const capture = exportFixture( { directories: [ 'html', 'screenshots', 'media' ] } );
+			const outputDir = capture.build();
 			const largeUrl = 'https://cdn.example/a-large.png';
 			const smallUrl = 'https://cdn.example/z-small.png';
-			writeFileSync(
-				join( outputDir, 'html', 'homepage.html' ),
-				`<main><img src="${ largeUrl }"><img src="${ smallUrl }"></main>`
-			);
-			writeFileSync(
-				join( outputDir, 'screenshots', 'manifest.json' ),
-				JSON.stringify( {
-					version: 1,
-					entries: { 'https://example.com/': { html: 'html/homepage.html' } },
-				} )
-			);
-			writeFileSync( join( outputDir, 'media', 'a-large.png' ), Buffer.alloc( 2000, 1 ) );
-			writeFileSync( join( outputDir, 'media', 'z-small.png' ), Buffer.alloc( 1000, 2 ) );
+			capture.file( join( 'html', 'homepage.html' ), `<main><img src="${ largeUrl }"><img src="${ smallUrl }"></main>` );
+			capture.manifest( {  version: 1,  entries: { 'https://example.com/': { html: 'html/homepage.html' } },  } );
+			capture.file( join( 'media', 'a-large.png' ), Buffer.alloc( 2000, 1 ) );
+			capture.file( join( 'media', 'z-small.png' ), Buffer.alloc( 1000, 2 ) );
 			const media = MediaStubStore.load( outputDir );
 			const stubs = order === 'large-first'
 				? [ [ largeUrl, 'a-large.png' ], [ smallUrl, 'z-small.png' ] ]
@@ -7855,16 +4805,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			for ( const [ url, name ] of stubs )
 				media.markSuccess( url, join( outputDir, 'media', name ) );
 			media.flush();
-
-			const receiptPath = exportWebsiteCapture( {
-				outputDir,
-				sourceUrl: 'https://example.com/',
-				platform: 'fake',
-				summary: {},
-				failures: [],
-				limits: { portableMediaTotalBytes: 1000 },
-			} );
-
+			const receiptPath = exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  limits: { portableMediaTotalBytes: 1000 },  } );
 			const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
 			const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
 			expect( receipt.assets.map( ( asset: { sourceUrl: string } ) => asset.sourceUrl ) ).toEqual( [ smallUrl ] );
@@ -7878,26 +4819,15 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 
 	it( 'keeps the homepage family over a smaller other-page family, independent of stub order', () => {
 		for ( const order of [ 'other-first', 'home-first' ] as const ) {
-			const outputDir = mkdtempSync( join( tmpdir(), `liberation-media-budget-home-${ order }-` ) );
-			dirs.push( outputDir );
-			for ( const path of [ 'html', 'screenshots', 'media' ] )
-				mkdirSync( join( outputDir, path ), { recursive: true } );
+			const capture = exportFixture( { directories: [ 'html', 'screenshots', 'media' ] } );
+			const outputDir = capture.build();
 			const homeUrl = 'https://cdn.example/z-home.png';
 			const otherUrl = 'https://cdn.example/a-other.png';
-			writeFileSync( join( outputDir, 'html', 'homepage.html' ), `<main><img src="${ homeUrl }"></main>` );
-			writeFileSync( join( outputDir, 'html', 'other.html' ), `<main><img src="${ otherUrl }"></main>` );
-			writeFileSync(
-				join( outputDir, 'screenshots', 'manifest.json' ),
-				JSON.stringify( {
-					version: 1,
-					entries: {
-						'https://example.com/': { html: 'html/homepage.html' },
-						'https://example.com/other': { html: 'html/other.html' },
-					},
-				} )
-			);
-			writeFileSync( join( outputDir, 'media', 'z-home.png' ), Buffer.alloc( 1500, 1 ) );
-			writeFileSync( join( outputDir, 'media', 'a-other.png' ), Buffer.alloc( 1000, 2 ) );
+			capture.file( join( 'html', 'homepage.html' ), `<main><img src="${ homeUrl }"></main>` );
+			capture.file( join( 'html', 'other.html' ), `<main><img src="${ otherUrl }"></main>` );
+			capture.manifest( {  version: 1,  entries: {  'https://example.com/': { html: 'html/homepage.html' },  'https://example.com/other': { html: 'html/other.html' },  },  } );
+			capture.file( join( 'media', 'z-home.png' ), Buffer.alloc( 1500, 1 ) );
+			capture.file( join( 'media', 'a-other.png' ), Buffer.alloc( 1000, 2 ) );
 			const media = MediaStubStore.load( outputDir );
 			const stubs = order === 'other-first'
 				? [ [ otherUrl, 'a-other.png' ], [ homeUrl, 'z-home.png' ] ]
@@ -7905,16 +4835,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			for ( const [ url, name ] of stubs )
 				media.markSuccess( url, join( outputDir, 'media', name ) );
 			media.flush();
-
-			const receiptPath = exportWebsiteCapture( {
-				outputDir,
-				sourceUrl: 'https://example.com/',
-				platform: 'fake',
-				summary: {},
-				failures: [],
-				limits: { portableMediaTotalBytes: 1500 },
-			} );
-
+			const receiptPath = exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  limits: { portableMediaTotalBytes: 1500 },  } );
 			const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
 			const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
 			expect( receipt.assets.map( ( asset: { sourceUrl: string } ) => asset.sourceUrl ) ).toEqual( [ homeUrl ] );
@@ -7926,17 +4847,13 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		}
 	} );
 } );
-
 describe( 'exportWebsiteCapture entrypoint failures', () => {
+
 	it( 'reports why the source URL produced no page instead of a missing homepage', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-entrypoint-failure-' ) );
-		dirs.push( outputDir );
-		for ( const directory of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
-		writeFileSync( join( outputDir, 'html/about.html' ), '<html><body><main><h1>About</h1></main></body></html>' );
-		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: {
-			'https://example.test/': { slug: 'homepage' },
-			'https://example.test/about/': { html: 'html/about.html', slug: 'about' },
-		} } ) );
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.file( 'html/about.html', '<html><body><main><h1>About</h1></main></body></html>' );
+		capture.manifest( { version: 1, entries: {  'https://example.test/': { slug: 'homepage' },  'https://example.test/about/': { html: 'html/about.html', slug: 'about' },  } } );
 		const failures = [
 			{ url: 'https://example.test/', viewport: 'desktop', stage: 'goto', error: 'HTTP 403' },
 			{ url: 'https://example.test/', viewport: 'mobile', stage: 'goto', error: 'HTTP 403' },
@@ -7944,41 +4861,31 @@ describe( 'exportWebsiteCapture entrypoint failures', () => {
 		expect( () => exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.test/', platform: 'generic', summary: {}, failures } ) )
 			.toThrow( 'Source homepage https://example.test/ was not captured: desktop/goto: HTTP 403; mobile/goto: HTTP 403' );
 	} );
-
 	// One pass saved the page and another was redirected. Capture fails such a
 	// route and never schedules the redirect target, so export must report the
 	// recorded failure, not "redirects to <target>, which was not captured".
 	const disagreeingRedirect = () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-redirect-disagreement-' ) );
-		dirs.push( outputDir );
-		for ( const directory of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
-		writeFileSync( join( outputDir, 'html/homepage.html' ), '<html><body><main><h1>Home</h1><a href="/club">Club</a></main></body></html>' );
-		writeFileSync( join( outputDir, 'html/club.html' ), '<html><body><main><h1>Club</h1></main></body></html>' );
-		writeFileSync( join( outputDir, 'html/about.html' ), '<html><body><main><h1>About</h1></main></body></html>' );
-		return outputDir;
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.file( 'html/homepage.html', '<html><body><main><h1>Home</h1><a href="/club">Club</a></main></body></html>' );
+		capture.file( 'html/club.html', '<html><body><main><h1>Club</h1></main></body></html>' );
+		capture.file( 'html/about.html', '<html><body><main><h1>About</h1></main></body></html>' );
+		return capture;
 	};
 	const disagreement = ( url: string ) => ( { url, viewport: 'mobile', stage: 'goto', error: 'Source redirect aliases disagree across viewports' } );
 
 	it( 'reports a homepage whose passes disagreed about a redirect as not captured, with the recorded reason', () => {
-		const outputDir = disagreeingRedirect();
-		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: {
-			'https://example.test/': { slug: 'homepage', html: 'html/homepage.html', redirectedTo: 'https://example.test/home?lang=fr' },
-			'https://example.test/about/': { html: 'html/about.html', slug: 'about' },
-		} } ) );
-		expect( () => exportWebsiteCapture( {
-			outputDir, sourceUrl: 'https://example.test/', platform: 'generic', summary: {}, failures: [ disagreement( 'https://example.test/' ) ],
-		} ) ).toThrow( 'Source homepage https://example.test/ was not captured: mobile/goto: Source redirect aliases disagree across viewports' );
+		const capture = disagreeingRedirect();
+		const outputDir = capture.build();
+		capture.manifest( { version: 1, entries: {  'https://example.test/': { slug: 'homepage', html: 'html/homepage.html', redirectedTo: 'https://example.test/home?lang=fr' },  'https://example.test/about/': { html: 'html/about.html', slug: 'about' },  } } );
+		expect( () => exportWebsiteCapture( {  outputDir, sourceUrl: 'https://example.test/', platform: 'generic', summary: {}, failures: [ disagreement( 'https://example.test/' ) ],  } ) ).toThrow( 'Source homepage https://example.test/ was not captured: mobile/goto: Source redirect aliases disagree across viewports' );
 	} );
 
 	it( 'reports any route whose passes disagreed about a redirect as a failed capture, not a redirect alias', () => {
-		const outputDir = disagreeingRedirect();
-		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: {
-			'https://example.test/': { slug: 'homepage', html: 'html/homepage.html' },
-			'https://example.test/club': { slug: 'club', html: 'html/club.html', redirectedTo: 'https://example.test/club?lang=fr' },
-		} } ) );
-		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
-			outputDir, sourceUrl: 'https://example.test/', platform: 'generic', summary: {}, failures: [ disagreement( 'https://example.test/club' ) ],
-		} ), 'utf8' ) );
+		const capture = disagreeingRedirect();
+		const outputDir = capture.build();
+		capture.manifest( { version: 1, entries: {  'https://example.test/': { slug: 'homepage', html: 'html/homepage.html' },  'https://example.test/club': { slug: 'club', html: 'html/club.html', redirectedTo: 'https://example.test/club?lang=fr' },  } } );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {  outputDir, sourceUrl: 'https://example.test/', platform: 'generic', summary: {}, failures: [ disagreement( 'https://example.test/club' ) ],  } ), 'utf8' ) );
 		expect( receipt.routes.map( ( route: { url: string } ) => route.url ) ).toEqual( [ 'https://example.test/' ] );
 		expect( receipt.discoveryDiagnostics ).toEqual( [ {
 			code: 'route_capture_failed',
@@ -7989,22 +4896,20 @@ describe( 'exportWebsiteCapture entrypoint failures', () => {
 		expect( existsSync( join( outputDir, 'website', '_redirects' ) ) ).toBe( false );
 	} );
 } );
-
 describe( 'exportWebsiteCapture per-route containment', () => {
 	const fixture = ( pages: Record< string, { desktop: string; mobile?: string; failures?: string[]; url?: string; blockLosses?: unknown[] } > ) => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-route-containment-' ) );
-		dirs.push( outputDir );
-		for ( const directory of [ 'html', 'html-mobile', 'screenshots' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
+		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
+		const outputDir = capture.build();
 		const entries: Record< string, unknown > = {};
 		const failures: Array< { url: string; viewport: string; stage: string; error: string } > = [];
 		for ( const [ slug, page ] of Object.entries( pages ) ) {
-			writeFileSync( join( outputDir, `html/${ slug }.html` ), page.desktop );
-			if ( page.mobile ) writeFileSync( join( outputDir, `html-mobile/${ slug }.html` ), page.mobile );
+			capture.file( `html/${ slug }.html`, page.desktop );
+			if ( page.mobile ) capture.file( `html-mobile/${ slug }.html`, page.mobile );
 			const url = page.url ?? ( slug === 'home' ? 'https://example.test/' : `https://example.test/${ slug }/` );
 			entries[ url ] = { html: `html/${ slug }.html`, slug, ...( page.blockLosses ? { blockLosses: page.blockLosses } : {} ) };
 			for ( const error of page.failures ?? [] ) failures.push( { url, viewport: 'mobile', stage: 'screenshot-scrolled', error } );
 		}
-		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries } ) );
+		capture.manifest( { version: 1, entries } );
 		const summary = { routesDiscovered: Object.keys( pages ).length, routesCaptured: Object.keys( pages ).length, routesSkipped: 0, routesFailed: 0 };
 		return { outputDir, options: { outputDir, sourceUrl: 'https://example.test/', platform: 'generic', summary, failures } };
 	};
@@ -8025,6 +4930,24 @@ describe( 'exportWebsiteCapture per-route containment', () => {
 		// The dropped route moves from captured to failed; the invariant holds.
 		expect( receipt.summary ).toMatchObject( { routesDiscovered: 2, routesCaptured: 1, routesFailed: 1, complete: false } );
 		expect( existsSync( join( outputDir, 'website/index.html' ) ) ).toBe( true );
+	} );
+
+	it( 'drops an unsafe captured route path and exports the linked homepage', () => {
+		const url = 'https://example.test/tag/a%2Fb';
+		const { outputDir, options } = fixture( {
+			home: { desktop: '<html><body><main><h1>Home</h1><a href="/tag/a%2Fb">Tag</a></main></body></html>' },
+			tag: { desktop: page( 'Tag' ), url },
+		} );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( options ), 'utf8' ) );
+		expect( receipt.routes.map( ( route: { url: string } ) => route.url ) ).toEqual( [ options.sourceUrl ] );
+		expect( receipt.discoveryDiagnostics ).toContainEqual( {
+			code: 'route_path_unsafe', url, reason: 'Captured route path escapes the website directory: /tag/a%2Fb', unit: 'route', severity: 'error',
+		} );
+		expect( receipt.summary ).toMatchObject( { routesDiscovered: 2, routesCaptured: 1, routesFailed: 1, complete: false } );
+		expect( readFileSync( join( outputDir, 'website/index.html' ), 'utf8' ) ).toContain( '<h1>Home</h1>' );
+		const htmlFiles = readdirSync( outputDir, { recursive: true } ).map( String ).filter( path => path.endsWith( '.html' ) ).sort();
+		// Only the two input captures and the retained homepage exist, inside the run.
+		expect( htmlFiles ).toEqual( [ 'html/home.html', 'html/tag.html', 'website/index.html' ] );
 	} );
 
 	it( 'drops a route whose website path collides with an earlier claimant and counts it as failed', () => {

@@ -10,6 +10,7 @@ interface EntranceState {
 	rootMargin: string;
 	threshold: number[];
 	repeat: boolean;
+	repeatSides?: Array<'above' | 'below'>;
 	/** Native CSS owns frames/time; the witness owns only play and terminal attributes. */
 	cssAnimations?: Array<{ name: string; timing: EffectTiming; frames: ComputedKeyframe[] }>;
 	startupContexts?: Array<{ width: number; height: number; started: boolean }>;
@@ -38,6 +39,7 @@ export function observeViewportEntrances(): void {
 	named.__name ??= fn => fn;
 	const scope = window as typeof window & { __dlaEntrances?: {
 		stamp(): void;
+		classTokens( element: Element ): Set<string>;
 		transitions: string[];
 		startup: Array<{ id: string; started: boolean }>;
 		losses: Array<{ id: string; reason: string }>;
@@ -61,7 +63,11 @@ export function observeViewportEntrances(): void {
 		loss?: string;
 		confirmed: boolean;
 		supported: boolean;
+		scrollDriven?: boolean;
 	}>();
+	// Attribute delivery precedes transitionrun. Keep candidates separate from
+	// entrance state: an exit or unrelated mutation must never acquire an after pose.
+	const scrollCandidates = new WeakMap<Element, { before: Record<string, string>; at: number }>();
 	const transitions = new Map<Element, Map<string, string>>();
 	// Scroll-scrubbed inline styles (#1158): a style written in the frame after a
 	// scroll, which later returns to a value it held before, is a function of scroll
@@ -132,7 +138,7 @@ export function observeViewportEntrances(): void {
 	addEventListener( 'resize', () => { if ( outerWidth !== initialOuter.width || outerHeight !== initialOuter.height ) navigationalPose = false; } );
 	const attributes = ( element: Element ) => Object.fromEntries(
 		Array.from( element.attributes ).filter( attribute =>
-			/^(class|style|data-.+)$/.test( attribute.name ) && ! attribute.name.startsWith( 'data-blocks-engine-capture-' )
+			/^(class|style|data-.+)$/.test( attribute.name ) && ! attribute.name.startsWith( 'data-blocks-engine-capture-' ) && attribute.name !== 'data-blocks-engine-node-id'
 		).map( attribute => [ attribute.name, attribute.value ] )
 	);
 	window.IntersectionObserver = class extends native {
@@ -172,6 +178,11 @@ export function observeViewportEntrances(): void {
 			super.observe( element );
 		}
 	};
+	const recordRepeat = ( element: Element, state: EntranceState ) => {
+		state.repeat = true;
+		const side = element.getBoundingClientRect().bottom <= 0 ? 'above' : 'below';
+		state.repeatSides = [ ...new Set( [ ...( state.repeatSides ?? [] ), side ] as Array<'above' | 'below'> ) ].sort();
+	};
 	const play = Animation.prototype.play;
 	Animation.prototype.play = function(): void {
 		try {
@@ -183,7 +194,7 @@ export function observeViewportEntrances(): void {
 					( effect as KeyframeEffect ).pseudoElement || this.currentTime !== 0 || this.playbackRate !== 1 ) {
 					target.loss = 'CSS play lacks a supported viewport witness or starts from an unproven phase';
 				} else {
-					if ( target.cssComplete ) { target.state.repeat = true; target.cssComplete = false; target.cssStarted = false; target.state.cssAnimations = []; target.effects.clear(); target.finished.clear(); }
+					if ( target.cssComplete ) { recordRepeat( element!, target.state ); target.cssComplete = false; target.cssStarted = false; target.state.cssAnimations = []; target.effects.clear(); target.finished.clear(); }
 					if ( ! target.cssStarted ) { target.before = attributes( element! ); target.startup = navigationalPose; }
 					target.cssStarted = true;
 					const frames = ( effect as KeyframeEffect ).getKeyframes();
@@ -211,14 +222,14 @@ export function observeViewportEntrances(): void {
 				.map( name => [ name, { before: target.before[ name ] ?? null, after: after[ name ] ?? null } ] ) );
 			const unfinished = target.finished.size !== target.effects.size;
 			if ( target.cssComplete && ! target.entered && Object.keys( target.state.attributes ).every( name =>
-				( after[ name ] ?? null ) === target.state.attributes[ name ].before ) ) target.state.repeat = true;
+				( after[ name ] ?? null ) === target.state.attributes[ name ].before ) ) recordRepeat( element, target.state );
 			if ( ! unfinished && Object.keys( changed ).length ) { target.state.attributes = changed; target.cssComplete = true; target.confirmed = true; }
 			return;
 		}
-		if ( ! target.entered ) {
+		if ( ! target.entered || target.scrollDriven && target.confirmed ) {
 			if ( target.confirmed && Object.keys( target.state.attributes ).every( key =>
 				( after[ key ] ?? null ) === target.state.attributes[ key ].before
-			) ) target.state.repeat = true;
+			) ) recordRepeat( element, target.state );
 			return;
 		}
 		if ( target.confirmed ) return;
@@ -229,16 +240,64 @@ export function observeViewportEntrances(): void {
 		}
 	};
 	new MutationObserver( mutations => {
-		for ( const mutation of mutations ) if ( mutation.target instanceof Element ) captureState( mutation.target );
-	} ).observe( document, { subtree: true, attributes: true } );
+		const before = new Map<Element, Record<string, string>>();
+		for ( const mutation of mutations ) {
+			const element = mutation.target;
+			const name = mutation.attributeName;
+			if ( ! ( element instanceof Element ) || ! name || ! /^(class|style|data-.+)$/.test( name ) || name.startsWith( 'data-blocks-engine-capture-' ) ) continue;
+			if ( targets.has( element ) ) { captureState( element ); continue; }
+			if ( performance.now() - scrolledAt > 150 ) continue;
+			if ( ! before.has( element ) ) before.set( element, attributes( element ) );
+		}
+		// Reconstruct the first old value, including attributes written more than
+		// once in a callback. No layout reads for unrelated scroll-time mutations.
+		for ( const mutation of [ ...mutations ].reverse() ) {
+			const pose = before.get( mutation.target as Element );
+			if ( ! pose || ! mutation.attributeName ) continue;
+			if ( mutation.oldValue === null ) delete pose[ mutation.attributeName ];
+			else pose[ mutation.attributeName ] = mutation.oldValue;
+		}
+		for ( const [ element, pose ] of before ) scrollCandidates.set( element, { before: pose, at: performance.now() } );
+	} ).observe( document, { subtree: true, attributes: true, attributeOldValue: true } );
 	document.addEventListener( 'animationend', event => {
 		if ( event.target instanceof Element && ! event.pseudoElement ) queueMicrotask( () => captureState( event.target as Element ) );
 	} );
 	document.addEventListener( 'transitionrun', event => {
 		const element = event.target;
 		if ( ! ( element instanceof Element ) || event.pseudoElement ) return;
-		const target = targets.get( element );
-		if ( ! target?.entered || target.cssStarted ) return;
+		let target = targets.get( element );
+		if ( ! target ) {
+			const candidate = scrollCandidates.get( element );
+			if ( ! candidate || performance.now() - candidate.at > 150 || performance.now() - scrolledAt > 150 ) return;
+			// The source's own keyframes, not class names or the scroll alone,
+			// must prove a hidden-to-visible transition. In particular, never
+			// promote a visible-at-load element's scroll-out exit into an entrance.
+			// `none` is too narrow: perspective and z-only terms can also leave
+			// every point in the element's z=0 plane unchanged.
+			const planeUnchanged = ( transform: string ) => {
+				const m = new DOMMatrixReadOnly( transform );
+				return [ m.m11 - 1, m.m12, m.m14, m.m21, m.m22 - 1, m.m24, m.m41, m.m42, m.m44 - 1 ]
+					.every( term => Math.abs( term ) < 1e-6 );
+			};
+			const reveal = element.getAnimations().some( effect => {
+				if ( ! ( effect instanceof CSSTransition ) || ! ( effect.effect instanceof KeyframeEffect ) ) return false;
+				const frames = effect.effect.getKeyframes();
+				const first = frames[ 0 ], last = frames[ frames.length - 1 ];
+				return effect.transitionProperty === 'opacity' && Number( first?.opacity ) === 0 && Number( last?.opacity ) === 1 ||
+					effect.transitionProperty === 'transform' && typeof first?.transform === 'string' && typeof last?.transform === 'string' &&
+					! planeUnchanged( first.transform ) && planeUnchanged( last.transform );
+			} );
+			if ( ! reveal ) { scrollCandidates.delete( element ); return; }
+			const box = element.getBoundingClientRect();
+			if ( ! ( box.width > 0 && box.height > 0 && box.bottom > 0 && box.top < innerHeight && box.right > 0 && box.left < innerWidth ) ) { scrollCandidates.delete( element ); return; }
+			target = { before: candidate.before, entered: true, ratio: 0, qualified: true, cssStarted: false, cssComplete: false, cssCandidate: false,
+				effects: new Set(), finished: new Set(), startup: false, confirmed: false, supported: true, scrollDriven: true,
+				state: { attributes: {}, rootMargin: '0px', threshold: [ 0 ], repeat: false } };
+			targets.set( element, target );
+			scrollCandidates.delete( element );
+			noteMotion();
+		}
+		if ( ! target.entered || target.cssStarted ) return;
 		captureState( element );
 		if ( Object.keys( target.state.attributes ).length === 0 ) return;
 		for ( const effect of element.getAnimations() ) {
@@ -246,7 +305,10 @@ export function observeViewportEntrances(): void {
 			const timing = effect.effect?.getTiming();
 			if ( ! timing ) continue;
 			target.confirmed = true;
-			const text = ( element.textContent ?? '' ).replace( /\s+/g, ' ' ).trim().slice( 0, 120 );
+			// Identity, not presentation: whitespace between source elements is
+			// serialization (a block copy drops it), and markup that is not rendered
+			// (a provider's display:none success state) is no part of what entered.
+			const text = ( element instanceof HTMLElement ? element.innerText : element.textContent ?? '' ).replace( /\s+/g, '' ).slice( 0, 120 );
 			const observed = transitions.get( element ) ?? new Map<string, string>();
 			if ( ! observed.has( effect.transitionProperty ) ) observed.set( effect.transitionProperty,
 				JSON.stringify( [ text, effect.transitionProperty, timing.duration, timing.delay, timing.easing,
@@ -262,6 +324,13 @@ export function observeViewportEntrances(): void {
 			.map( ([ element, target ]) => ( { id: element.id, started: target.cssStarted && target.startup } ) ); },
 		get losses() { return Array.from( targets ).filter( ([ element, target ]) => element.isConnected && ( target.loss || target.cssStarted && ! target.cssComplete ) )
 			.map( ([ element, target ]) => ( { id: element.id, reason: target.loss ?? 'CSS entrance has no observed terminal attribute switch' } ) ); },
+		classTokens( element ) {
+			const target = targets.get( element );
+			const poses = target?.confirmed ? target.state.attributes.class : undefined;
+			const before = new Set( ( poses?.before ?? '' ).split( /\s+/ ).filter( Boolean ) );
+			const after = new Set( ( poses?.after ?? '' ).split( /\s+/ ).filter( Boolean ) );
+			return new Set( [ ...before, ...after ].filter( token => before.has( token ) !== after.has( token ) ) );
+		},
 		stamp() {
 			// Only content below the fold at serialization: what is in view at the top
 			// pose (headers, hero) is already what a visitor sees first.
@@ -325,8 +394,12 @@ function replayViewportEntrances(): void {
 	const reduced = matchMedia( '(prefers-reduced-motion: reduce)' );
 	// Engines enumerate a keyframe's properties in different orders (Chromium
 	// changed it between releases), so the binding compares values, not order.
+	// Lengths serialize at engine precision (177.140625px reads back as 177.141px,
+	// a compiled 177.14px as 177.14px), so numbers compare at two decimals.
+	const precise = ( number: number ) => Math.round( number * 100 ) / 100;
 	const signature = ( value: unknown ) => JSON.stringify( value, ( _key, field: unknown ) => field && typeof field === 'object' && ! Array.isArray( field )
-		? Object.fromEntries( Object.entries( field ).sort( ( [ left ], [ right ] ) => left < right ? -1 : left > right ? 1 : 0 ) ) : field );
+		? Object.fromEntries( Object.entries( field ).sort( ( [ left ], [ right ] ) => left < right ? -1 : left > right ? 1 : 0 ) )
+		: typeof field === 'number' ? precise( field ) : typeof field === 'string' ? field.replace( /\d*\.\d+/g, number => String( precise( Number( number ) ) ) ) : field );
 	for ( const element of document.querySelectorAll( '[data-blocks-engine-capture-viewport-entrance]' ) ) {
 		const state = JSON.parse( element.getAttribute( 'data-blocks-engine-capture-viewport-entrance' )! ) as EntranceState;
 		if ( element.closest( '[data-blocks-engine-capture-device-document]' ) && ! element.getClientRects().length ) continue;
@@ -354,6 +427,12 @@ function replayViewportEntrances(): void {
 			else inline.removeProperty( 'transition' );
 		}
 		let running = false, complete = false;
+		// A lost lifecycle settles on the after pose: the before pose is a
+		// hidden pending state, and nothing will ever play it to completion.
+		const lose = ( reason: string ) => {
+			element.setAttribute( 'data-blocks-engine-capture-viewport-entrance-loss', reason );
+			observer.disconnect(); running = false; complete = true; apply( 'after' );
+		};
 		const start = () => {
 			if ( running || complete ) return;
 			const effects = element.getAnimations().filter( ( animation ): animation is CSSAnimation => animation instanceof CSSAnimation &&
@@ -361,24 +440,41 @@ function replayViewportEntrances(): void {
 			const signatures = effects.map( effect => signature( { name: effect.animationName, timing: effect.effect?.getTiming(), frames: ( effect.effect as KeyframeEffect ).getKeyframes() } ) ).sort();
 			if ( JSON.stringify( signatures ) !== JSON.stringify( state.cssAnimations!.map( binding => signature( binding ) ).sort() ) ||
 				effects.some( effect => effect.playState !== 'paused' || effect.currentTime !== 0 ) ) {
-				element.setAttribute( 'data-blocks-engine-capture-viewport-entrance-loss', 'authored paused CSS animation binding changed' ); return;
+				lose( 'authored paused CSS animation binding changed' ); return;
 			}
 			running = true;
 			effects.forEach( effect => effect.play() );
 			void Promise.all( effects.map( effect => effect.finished ) ).then( () => {
 				apply( 'after' ); complete = true; running = false;
 				if ( ! state.repeat ) observer.unobserve( element );
-			}, () => { running = false; element.setAttribute( 'data-blocks-engine-capture-viewport-entrance-loss', 'CSS entrance completion was interrupted' ); } );
+			}, () => lose( 'CSS entrance completion was interrupted' ) );
 		};
 		const observer = new IntersectionObserver( entries => {
 			for ( const entry of entries ) {
 				if ( entry.isIntersecting && ( ! state.cssAnimations || entry.intersectionRatio >= state.threshold[ 0 ] ) ) {
 					if ( state.cssAnimations ) start();
 					else { apply( 'after' ); if ( ! state.repeat ) observer.unobserve( element ); }
-				} else if ( state.repeat && ! running ) { apply( 'before' ); complete = false; }
+				} else if ( ! entry.isIntersecting && state.repeat && ! running &&
+					( ! state.repeatSides || state.repeatSides.includes( entry.boundingClientRect.top >= ( entry.rootBounds?.top ?? 0 ) ? 'below' : 'above' ) ) ) { apply( 'before' ); complete = false; }
 			}
 		}, { rootMargin: state.rootMargin, threshold: state.threshold } );
 		observer.observe( element );
+		if ( state.repeat ) {
+			// A scroll jump can cross the entire viewport with ratio zero at both
+			// ends. IO then emits no entry; re-arm it when the outside side changes.
+			const side = () => {
+				const box = element.getBoundingClientRect();
+				return box.bottom <= 0 ? 'above' : box.top >= innerHeight ? 'below' : undefined;
+			};
+			let previousSide = side();
+			addEventListener( 'scroll', () => {
+				const currentSide = side();
+				if ( previousSide && currentSide && previousSide !== currentSide ) {
+					observer.unobserve( element ); observer.observe( element );
+				}
+				previousSide = currentSide;
+			}, { passive: true } );
+		}
 		if ( state.cssAnimations && state.startupContexts ) {
 			const startup = state.startupContexts.find( pose => pose.width === document.documentElement.clientWidth && pose.height === document.documentElement.clientHeight );
 			if ( startup?.started ) start();
@@ -404,8 +500,8 @@ export function mergeViewportEntranceStates( left: string | undefined, right: st
 	if ( scope && left === undefined && a === undefined && b ) return scoped( b, b.devices ?? scope.right );
 	if ( scope && right === undefined && b === undefined && a ) return scoped( a, a.devices ?? scope.left );
 	if ( ! a || ! b ) return undefined;
-	const { startupContexts: aContexts, devices: aDevices, ...aLifecycle } = a;
-	const { startupContexts: bContexts, devices: bDevices, ...bLifecycle } = b;
+	const { startupContexts: aContexts, devices: aDevices, repeatSides: aSides, ...aLifecycle } = a;
+	const { startupContexts: bContexts, devices: bDevices, repeatSides: bSides, ...bLifecycle } = b;
 	if ( ! isDeepStrictEqual( aLifecycle, bLifecycle ) ) return undefined;
 	if ( ! scope && ! isDeepStrictEqual( aDevices, bDevices ) ) return undefined;
 	const contexts: NonNullable<EntranceState['startupContexts']> = [];
@@ -414,7 +510,9 @@ export function mergeViewportEntranceStates( left: string | undefined, right: st
 		if ( previous && previous.started !== context.started ) return undefined;
 		if ( ! previous ) contexts.push( context );
 	}
-	const merged = { ...aLifecycle, ...( aContexts || bContexts ? { startupContexts: contexts } : {} ) };
+	// Missing side evidence retains the legacy two-sided lifecycle.
+	const repeatSides = aSides && bSides ? [ ...new Set( [ ...aSides, ...bSides ] ) ].sort() : undefined;
+	const merged = { ...aLifecycle, ...( repeatSides ? { repeatSides } : {} ), ...( aContexts || bContexts ? { startupContexts: contexts } : {} ) };
 	return scope ? scoped( merged, [ ...( aDevices ?? scope.left ), ...( bDevices ?? scope.right ) ] ) : JSON.stringify( { ...merged, ...( aDevices ? { devices: aDevices } : {} ) } );
 }
 
@@ -429,7 +527,9 @@ function parseViewportEntranceState( raw: string | undefined ): EntranceState | 
 function validViewportEntranceState( state: EntranceState ): boolean {
 	return ! ( typeof state.rootMargin !== 'string' || ! /^-?\d+(?:\.\d+)?(?:px|%)(?:\s+-?\d+(?:\.\d+)?(?:px|%)){0,3}$/.test( state.rootMargin ) || ! Array.isArray( state.threshold ) || ! state.threshold.length ||
 		state.threshold.some( value => typeof value !== 'number' || value < 0 || value > 1 ) ||
-		typeof state.repeat !== 'boolean' || ! state.attributes || Object.keys( state.attributes ).length === 0 ||
+		typeof state.repeat !== 'boolean' ||
+		( state.repeatSides !== undefined && ( ! state.repeat || ! Array.isArray( state.repeatSides ) || ! state.repeatSides.length ||
+			new Set( state.repeatSides ).size !== state.repeatSides.length || state.repeatSides.some( side => side !== 'above' && side !== 'below' ) ) ) || ! state.attributes || Object.keys( state.attributes ).length === 0 ||
 		( state.cssAnimations !== undefined && ( state.threshold.length !== 1 || ! Array.isArray( state.cssAnimations ) || ! state.cssAnimations.length || state.cssAnimations.length > 32 ||
 			state.cssAnimations.some( binding => ! binding || typeof binding.name !== 'string' || ! binding.name || ! binding.timing || ! Array.isArray( binding.frames ) ) ) ) ||
 		( state.devices !== undefined && ( ! Array.isArray( state.devices ) || ! state.devices.length || state.devices.some( device => typeof device !== 'string' || ! /^[a-z][a-z0-9_-]{0,63}$/.test( device ) ) ) ) ||

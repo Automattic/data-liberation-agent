@@ -8,6 +8,8 @@ import { exportWebsiteCapture } from './capture-export.js';
 import { learnAndApplyFluidGeometry } from './screenshot/fluid-capture.js';
 import {
 	assembleResponsiveCapture,
+	blockPreludes,
+	combineMediaQueries,
 	DESKTOP_DOCUMENT_CLASS,
 	documentsDiffer,
 	MIDDLE_DOCUMENT_CLASS,
@@ -18,8 +20,139 @@ import {
 } from './responsive-assembly.js';
 import { scopeCss } from './replicate/css-scope.js';
 import { middleLayoutSampleWidth } from './screenshot/device-mode.js';
+import { projectViewportClassRules, VIEWPORT_CLASS_RULES_ATTRIBUTE } from './screenshot/viewport-class-states.js';
 
 const dirs: string[] = [];
+
+const mediaCases = [
+	[ '(min-width:768px)', 'all', '(min-width:768px)' ],
+	[ 'all', '(min-width:768px)', '(min-width:768px)' ],
+	[ '', '(min-width:768px)', '(min-width:768px)' ],
+	[ '(min-width:768px)', '', '(min-width:768px)' ],
+	[ '(min-width:768px)', 'ALL', '(min-width:768px)' ],
+	[ '(min-width:768px)', 'screen', 'screen and (min-width:768px)' ],
+	[ '(min-width:768px)', 'print', 'print and (min-width:768px)' ],
+	[ 'screen', '(min-width:768px)', 'screen and (min-width:768px)' ],
+	[ '(min-width:768px)', '(orientation:landscape)', '(min-width:768px) and (orientation:landscape)' ],
+	[ '(min-width:768px)', 'orientation:landscape', '(min-width:768px) and (orientation:landscape)' ],
+	[ '(a)', 'screen, print', 'screen and (a), print and (a)' ],
+	[ '(a), (b)', 'screen, print', 'screen and (a), print and (a), screen and (b), print and (b)' ],
+	[ '(a)', 'only screen', 'only screen and (a)' ],
+	[ '(a)', 'screen and (color)', 'screen and (a) and (color)' ],
+	[ '(a)', '(color) or (monochrome)', '(a) and ((color) or (monochrome))' ],
+] as const;
+
+describe( 'media query intersection (#1780)', () => {
+	it.each( mediaCases )( 'combines %s with %s', ( left, right, expected ) => {
+		expect( combineMediaQueries( left, right ) ).toBe( expected );
+	} );
+
+	it.each( [ [ '(a)', 'not print' ], [ 'not screen', '(a)' ], [ '(a)', 'screen, not print' ], [ 'screen', 'print' ] ] )( 'requests independent gates for %s with %s', ( left, right ) => {
+		expect( combineMediaQueries( left!, right! ) ).toBeUndefined();
+	} );
+
+	it.each( [ 'all', 'screen', 'print', '(orientation:landscape)', 'screen, print', 'only screen', 'not print' ] )( 'retains source stylesheet media %s during assembly', sourceMedia => {
+		const desktop = page( `<style media="${ sourceMedia }">.frame{width:1440px}</style><main>Desktop</main><nav>Wide</nav>` );
+		const mobile = page( '<main>Phone</main><button>Menu</button>' );
+		const assembled = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile } );
+		const $ = cheerio.load( assembled.html );
+		const style = $( 'style' ).filter( ( _, node ) => $( node ).text().includes( 'width:1440px' ) );
+		const combined = combineMediaQueries( '(min-width:768px)', sourceMedia );
+		expect( style.attr( 'media' ) ).toBe( combined ?? sourceMedia );
+		if ( combined === undefined ) expect( style.text() ).toContain( '@media (min-width:768px){' );
+	} );
+
+	it( 'emits queries that Chromium does not parse as not all', async () => {
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const tab = await browser.newPage();
+			const parsed = await tab.evaluate( queries => queries.map( query => window.matchMedia( query ).media ), mediaCases.map( ( [ , , expected ] ) => expected ) );
+			expect( parsed.every( query => query !== 'not all' ) ).toBe( true );
+		} finally { await browser.close(); }
+	} );
+} );
+
+it( 'projects viewport-dependent pagination classes through equivalent and correspondence trees', async () => {
+	const page = ( hiddenFrom: number, extra = '' ) => `<html><head><style>.cell{display:inline-block;width:80px;height:40px}.is-hidden{display:none}</style></head><body><h1>Gallery</h1>${ extra }<div class="grid">${ [ 1, 2, 3, 4 ].map( n => `<div class="cell${ n >= hiddenFrom ? ' is-hidden' : '' }"><img src="cover-${ n }.png" alt="Cover ${ n }"></div>` ).join( '' ) }</div><p>More covers</p></body></html>`;
+	const browser = await chromium.launch();
+	try {
+		const tab = await browser.newPage();
+		// Exercise anonymous correspondence and stable-id reconciliation, with
+		// and without the sweep's already-projected phone state. A phone-only
+		// sibling before matched content must never duplicate that content.
+		const alias = 'data-blocks-engine-capture-width-class-0123456789ab';
+		for ( const identified of [ false, true ] ) for ( const widthAlias of [ false, true ] ) for ( const extra of [ '', '<aside>Phone pagination</aside>', '<button class="menu-toggle">Menu</button>' ] ) {
+			const aliasCss = `<style>@media(max-width:767px){.cell:is(.is-hidden,.${ alias }){display:none}}</style>`;
+			const identify = ( html: string ) => identified ? html.replace( '<body>', '<body><main id="gallery">' ).replace( '</body>', '</main></body>' ) : html;
+			const desktop = identify( widthAlias ? page( 3 ).replace( 'class="cell"><img src="cover-2', `class="cell ${ alias }"><img src="cover-2` ).replace( '</head>', `${ aliasCss }</head>` ) : page( 3 ) );
+			const mobile = identify( widthAlias ? page( 2, extra ).replace( '</head>', `${ aliasCss }</head>` ) : page( 2, extra ) );
+			expect( documentsDiffer( desktop, mobile ) ).toBe( true );
+			const assembly = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile } );
+			expect( assembly.evidence?.variants ).toBe( 1 );
+			const $ = cheerio.load( assembly.html );
+			expect( $( '.grid' ) ).toHaveLength( 1 );
+			expect( $( '.cell' ) ).toHaveLength( 4 );
+			expect( $( '.grid,p' ).toArray().some( node => ( $( node ).attr( 'class' ) ?? '' ).includes( 'responsive-class-' ) ) ).toBe( false );
+			if ( widthAlias ) expect( $( `.cell.${ alias }` ) ).toHaveLength( 1 );
+			for ( const [ width, visible ] of [ [ 1440, [ 'Cover 1', 'Cover 2' ] ], [ 390, [ 'Cover 1' ] ] ] as const ) {
+				await tab.setViewportSize( { width, height: 800 } );
+				await tab.setContent( assembly.html );
+				expect( await tab.$$eval( 'img', images => images.filter( image => image.getClientRects().length > 0 ).map( image => image.alt ) ), `${ extra }: ${ width }px` ).toEqual( visible );
+				if ( extra ) expect( await tab.locator( 'button,aside' ).isVisible() ).toBe( width === 390 );
+			}
+		}
+	} finally {
+		await browser.close();
+	}
+} );
+
+it( 'keeps swept pagination sheets active with inline or linked phone sheets (#1825)', async () => {
+	const alias = 'data-blocks-engine-capture-width-class-0123456789ab';
+	const base = '.cell{display:inline-block;width:80px;height:40px}.cell.is-hidden{display:none}';
+	const sheets = {
+		inline: `<style>${ base }</style>`,
+		linked: `<link rel="stylesheet" href="data:text/css,${ encodeURIComponent( base ) }">`,
+	};
+	const cells = ( classes: string[] ) => `<h1>Gallery</h1><div class="grid">${ classes.map( ( token, index ) => `<div class="cell ${ token }"><img src="cover-${ index }.png" alt="Cover ${ index + 1 }"></div>` ).join( '' ) }</div><p>More covers</p>`;
+	const browser = await chromium.launch();
+	try {
+		const tab = await browser.newPage();
+		for ( const desktopSheet of Object.values( sheets ) ) {
+			const $ = cheerio.load( `<html><head>${ desktopSheet }</head><body>${ cells( [ '', alias, 'is-hidden', 'is-hidden' ] ) }</body></html>` );
+			$( 'body' ).attr( 'data-blocks-engine-capture-width-class-contracts', JSON.stringify( [ { token: 'is-hidden', alias, media: '(max-width:767px)' } ] ) );
+			const desktop = projectViewportClassRules( $.html(), () => ( { css: base, url: 'https://example.test/site.css' } ) );
+			expect( cheerio.load( desktop )( `style[${ VIEWPORT_CLASS_RULES_ATTRIBUTE }]` ) ).toHaveLength( 1 );
+			for ( const [ kind, phoneSheet ] of Object.entries( sheets ) ) {
+				const mobile = `<html><head>${ phoneSheet }</head><body>${ cells( [ '', 'is-hidden', 'is-hidden', 'is-hidden' ] ) }</body></html>`;
+				const assembly = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile } );
+				expect( cheerio.load( assembly.html )( '.cell' ) ).toHaveLength( 4 );
+				for ( const [ width, visible ] of [ [ 1440, [ 'Cover 1', 'Cover 2' ] ], [ 390, [ 'Cover 1' ] ] ] as const ) {
+					await tab.setViewportSize( { width, height: 800 } );
+					await tab.setContent( assembly.html );
+					expect( await tab.$$eval( 'img', images => images.filter( image => image.getClientRects().length > 0 ).map( image => image.alt ) ), `${ kind } at ${ width }px` ).toEqual( visible );
+				}
+			}
+		}
+	} finally { await browser.close(); }
+} );
+
+it( 'retains native roots for profile-specific root classes with disclosure state', () => {
+	const desktop = '<html><head></head><body class="wide"><h1>Gallery</h1><button aria-expanded="false">Menu</button></body></html>';
+	const mobile = desktop.replace( 'class="wide"', 'class="phone"' ).replace( '</h1>', '</h1><aside>Phone navigation</aside>' );
+	const assembly = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile } );
+	expect( assembly.evidence ).toMatchObject( { variants: 2, outcome: 'dual-structural' } );
+} );
+
+describe( 'blockPreludes', () => {
+	it( 'matches the block-prelude regular expression in one linear pass', () => {
+		const samples = [ '', '{', 'a{', ';a{b}c;d{', '@media (x){.a,#b{c:d}}', 'a\n{b{c}}', '}}{{;;', `.a{background:url(data:image/png;base64,${ 'Q'.repeat( 4096 ) })}.b{` ];
+		for ( const css of samples ) expect( blockPreludes( css ) ).toBe( css.match( /[^{};]+\{/g )?.join( '\n' ) ?? '' );
+		// A long run that opens no block made the expression rescan every start position.
+		const started = performance.now();
+		expect( blockPreludes( `a:${ 'x'.repeat( 200_000 ) };b{` ) ).toBe( 'b{' );
+		expect( performance.now() - started ).toBeLessThan( 200 );
+	} );
+} );
 
 describe( 'responsive identity CSS recovery', () => {
 	it( 'aliases exact attribute id selectors to the renamed phone copy', () => {

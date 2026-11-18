@@ -1,5 +1,6 @@
 import type { Page } from 'playwright';
 import { documentCanScroll, settleDocument } from './page-helpers.js';
+import { orElse } from '../failure-class.js';
 
 /**
  * Captures scroll-position-driven DOM mutations: a header/logo/etc. that changes
@@ -70,11 +71,11 @@ export async function captureScrollStates(
 	// Scroll anchoring moves the position when a toggle resizes in-flow chrome:
 	// a sticky header shrinking past its threshold would be scrolled back under
 	// it and flip forever. Each probe must hold the offset it asked for.
-	const pinned = await page.addStyleTag( { content: 'html,body{overflow-anchor:none!important}' } ).catch( () => null );
+	const pinned = await page.addStyleTag( { content: 'html,body{overflow-anchor:none!important}' } ).catch( orElse( null ) );
 	try {
 		return await probeScrollStates( page, sourceUrl );
 	} finally {
-		await pinned?.evaluate( ( node ) => ( node as Element ).remove() ).catch( () => undefined );
+		await pinned?.evaluate( ( node ) => ( node as Element ).remove() ).catch( orElse( undefined ) );
 	}
 }
 
@@ -108,20 +109,22 @@ async function probeScrollStates(
 		await scrollTo( PROBE_OFFSET_PX );
 		probed = await settledSnapshot( page );
 	} catch {
-		await scrollTo( 0 ).catch( () => undefined );
+		await scrollTo( 0 ).catch( orElse( undefined ) );
 		return empty;
 	}
 
 	const changedKeys = changedContainerKeys( baseline, probed );
 	if ( changedKeys.size === 0 ) {
-		await scrollTo( 0 ).catch( () => undefined );
+		await scrollTo( 0 ).catch( orElse( undefined ) );
 		return empty;
 	}
 
 	// Refine the threshold: try smaller offsets in ascending order and keep the
 	// smallest one that still reproduces the same set of changed containers.
+	// The threshold only says where the change starts: a scroll-linked value
+	// (a header darkening with scroll progress) is still partway there, so the
+	// scrolled values come from the generous probe.
 	let thresholdPx = PROBE_OFFSET_PX;
-	let atThreshold = probed;
 	for ( const offset of REFINEMENT_OFFSETS_PX ) {
 		let sample: ContainerSnapshot[];
 		try {
@@ -134,7 +137,6 @@ async function probeScrollStates(
 		const stillReproduces = [ ...changedKeys ].every( ( key ) => sampleChanged.has( key ) );
 		if ( stillReproduces ) {
 			thresholdPx = offset;
-			atThreshold = sample;
 			break;
 		}
 	}
@@ -152,11 +154,11 @@ async function probeScrollStates(
 
 	const toggles: ScrollToggle[] = [];
 	const byKeyBaseline = new Map( baseline.map( ( entry ) => [ entry.key, entry ] ) );
-	const byKeyAtThreshold = new Map( atThreshold.map( ( entry ) => [ entry.key, entry ] ) );
+	const byKeyScrolled = new Map( probed.map( ( entry ) => [ entry.key, entry ] ) );
 	for ( const key of changedKeys ) {
 		if ( stillChangedAtTop.has( key ) ) continue; // irreversible; not scroll-linked
 		const before = byKeyBaseline.get( key );
-		const after = byKeyAtThreshold.get( key );
+		const after = byKeyScrolled.get( key );
 		if ( ! before || ! after ) continue;
 
 		const beforeSet = new Set( before.classList );
@@ -247,7 +249,7 @@ async function dropClassDerivedProperties( page: Page, toggles: ScrollToggle[] )
 	} );
 	if ( probes.length === 0 ) return;
 	const frames = () => page.evaluate( () => new Promise< void >( ( resolve ) => requestAnimationFrame( () => requestAnimationFrame( () => resolve() ) ) ) );
-	const freeze = await page.addStyleTag( { content: '*,*::before,*::after{transition:none!important;animation:none!important}' } ).catch( () => null );
+	const freeze = await page.addStyleTag( { content: '*,*::before,*::after{transition:none!important;animation:none!important}' } ).catch( orElse( null ) );
 	if ( ! freeze ) return;
 	let derived: string[][] = probes.map( () => [] );
 	try {
@@ -269,9 +271,9 @@ async function dropClassDerivedProperties( page: Page, toggles: ScrollToggle[] )
 	} catch {
 		// Keep every observed property when the probe cannot run.
 	} finally {
-		await scrollPage( page, 0 ).catch( () => undefined );
-		await frames().catch( () => undefined );
-		await freeze.evaluate( ( node ) => ( node as Element ).remove() ).catch( () => undefined );
+		await scrollPage( page, 0 ).catch( orElse( undefined ) );
+		await frames().catch( orElse( undefined ) );
+		await freeze.evaluate( ( node ) => ( node as Element ).remove() ).catch( orElse( undefined ) );
 	}
 	probes.forEach( ( probe, position ) => {
 		const toggle = toggles[ probe.index ]!;

@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { chromium, type Page } from 'playwright';
-import { describe, expect, it } from 'vitest';
+import { describe, expect } from 'vitest';
+import { it } from '../../../test/browser.js';
 import { capture } from './capture.js';
 import { applySourceCleanup, cleanupPolicy, readSourceCleanup } from '../../lib/source-cleanup.js';
 import { portWixRuntimeEmbeds } from './embeds.js';
@@ -10,6 +11,7 @@ import {
 	googleMapsViewFromLink,
 	isWixGoogleMapFrame,
 	wixAppInstance,
+	wixAppMapView,
 	wixEmbedNote,
 } from './embeds.js';
 
@@ -24,6 +26,7 @@ const INSTANCE = `7UqG_EpycyF9calKVehmsqGeIuka3seGpv-QJJliLrY.${ base64Url( {
 	siteOwnerId: 'cf2dfb92-9277-42cc-8440-d28b68b81db4',
 } ) }`;
 const APP_WIDGET = `https://dev-wix-languages.appspot.com/widget?pageId=vt13i&compId=comp-l76p8of1&viewerCompId=comp-l76p8of1&width=180&height=180&instance=${ INSTANCE }&commonConfig=%7B%22host%22%3A%22VIEWER%22%7D`;
+const APP_MAP = `https://events.wixapps.net/events-server/html/google-map-v2?locale=de&lat=51.3396955&lng=12.3730747&instance=${ INSTANCE }`;
 const HTML_EMBED = 'https://www-example-hoa-test.filesusr.com/html/cf2dfb_0123456789abcdef0123456789abcdef.html';
 
 describe( 'isWixGoogleMapFrame', () => {
@@ -49,6 +52,20 @@ describe( 'wixAppInstance', () => {
 		// An `instance` parameter that is not a signed Wix payload is not an app widget.
 		expect( wixAppInstance( 'https://widgets.example.test/w?instance=42' ) ).toBeNull();
 		expect( wixAppInstance( `https://widgets.example.test/w?instance=abc.${ base64Url( { other: 1 } ) }` ) ).toBeNull();
+	} );
+} );
+
+describe( 'wixAppMapView', () => {
+	it( 'reads the location an App Market map widget names in its URL', () => {
+		expect( wixAppMapView( APP_MAP ) ).toEqual( { lat: 51.3396955, lng: 12.3730747 } );
+	} );
+
+	it( 'ignores app widgets that are not maps or name no location', () => {
+		expect( wixAppMapView( APP_WIDGET ) ).toBeNull();
+		expect( wixAppMapView( APP_MAP.replace( 'lat=51.3396955&', '' ) ) ).toBeNull();
+		expect( wixAppMapView( APP_MAP.replace( '51.3396955', 'north' ) ) ).toBeNull();
+		// Without a signed instance it is not a Wix app widget.
+		expect( wixAppMapView( 'https://maps.example.test/map?lat=51.3&lng=12.3' ) ).toBeNull();
 	} );
 } );
 
@@ -111,10 +128,10 @@ async function wixEmbedPage( page: Page, options: { mapHasLocation: boolean } ):
 }
 
 describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime embeds at serialization', () => {
-	it( 'points a Wix map at a Google Maps embed of the marker the wrapper drew', async () => {
-		const browser = await chromium.launch( { headless: true } );
-		try {
-			const page = await browser.newPage();
+	it( 'points a Wix map at a Google Maps embed of the marker the wrapper drew', async ({ newPage }) => {
+
+		{
+			const page = await newPage();
 			await wixEmbedPage( page, { mapHasLocation: true } );
 			await capture.beforeSerialize!( page, { url: page.url(), viewport: 'desktop' } );
 			const map = page.locator( 'iframe[title="Google Maps"]' );
@@ -123,15 +140,13 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime embed
 			);
 			// The source's size is kept: the wrapper filled its 640x350 box.
 			expect( await map.evaluate( ( frame ) => [ frame.getBoundingClientRect().width, frame.getBoundingClientRect().height ] ) ).toEqual( [ 640, 350 ] );
-		} finally {
-			await browser.close();
 		}
 	}, 30_000 );
 
-	it( 'replaces App Market widgets with a visible note and drops their token', async () => {
-		const browser = await chromium.launch( { headless: true } );
-		try {
-			const page = await browser.newPage();
+	it( 'replaces App Market widgets with a visible note and drops their token', async ({ newPage }) => {
+
+		{
+			const page = await newPage();
 			await wixEmbedPage( page, { mapHasLocation: true } );
 			await capture.beforeSerialize!( page, { url: page.url(), viewport: 'desktop' } );
 			const notes = page.locator( '[data-blocks-engine-capture-unported-embed="wix"]' );
@@ -143,15 +158,30 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime embed
 			expect( html ).not.toContain( 'appspot.com' );
 			// A Wix HTML embed is a public file and keeps working as it is.
 			expect( await page.locator( '#html-embed' ).getAttribute( 'src' ) ).toBe( HTML_EMBED );
-		} finally {
-			await browser.close();
 		}
 	}, 30_000 );
 
-	it( 'replaces App Market custom elements with a same-size visible note', async () => {
-		const browser = await chromium.launch( { headless: true } );
-		try {
-			const page = await browser.newPage();
+	it( 'points an App Market map widget at a Google Maps embed of the location in its URL', async ({ newPage }) => {
+
+		{
+			const page = await newPage();
+			await page.route( /events\.wixapps\.net|maps\.google\.com/, ( route ) =>
+				route.fulfill( { contentType: 'text/html', body: '<p>map</p>' } )
+			);
+			await page.setContent( `<style>body{margin:0}iframe{border:0;display:block;width:640px;height:320px}</style><div data-hook="map"><iframe title="Map" src="${ APP_MAP }"></iframe></div>` );
+			await portWixRuntimeEmbeds( page );
+			expect( await page.locator( '[data-blocks-engine-capture-unported-embed]' ).count() ).toBe( 0 );
+			const map = page.locator( 'iframe[title="Map"]' );
+			expect( await map.getAttribute( 'src' ) ).toBe( 'https://maps.google.com/maps?q=51.339695%2C12.373075&z=15&hl=de&output=embed' );
+			expect( await map.getAttribute( 'data-blocks-engine-capture-ported-embed' ) ).toBe( 'wix-google-map' );
+			expect( await page.content() ).not.toContain( 'instance=' );
+		}
+	}, 30_000 );
+
+	it( 'replaces App Market custom elements with a same-size visible note', async ({ newPage }) => {
+
+		{
+			const page = await newPage();
 			// Only the vendor script URL identifies the app; never fetch it.
 			await page.route( 'https://bmusic.purplebear.co/**', ( route ) => route.abort() );
 			await page.setContent(`<style>body{margin:0}.host{width:240px;height:152px}</style>
@@ -162,39 +192,39 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime embed
 			const note = page.locator('[data-blocks-engine-capture-unported-embed="wix"]');
 			expect(await note.textContent()).toBe(wixEmbedNote('Music Player'));
 			expect(await note.evaluate((element) => [element.getBoundingClientRect().width, element.getBoundingClientRect().height])).toEqual([240, 152]);
-		} finally { await browser.close(); }
+		}
 	}, 30_000 );
 
-	it( 'replaces Wix-hosted module custom elements without an App Market script', async () => {
-		const browser = await chromium.launch( { headless: true } );
-		try {
-			const page = await browser.newPage();
+	it( 'replaces Wix-hosted module custom elements without an App Market script', async ({ newPage }) => {
+
+		{
+			const page = await newPage();
 			await page.setContent('<style>body{margin:0}.host{width:240px;height:152px}</style><div class="host" data-testid="custom-element"><zeffy-donation-widget></zeffy-donation-widget></div>');
 			await portWixRuntimeEmbeds( page );
 			expect( await page.locator( 'zeffy-donation-widget' ).count() ).toBe( 0 );
 			const note = page.locator( '[data-blocks-engine-capture-unported-embed="wix"]' );
 			expect( await note.textContent() ).toBe( wixEmbedNote( 'Zeffy Donation Widget' ) );
 			expect( await note.evaluate( ( element ) => [ element.getBoundingClientRect().width, element.getBoundingClientRect().height ] ) ).toEqual( [ 240, 152 ] );
-		} finally { await browser.close(); }
+		}
 	}, 30_000 );
 
-	it( 'recognizes and removes classic Wix password gates', async () => {
-		const browser = await chromium.launch();
-		try {
-			const page = await browser.newPage();
+	it( 'recognizes and removes classic Wix password gates', async ({ newPage }) => {
+
+		{
+			const page = await newPage();
 			await page.setContent('<main><div id="SM_ROOT_COMP"><p>Please enter the password below.</p><input id="SM_ROOT_COMP_input" type="password"><button>Go</button></div></main>');
 			const policy = cleanupPolicy( wixAdapter.liberation?.cleanupRules );
 			await applySourceCleanup( page, policy );
 			const report = await readSourceCleanup( page, policy );
 			expect( report.records.map( record => record.rule ) ).toContain( 'wix-members-gate' );
 			expect( await page.locator( '#SM_ROOT_COMP' ).count() ).toBe( 0 );
-		} finally { await browser.close(); }
+		}
 	}, 30_000 );
 
-	it( 'cleans pinned chat overlays but preserves in-flow widgets and other pinned content', async () => {
-		const browser = await chromium.launch();
-		try {
-			const page = await browser.newPage();
+	it( 'cleans pinned chat overlays but preserves in-flow widgets and other pinned content', async ({ newPage }) => {
+
+		{
+			const page = await newPage();
 			await page.setContent(`<style>#pinnedBottomLeft,#pinnedBottomRight{position:fixed;bottom:0}iframe{width:180px;height:60px}</style>
 			<div id="pinnedBottomRight"><div id="comp-chat-pinned-layer"><iframe title="Wix Chat" src="${APP_WIDGET}"></iframe></div><div id="comp-top-pinned-layer"><a href="#">Back to top</a></div></div>
 			<div id="pinnedBottomLeft"><div id="comp-ai-pinned-layer"><div data-hook="AiAssistantWidgetContainer" role="dialog"><textarea></textarea></div></div><div id="comp-ai-min-pinned-layer"><div data-hook="minimizedChat"><button data-hook="minimizedChatButton" aria-label="Chat with AI"></button></div></div></div>
@@ -207,21 +237,19 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime embed
 			expect(report.records.map(record => record.rule)).toEqual(expect.arrayContaining(['wix-chat-launcher','wix-ai-assistant']));
 			expect(await page.locator('[data-blocks-engine-capture-unported-embed="wix"]').count()).toBe(1);
 			expect(await page.locator('#comp-top-pinned-layer a').count()).toBe(1);
-		} finally { await browser.close(); }
+		}
 	} );
 
-	it( 'leaves a note, not a blank box, when the map location cannot be read', async () => {
-		const browser = await chromium.launch( { headless: true } );
-		try {
-			const page = await browser.newPage();
+	it( 'leaves a note, not a blank box, when the map location cannot be read', async ({ newPage }) => {
+
+		{
+			const page = await newPage();
 			await wixEmbedPage( page, { mapHasLocation: false } );
 			await capture.beforeSerialize!( page, { url: page.url(), viewport: 'desktop' } );
 			expect( await page.locator( 'iframe[title="Google Maps"]' ).count() ).toBe( 0 );
 			expect( await page.locator( '.wixui-google-map [data-blocks-engine-capture-unported-embed="wix"]' ).textContent() ).toBe(
 				wixEmbedNote( 'Google Maps' )
 			);
-		} finally {
-			await browser.close();
 		}
 	}, 30_000 );
 } );

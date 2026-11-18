@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { chromium } from 'playwright';
-import { describe, expect, it } from 'vitest';
+import { describe, expect } from 'vitest';
+import { it, test } from '../../../test/browser.js';
 import { findAdapter } from '../index.js';
 import { detectFromResponse } from '../../lib/detect-platform/index.js';
 import { dudaAdapter } from './index.js';
@@ -28,7 +29,7 @@ describe('Duda adapter', () => {
 const hooksFor = (html: string) => findAdapter(detectFromResponse(new Headers(), html).platform)?.liberation;
 
 describe.skipIf(!existsSync(chromium.executablePath()))('Duda pager capture', () => {
-	it('materializes anchor ids without replacing existing or colliding ids', async () => {
+	it('materializes anchor ids without replacing existing or colliding ids', async ({ newPage }) => {
 		const cases = [
 			{ markup: '<div data-anchor="Epson EB-U42"></div>', id: 'EpsonEB-U42' },
 			{ markup: '<div data-anchor="Gespannausfahrten - coming soon"></div>', id: 'Gespannausfahrten-comingsoon' },
@@ -37,22 +38,20 @@ describe.skipIf(!existsSync(chromium.executablePath()))('Duda pager capture', ()
 			{ markup: '<div id="taken"></div><div data-anchor="ta ken"></div>', id: null },
 			{ markup: '<div data-anchor=" &#9; "></div>', id: null },
 		];
-		const browser = await chromium.launch();
-		try {
-			const page = await browser.newPage();
+
+		{
+			const page = await newPage();
 			await page.setContent(cases.map(test => test.markup).join(''));
 			await dudaAdapter.liberation!.beforeSerialize!(page, { url: 'https://duda.example/', viewport: 'desktop' });
 			expect(await page.locator('[data-anchor]').evaluateAll(elements => elements.map(element => element.getAttribute('id'))))
 				.toEqual(cases.map(test => test.id));
-		} finally {
-			await browser.close();
 		}
 	});
 
-	it('marks a single-page pager inert and leaves multi-page and non-Duda pagers alone', async () => {
-		const browser = await chromium.launch();
-		try {
-			const page = await browser.newPage();
+	it('marks a single-page pager inert and leaves multi-page and non-Duda pagers alone', async ({ newPage }) => {
+
+		{
+			const page = await newPage();
 			const inert = (selector: string) => page.locator(`${selector} a[data-action="paginate"]`).evaluateAll(
 				(links, name) => links.map(link => link.getAttribute(name)), INERT);
 			const ctx = { url: 'https://duda.example/resources', viewport: 'desktop' };
@@ -66,8 +65,6 @@ describe.skipIf(!existsSync(chromium.executablePath()))('Duda pager capture', ()
 			await page.setContent(nonDuda);
 			await hooksFor(nonDuda)?.beforeSerialize?.(page, ctx);
 			expect(await inert('#single')).toEqual([null, null, null]);
-		} finally {
-			await browser.close();
 		}
 	});
 });

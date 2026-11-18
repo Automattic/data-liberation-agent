@@ -1,3 +1,4 @@
+import { stripNodeIds } from '../test-helpers/strip-node-ids.js';
 import { createServer } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -10,6 +11,7 @@ import { exportWebsiteCapture } from '../capture-export.js';
 import { checkFidelity } from '../fidelity/check.js';
 import { documentRequestUrl } from '../url/route-key.js';
 import { findAdapter } from '../../adapters/index.js';
+import { bloggerAdapter } from '../../adapters/blogger/index.js';
 
 it('merges slash identities while preserving query, depth and time boundaries', () => {
 	const frontier = new LinkedFrontier({maxPages: 2, maxDepth: 1, timeoutMs: 100}, 0);
@@ -152,6 +154,7 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 		const runtimePath = '/_dm/s/rt/actions/emailshare?text=Share&site=https%3A%2F%2Fexample.test%2Fpost&lang=en';
 		const requests: string[] = [];
 		const source = createServer((request, response) => {
+			if (request.url?.includes('liberation-absent-')) {response.writeHead(404); response.end(); return;}
 			requests.push(request.url!);
 			response.writeHead(200, {'content-type': 'text/html'});
 			response.end(`<meta name="viewport" content="width=device-width,initial-scale=1"><style>@media(min-width:600px){nav{display:none}}</style><h1>Neutral page</h1>${request.url === '/' ? `<nav><a href="${runtimePath}">Email</a><a href="/ordinary">Page</a></nav>` : ''}`);
@@ -235,7 +238,7 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 		const source = createServer((request, response) => {
 			requests.push(request.url!);
 			if (request.url === '/alias') {response.writeHead(302, {location: '/target'}); response.end(); return;}
-			const send = () => {response.writeHead(docs[request.url!] ? 200 : 404, {'content-type': 'text/html'}); response.end(`<meta name="viewport" content="width=device-width,initial-scale=1">${docs[request.url!] ?? '<h1>Absent</h1>'}`);};
+			const send = () => {response.writeHead(docs[request.url!] ? 200 : 404, {'content-type': 'text/html'}); response.end(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">${docs[request.url!] ?? '<h1>Absent</h1>'}`);};
 			// Real HTTP time, not a mocked clock: expire discovery during an admitted
 			// document's navigation, leaving further inventory/wave work queued.
 			if (mode !== 'wave' && request.url === '/') setTimeout(send, timeoutMs + 100);
@@ -281,7 +284,7 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			expect(receipt.summary.complete).toBe(mode === 'cap');
 			expect(receipt.routes.map((route: {url: string}) => route.url).sort()).toEqual(expected.sort());
 			expect(receipt.duplicateRoutes).toEqual([{url: `${origin}/alias`, canonicalUrl: `${origin}/target`, path: receipt.routes.find((route: {url: string}) => route.url === `${origin}/target`).path}]);
-			for (const route of receipt.routes) expect(readFileSync(join(directory, route.path), 'utf8')).toContain('<h1>');
+			for (const route of receipt.routes) expect(stripNodeIds(readFileSync(join(directory, route.path), 'utf8'))).toContain('<h1>');
 			collector.requireUrls(capture.linkedPageCoverage!.requiredUrls);
 			const frozen = JSON.parse(readFileSync(collector.finalize(receiptPath), 'utf8'));
 			expect(frozen.scope.sourceUrls.sort()).toEqual([...capture.linkedPageCoverage!.requiredUrls].sort());
@@ -310,7 +313,7 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 		const source = createServer((request, response) => {
 			requests.push(request.url!);
 			response.writeHead(docs[request.url!] ? 200 : 404, {'content-type': 'text/html'});
-			response.end(`<meta name="viewport" content="width=device-width,initial-scale=1">${docs[request.url!] ?? '<h1>404</h1>'}`);
+			response.end(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">${docs[request.url!] ?? '<h1>404</h1>'}`);
 		});
 		await new Promise<void>(resolve => source.listen(0, '127.0.0.1', resolve));
 		const origin = `http://127.0.0.1:${(source.address() as {port: number}).port}`;
@@ -346,7 +349,7 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 		};
 		const source = createServer((request, response) => {
 			response.writeHead(docs[request.url!] ? 200 : 404, {'content-type': 'text/html'});
-			response.end(`<meta name="viewport" content="width=device-width,initial-scale=1">${docs[request.url!] ?? '<h1>404</h1>'}`);
+			response.end(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">${docs[request.url!] ?? '<h1>404</h1>'}`);
 		});
 		await new Promise<void>(resolve => source.listen(0, '127.0.0.1', resolve));
 		const origin = `http://127.0.0.1:${(source.address() as {port: number}).port}`;
@@ -363,11 +366,11 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			const without = receipt.routes.find((route: {url: string}) => route.url === `${origin}/article`);
 			const withSlash = receipt.routes.find((route: {url: string}) => route.url === `${origin}/article/`);
 			expect(withSlash).toBeUndefined();
-			expect(readFileSync(join(directory, without.path), 'utf8')).toContain('<h1>Article without slash</h1>');
+			expect(stripNodeIds(readFileSync(join(directory, without.path), 'utf8'))).toContain('<h1>Article without slash</h1>');
 			const home = readFileSync(join(directory, 'website/index.html'), 'utf8');
-			expect(home).toContain(`href="/${without.path.slice('website/'.length)}">Article address`);
-			expect(home).toContain(`href="/${without.path.slice('website/'.length)}">Directory address`);
-			expect(readFileSync(join(directory, without.path), 'utf8')).toContain(`href="/${without.path.slice('website/'.length)}"`);
+			expect(stripNodeIds(home)).toContain(`href="/${without.path.slice('website/'.length)}">Article address`);
+			expect(stripNodeIds(home)).toContain(`href="/${without.path.slice('website/'.length)}">Directory address`);
+			expect(stripNodeIds(readFileSync(join(directory, without.path), 'utf8'))).toContain(`href="/${without.path.slice('website/'.length)}"`);
 			expect(receipt.duplicateRoutes).toEqual([]);
 			collector.finalize(receiptPath);
 			source.closeAllConnections(); await new Promise<void>(resolve => source.close(() => resolve())); closed = true;
@@ -384,6 +387,7 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 		const requests: string[] = [];
 		const source = createServer((request, response) => {
 			requests.push(request.url!);
+			if (request.url?.includes('liberation-absent-')) {response.writeHead(404); response.end(); return;}
 			if (request.url === '/absent') {response.writeHead(404, {'content-type': 'text/html'}); response.end('<h1>404</h1>'); return;}
 			if (request.url === '/api/data') {response.writeHead(200, {'content-type': 'text/plain'}); response.end('not an HTML page'); return;}
 			response.setHeader('content-type', 'text/html');
@@ -441,7 +445,7 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			if (request.url === '/catalog?tag=Research') {response.writeHead(302, {location: externalUrl}); response.end(); return;}
 			if (request.url === '/alias/') {response.writeHead(301, {location: '/third/'}); response.end(); return;}
 			response.writeHead(docs[request.url!] ? 200 : 404, {'content-type': 'text/html'});
-			response.end(`<meta name="viewport" content="width=device-width,initial-scale=1">${docs[request.url!] ?? '<h1>Absent</h1>'}`);
+			response.end(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">${docs[request.url!] ?? '<h1>Absent</h1>'}`);
 		});
 		await new Promise<void>(resolve => source.listen(0, '127.0.0.1', resolve));
 		const origin = `http://127.0.0.1:${(source.address() as {port: number}).port}`;
@@ -542,7 +546,9 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 	it('captures a canonical-less page once across tracking and platform referral variants, and links every variant to it', async () => {
 		const requests: string[] = [];
 		const docs: Partial<Record<string, string>> = {
-			'/': '<h1>Home</h1><a href="/following?utm_source=mail">A</a><a href="/following?fbclid=x">B</a><a href="/following?source=sidebar">C</a><a href="/following?source=byline&amp;utm_medium=web">D</a><a href="/list?page=2">Next</a>',
+			'/': '<h1>Home</h1><a href="/following?utm_source=mail">A</a><a href="/following?fbclid=x">B</a><a href="/following?source=sidebar">C</a><a href="/following?source=byline&amp;utm_medium=web">D</a><a href="/list?page=2">Next</a><a href="/search?max-results=7">Search</a><a href="/search/label/Blog?updated-max=2023-12-12T13:55:00-08:00&amp;max-results=20&amp;start=3&amp;by-date=false">Blog</a>',
+			'/search': '<h1>Search</h1>',
+			'/search/label/Blog': '<h1>Blog</h1>',
 			'/following': '<h1>Following</h1><a href="/?source=tab">Home</a>',
 			'/list': '<h1>Page two</h1>',
 		};
@@ -554,17 +560,19 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 		});
 		await new Promise<void>(resolve => source.listen(0, '127.0.0.1', resolve));
 		const origin = `http://127.0.0.1:${(source.address() as {port: number}).port}`;
-		const routeScope = {origin, pathPrefixes: ['/'], ignoredQueryParams: ['source']};
+		const bloggerScope = bloggerAdapter.routeScope!(origin);
+		const routeScope = {...bloggerScope, ignoredQueryParams: [...(bloggerScope.ignoredQueryParams ?? []), 'source']};
 		mkdirSync(join(process.cwd(), '.tmp-test'), {recursive: true});
 		const directory = mkdtempSync(join(process.cwd(), '.tmp-test', 'tracking-frontier-'));
 		try {
 			const url = `${origin}/`;
-			const capture = await captureScreenshots({urls: [url], primaryUrl: url, outputDir: directory, routeScope, linkedPages: {maxPages: 20, maxDepth: 3, timeoutMs: 120_000}, concurrency: 1, settleMs: 0, learnFluid: false, viewports: [{id: 'desktop', width: 390, height: 844}]});
+			const capture = await captureScreenshots({urls: [url, `${origin}/search?max-results=7`], primaryUrl: url, outputDir: directory, routeScope, linkedPages: {maxPages: 20, maxDepth: 3, timeoutMs: 120_000}, concurrency: 1, settleMs: 0, learnFluid: false, viewports: [{id: 'desktop', width: 390, height: 844}]});
 			expect(capture.failed).toBe(0);
-			expect(capture.captured).toBe(3);
+			expect(capture.captured).toBe(5);
 			expect(requests.filter(path => path.startsWith('/following')).every(path => path === '/following')).toBe(true);
+			expect(requests.filter(path => path.startsWith('/search')).every(path => !path.includes('?'))).toBe(true);
 			const receipt = JSON.parse(readFileSync(exportWebsiteCapture({outputDir: directory, sourceUrl: url, platform: 'default', routeScope, summary: {routesFailed: capture.failed}, failures: [], discoveryDiagnostics: capture.linkedPageCoverage!.diagnostics}), 'utf8'));
-			expect(receipt.routes.map((route: {url: string}) => route.url).sort()).toEqual([`${origin}/`, `${origin}/following`, `${origin}/list?page=2`]);
+			expect(receipt.routes.map((route: {url: string}) => route.url).sort()).toEqual([`${origin}/`, `${origin}/following`, `${origin}/list?page=2`, `${origin}/search`, `${origin}/search/label/Blog`]);
 			// Every variant link points at the one captured document, not at the source.
 			const home = readFileSync(join(directory, 'website', 'index.html'), 'utf8');
 			const followingLinks = [...home.matchAll(/href="([^"]*following[^"]*)"/g)].map(match => match[1]);

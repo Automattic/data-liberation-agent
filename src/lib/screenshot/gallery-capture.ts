@@ -4,6 +4,7 @@ import type { CapturedDialogInteraction } from './interaction-capture.js';
 import { activateTrigger } from './interaction-capture.js';
 import { srcsetReferences } from '../srcset.js';
 import { settleDocument, withEvaluateTimeout } from './page-helpers.js';
+import { orElse } from '../failure-class.js';
 
 /** A finite, observed cycle. Each frame occurs once in the authoring tree. */
 export interface CapturedGallery {
@@ -582,7 +583,7 @@ export async function captureGalleries(page: Page, excludedRoots: string[] = [])
 					const global = globalThis as typeof globalThis & { __dlaGalleryLinkGuard?: EventListener };
 					if (global.__dlaGalleryLinkGuard) window.removeEventListener('click', global.__dlaGalleryLinkGuard);
 					delete global.__dlaGalleryLinkGuard;
-				}).catch(() => undefined);
+				}).catch(orElse( undefined ));
 			}
 			let overlay: string | undefined;
 			for (let sample = 0; !overlay && sample < 30; sample++) {

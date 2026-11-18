@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import { ownDocument, readDocument, releaseDocument } from './parsed-documents.js';
 import type { Element } from 'domhandler';
 import postcss from 'postcss';
 import selectorParser from 'postcss-selector-parser';
@@ -29,7 +30,7 @@ export type LinkedStylesheetReader = ( href: string ) => string | undefined;
  * only when every linked sheet was captured and none selects a renamed id.
  */
 function linkedStylesheetsSelectRenamedIds( html: string, renamed: ReadonlySet<string>, read: LinkedStylesheetReader | undefined ): boolean {
-	const $ = cheerio.load( html );
+	const $ = readDocument( html );
 	return $( 'link[rel~="stylesheet"]' ).toArray().some( link => {
 		const css = read?.( $( link ).attr( 'href' ) ?? '' );
 		if ( css === undefined ) return true;
@@ -74,7 +75,7 @@ function anchorMarkers( $: cheerio.CheerioAPI ): Map<string, { node: Element; se
  * device's union. Absence in one pair must not erase another device's nodes.
  */
 export function reconcileDeviceDocuments( documents: Record<string, string>, selection: DeviceDocumentSelection, readLinkedStylesheet?: LinkedStylesheetReader ) {
-	const base = cheerio.load( documents[ selection.defaultDocument ] );
+	const base = ownDocument( documents[ selection.defaultDocument ] );
 	base( 'body *' ).each( ( index, node ) => { base( node ).attr( NODE, String( index ) ); } );
 	const original = base.html();
 	const merged = cheerio.load( original );
@@ -85,12 +86,13 @@ export function reconcileDeviceDocuments( documents: Record<string, string>, sel
 		let reason = 'Device body is unavailable';
 		// A marker the device landed in another section would read as a
 		// re-nested component. Pair without it and place it per device below.
-		const device = cheerio.load( documents[ key ] );
+		const device = readDocument( documents[ key ] );
 		const defaultMarkers = anchorMarkers( base );
 		const relocated = [ ...anchorMarkers( device ) ].filter( ( [ fragment, marker ] ) => {
 			const section = defaultMarkers.get( fragment )?.section;
 			return section !== undefined && section !== marker.section;
 		} );
+		if ( relocated.length ) releaseDocument( documents[ key ], device );
 		for ( const [ , marker ] of relocated ) device( marker.node ).remove();
 		const pair = identitySubsetMerge( original, relocated.length ? device.html() : documents[ key ], undefined, key, failure => { reason = failure; }, selection.defaultDocument );
 		if ( ! pair ) {

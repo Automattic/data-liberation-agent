@@ -24,6 +24,7 @@
  * transport resets are first confirmed by escalating probes.
  */
 
+import './source-network.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 /** Discovery adapters include URL-only helpers without capture options. Keep their
@@ -94,7 +95,7 @@ export function isSourceTransportThrottle(error: unknown, refusalOnly = false): 
 		|| (value.cause !== error && isSourceTransportThrottle(value.cause, refusalOnly));
 }
 
-export type SourceReplayOutcome = 'hit' | 'not_routed' | `miss:${'type_not_replayable' | 'no_entry' | 'vary_mismatch' | 'stale' | 'uncacheable'}`;
+export type SourceReplayOutcome = 'blocked:telemetry' | 'hit' | 'not_routed' | `miss:${'type_not_replayable' | 'no_entry' | 'vary_mismatch' | 'stale' | 'uncacheable'}`;
 export interface SourceRequestAttribution { phase?: string; device?: string; outcome?: SourceReplayOutcome; url?: string }
 
 export interface GovernedRequestOptions {

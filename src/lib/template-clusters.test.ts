@@ -5,6 +5,56 @@ import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
+it('ignores an inline style a runtime probe injected into one capture only', () => {
+	const page = (...styles: string[]) => `<html><head>${styles.map(text => `<style>${text}</style>`).join('')}</head><body><p>Same member</p></body></html>`;
+	const context = { baseUrl: 'https://fixture.example/post', repServerHtml: page('body { color: black }'), memberServerHtml: page('body { color: black }') };
+	const compare = (derived: string[], real: string[]) => compareDerivedWithCapture({ ...context, derivedHtml: page(...derived), realHtml: page(...real) }).checks.headStyles;
+	expect(compare(['body { color: black }', '.widget { opacity: .7 }'], ['body { color: black }'])).toBe(true);
+	// A runtime style that differs on both sides, or a server style, still counts.
+	expect(compare([':root { --a: 1 }'], [':root { --a: 2 }'])).toBe(false);
+	expect(compare(['body { color: black }'], [])).toBe(false);
+	expect(compareDerivedWithCapture({ baseUrl: context.baseUrl, derivedHtml: page('.widget { opacity: .7 }'), realHtml: page() }).checks.headStyles).toBe(false);
+});
+
+it('ignores only stylesheet links absent from both server documents', () => {
+	const page = (links: string[], inline = 'body { color: black }') => `<html><head>${links.map(href => `<link rel="stylesheet" href="${href}">`).join('')}<style>${inline}</style></head><body><p>Same member</p></body></html>`;
+	const context = { baseUrl: 'https://fixture.example/post', repServerHtml: page(['/template.css']), memberServerHtml: page(['/template.css', '/member.css']) };
+	const derivedHtml = page(['/template.css', '/member.css', '/runtime-dialog.css']);
+	const realHtml = page(['/template.css', '/member.css']);
+	expect(compareDerivedWithCapture({ ...context, derivedHtml, realHtml }).equal).toBe(true);
+	expect(compareDerivedWithCapture({ ...context, derivedHtml: realHtml, realHtml: derivedHtml }).equal).toBe(true);
+	for (const links of [['/member.css'], ['/template.css']]) {
+		expect(compareDerivedWithCapture({ ...context, derivedHtml, realHtml: page(links) }).checks.headStyles).toBe(false);
+	}
+	expect(compareDerivedWithCapture({ ...context, derivedHtml, realHtml: page(['/template.css', '/member.css'], 'body { color: red }') }).checks.headStyles).toBe(false);
+	expect(compareDerivedWithCapture({ derivedHtml, realHtml, baseUrl: context.baseUrl }).checks.headStyles).toBe(false);
+});
+
+it('fails verification when a runtime-painted background differs from the real capture (#1813)', () => {
+	const page = (hero: string) => `<html><head></head><body><div class="banner" style="background-position: 50% 4%; background-image: url(&quot;${hero}&quot;)"></div><h1>Paint colors</h1></body></html>`;
+	const compare = (derived: string, real: string) => compareDerivedWithCapture({ baseUrl: 'https://fixture.example/blog/paint', derivedHtml: page(derived), realHtml: page(real) }).checks.images;
+	expect(compare('/media/representative.webp', '/media/member.webp')).toBe(false);
+	expect(compare('/media/member.webp', '/media/member.webp')).toBe(true);
+});
+
+it('scores text alike when only a capture-time clock differs, not when the words do', () => {
+	const page = (footer: string) => `<html><head></head><body><h1>Paint colors</h1><footer>Last refreshed at: ${footer}</footer></body></html>`;
+	const text = (derived: string, real: string) => compareDerivedWithCapture({ baseUrl: 'https://fixture.example/blog/paint', derivedHtml: page(derived), realHtml: page(real) }).checks.text;
+	expect(text('Sat Nov 14 2026 19:08:08 GMT-0500 (Eastern Standard Time)', 'Sat Nov 14 2026 18:53:04 GMT-0500 (Eastern Standard Time)')).toBe(true);
+	expect(text('2026-11-14T19:08:08.120Z', '2026-11-14T18:53:04.004Z')).toBe(true);
+	expect(text('yesterday', 'today')).toBe(false);
+});
+
+it('derives the member\'s own images where a runtime or the server painted them into styles (#1813)', () => {
+	const cdn = 'https://images.example/content/v1';
+	const thumb = (image: string) => `<a href="/blog/next"><div class="pagination-img" style="background-image:url(${cdn}/${image}?format=150w);"></div>Next</a>`;
+	const server = (neighbor: string) => `<html><head></head><body><div class="banner"></div><h1>Post</h1>${thumb(neighbor)}<script>item.assetUrl = "x"</script></body></html>`;
+	const painted = (image: string, neighbor: string) => `<html><head></head><body><div class="banner" style="background-image: url(&quot;${image}?format=1500w&quot;)"></div><h1>Post</h1>${thumb(neighbor)}<script>item.assetUrl = JSON.parse(decodeURIComponent("%22${encodeURIComponent(image)}%22"))</script><img src="${cdn}/rep/banner.jpg2"></body></html>`;
+	const derived = deriveMemberDocument({ repServerHtml: server('rep-next.jpg'), repProcessedHtml: painted(`${cdn}/rep/banner.jpg`, 'rep-next.jpg'), memberServerHtml: server('member-next.jpg'), baseUrl: 'https://fixture.example/blog/rep', featuredImages: { representative: `${cdn}/rep/banner.jpg`, member: `${cdn}/member/part-1.jpg` } });
+	const expected = painted(`${cdn}/member/part-1.jpg`, 'member-next.jpg').replace(`${cdn}/member/banner.jpg2`, `${cdn}/rep/banner.jpg2`);
+	expect(derived.ok && compareDerivedWithCapture({ derivedHtml: derived.html, realHtml: expected, baseUrl: 'https://fixture.example/blog/member' }).equal).toBe(true);
+});
+
 /**
  * The #784 phase-1 fixture, reduced from the 24-route acceptance fixture: a
  * home page and six posts sharing one template, one post with a two-column
@@ -74,6 +124,26 @@ describe( 'template-clusters (phase 1 transplant, #784)', () => {
 		expect( derivation.html ).toContain( '<h1 class="post-title">post-2</h1>' );
 	} );
 
+	it( 'transplants differing body style text with the member block id (#1796)', () => {
+		const page = ( id: string ) => serverDocument( 'Post', `<div id="block-${ id }"><p>Block ${ id }</p><style>#block-${ id } { color: red }</style></div>` );
+		const repServerHtml = page( 'A' );
+		const memberServerHtml = page( 'B' );
+		const result = deriveMemberDocument( {
+			repServerHtml,
+			repProcessedHtml: repServerHtml,
+			memberServerHtml,
+			baseUrl: BASE,
+			// Admit per-member block selectors without changing template identity.
+			styleNormalization: { pageStyles: styles => styles.map( style => style.text.replace( /#block-[AB]/g, '#block-slot' ) ).join( '\n' ) },
+		} );
+		expect( result.ok ).toBe( true );
+		if ( ! result.ok ) return;
+		expect( result.html ).toContain( '<div id="block-B">' );
+		expect( result.html ).toContain( '<style>#block-B { color: red }</style>' );
+		expect( result.html ).not.toContain( '#block-A' );
+		expect( compareDerivedWithCapture( { derivedHtml: result.html, realHtml: memberServerHtml, baseUrl: BASE } ).checks.headStyles ).toBe( true );
+	} );
+
 	it( 'pairs head metadata by identity wherever the parser leaves it (Blogger)', () => {
 		// Blogger heads carry markup that closes <head> early, so the HTML parser
 		// leaves title and social metadata in <body>, in both captures.
@@ -127,6 +197,37 @@ describe( 'template-clusters (phase 1 transplant, #784)', () => {
 		expect( result.html ).toContain( '<body class="runtime-ready postid-407">' );
 	} );
 
+	it( 'derives a body id attribute slot despite capture-added body text (#1776)', () => {
+		const page = ( id: string, text: string ) => `<html><head><title>Post</title></head><body id="item-${ id }"><main><p>${ text }</p></main></body></html>`;
+		const repServerHtml = page( 'one', 'Representative article' );
+		const result = deriveMemberDocument( {
+			repServerHtml,
+			repProcessedHtml: repServerHtml.replace( '</body>', '<aside>Runtime-added chrome</aside></body>' ),
+			memberServerHtml: page( 'two', 'Member article' ),
+			baseUrl: BASE,
+		} );
+		expect( result.ok ).toBe( true );
+		if ( ! result.ok ) return;
+		expect( result.stats ).toEqual( { slots: 2, subtreeSlots: 0 } );
+		expect( result.html ).toContain( '<body id="item-two">' );
+		expect( result.html ).toContain( '<p>Member article</p>' );
+		expect( result.html ).toContain( '<aside>Runtime-added chrome</aside>' );
+	} );
+
+	it.each( [
+		[ 'text', '<p>Member article</p>' ],
+		[ 'subtree', '<p>Member article</p><p>Another paragraph</p>' ],
+	] )( 'still rejects a %s slot whose anchor text capture rewrote (#1776)', ( _kind, memberContent ) => {
+		const page = ( content: string ) => `<html><head><title>Post</title></head><body><main id="article">${ content }</main></body></html>`;
+		const result = deriveMemberDocument( {
+			repServerHtml: page( '<p>Representative article</p>' ),
+			repProcessedHtml: page( '<p>Runtime-rewritten article</p>' ),
+			memberServerHtml: page( memberContent ),
+			baseUrl: BASE,
+		} );
+		expect( result ).toMatchObject( { ok: false, gate: { code: 'slot_anchor_unmapped' } } );
+	} );
+
 	it( 'rejects a member whose cluster key drifted (the fingerprint is what admits derivation)', () => {
 		// Same skeleton, different page-local style: a stale or A/B-variant member
 		// must never ship as derived.
@@ -136,6 +237,20 @@ describe( 'template-clusters (phase 1 transplant, #784)', () => {
 			ok: false,
 			gate: { code: 'cluster_key_mismatch', reason: 'the member server document no longer matches its cluster fingerprint' },
 		} );
+	} );
+
+	it.each( [ '<input onclick="this.select();">', '<iframe src="/shared"></iframe>' ] )( 'reuses a byte-identical runtime element in a structurally different slot (#1842): %s', shared => {
+		const page = ( content: string ) => `<html><head><title>Example</title></head><body><main id="info">${ shared }${ content }</main></body></html>`;
+		const rep = page( '<p>Representative</p>' );
+		const input = { repServerHtml: rep, repProcessedHtml: rep, memberServerHtml: page( '<p>Member</p><p>More</p>' ), baseUrl: BASE };
+		const result = deriveMemberDocument( input );
+		expect( result.ok ).toBe( true );
+		if ( result.ok ) {
+			expect( result.html ).toContain( shared );
+			expect( result.html ).toContain( '<p>More</p>' );
+		}
+		expect( deriveMemberDocument( { ...input, memberServerHtml: input.memberServerHtml.replace( shared, shared.replace( 'this.select();', 'other();' ).replace( '/shared', '/different' ) ) } ) )
+			.toMatchObject( { ok: false, gate: { code: 'runtime_slot_content' } } );
 	} );
 
 	it( 'escalates a subtree slot carrying an unobserved event handler', () => {
@@ -169,6 +284,66 @@ describe( 'template-clusters (phase 1 transplant, #784)', () => {
 		} );
 		expect( existsSync( join( directory, 'template-clusters.json' ) ) ).toBe( true );
 		expect( JSON.parse( readFileSync( path, 'utf8' ) as string ).schema ).toBe( 'data-liberation-agent/template-clusters/v1' );
+	} );
+} );
+
+describe( 'server-empty hydration mounts (#1775)', () => {
+	// Squarespace-style comments: the representative has a per-item mount the
+	// runtime fills after load; the member has comments off, so the container
+	// becomes a subtree slot.
+	const page = ( title: string, comments?: string ) => `<html><head><title>Post</title></head><body><article id="article-${ title }"><div class="content"><p>${ title }</p></div><section class="comments"><div id="comments-content" class="comments-content">${ comments === undefined ? '' : `<div id="comments-${ title }" class="mount">${ comments }</div>` }</div></section></article></body></html>`;
+	const hydrated = '<p>Comments (0)</p><button>Post Comment</button>';
+	const derive = ( captured: string ) => deriveMemberDocument( {
+		repServerHtml: page( 'One', '' ), repProcessedHtml: captured,
+		memberServerHtml: page( 'Two' ), baseUrl: BASE,
+	} );
+
+	it( 'maps a slot nested in a runtime-filled mount', () => {
+		const result = derive( page( 'One', hydrated ) );
+		expect( result.ok, JSON.stringify( result ) ).toBe( true );
+		if ( ! result.ok ) return;
+		expect( result.html ).toContain( '<p>Two</p>' );
+		expect( compareDerivedWithCapture( { derivedHtml: result.html, realHtml: page( 'Two' ), baseUrl: BASE } ).equal ).toBe( true );
+		expect( compareDerivedWithCapture( { derivedHtml: result.html, realHtml: page( 'Two', 'Different comments' ), baseUrl: BASE } ).equal ).toBe( false );
+	} );
+
+	it( 'still rejects rewritten server text alongside a hydrated mount', () => {
+		const result = derive( page( 'One', hydrated ).replace( '<p>One</p>', '<p>Rewritten</p>' ) );
+		expect( result ).toMatchObject( { ok: false, gate: { code: 'slot_anchor_unmapped' } } );
+	} );
+} );
+
+describe( 'runtime-filled mount member gates (#1840)', () => {
+	const page = ( mount: string ) => `<html><head><title>Page</title></head><body><main class="entry-content">${ mount }</main></body></html>`;
+	const derive = ( representative: string, captured: string, member: string ) => deriveMemberDocument( {
+		repServerHtml: page( representative ), repProcessedHtml: page( captured ),
+		memberServerHtml: page( member ), baseUrl: BASE,
+	} );
+
+	it.each( [
+		[ 'changed', ' data-id="1"', ' data-id="2"' ],
+		[ 'added', '', ' data-id="2"' ],
+		[ 'removed', ' data-id="1"', '' ],
+	] )( 'escalates a filled mount with a %s member attribute even without slots', ( _label, repAttributes, memberAttributes ) => {
+		const result = derive( `<x-recs${ repAttributes }></x-recs>`, `<x-recs${ repAttributes }><p>Recommendations</p></x-recs>`, `<x-recs${ memberAttributes }></x-recs>` );
+		expect( result ).toMatchObject( { ok: false, gate: { code: 'runtime_mount_member_keyed' } } );
+	} );
+
+	it( 'escalates static member content replacing a hydrated mount', () => {
+		const result = derive( '<div id="w"></div>', '<div id="w"><p>Runtime reviews</p></div>', '<div id="w"><p>static</p></div>' );
+		expect( result ).toMatchObject( { ok: false, gate: { code: 'runtime_slot_content' } } );
+	} );
+
+	it( 'keeps an identically keyed empty member mount hydrated', () => {
+		const mount = '<x-recs data-id="1"></x-recs>';
+		const captured = '<x-recs data-id="1"><p>Recommendations</p></x-recs>';
+		const result = derive( mount, captured, mount );
+		expect( result ).toMatchObject( { ok: true, html: page( captured ) } );
+	} );
+
+	it( 'keeps ordinary empty elements outside the runtime gate', () => {
+		const result = derive( '<x-recs data-id="1"></x-recs>', '<x-recs data-id="1"></x-recs>', '<x-recs data-id="2"></x-recs>' );
+		expect( result ).toMatchObject( { ok: true } );
 	} );
 } );
 
