@@ -919,7 +919,13 @@ export async function observePage(
 				root.style.scrollBehavior = scrollBehavior;
 			}
 			const animations = animationsBefore.map( ( animation ) => animation.name ).sort();
-			const hashTargets: { fragment: string; resolved: boolean; targets: number }[] = [];
+			const hashTargets: { fragment: string; resolved: boolean; targets: number; rendered: boolean }[] = [];
+			// A link a reader can see: it has a box and is not hidden.
+			const linkRendered = ( link: Element ) => {
+				if ( link.getClientRects().length === 0 ) return false;
+				const style = getComputedStyle( link );
+				return style.display !== 'none' && style.visibility !== 'hidden';
+			};
 			const internalPaths: string[] = [];
 			const seen = new Set< string >();
 			// `/`, `/index.html` and a trailing slash all name the same document:
@@ -949,13 +955,19 @@ export async function observePage(
 					} catch {
 						continue;
 					}
-					if ( ! fragment || seen.has( `#${ fragment }` ) ) continue;
+					if ( ! fragment ) continue;
+					if ( seen.has( `#${ fragment }` ) ) {
+						// Several links to one fragment: rendered when any of them is.
+						const existing = hashTargets.find( ( entry ) => entry.fragment === fragment );
+						if ( existing && ! existing.rendered ) existing.rendered = linkRendered( link );
+						continue;
+					}
 					seen.add( `#${ fragment }` );
 					const targets = [ ...document.querySelectorAll( '[id],a[name]' ) ].filter(
 						( element ) =>
 							element.id === fragment || element.getAttribute( 'name' ) === fragment
 					).length;
-					hashTargets.push( { fragment, resolved: targets > 0, targets } );
+					hashTargets.push( { fragment, resolved: targets > 0, targets, rendered: linkRendered( link ) } );
 				}
 				if (
 					target.pathname &&

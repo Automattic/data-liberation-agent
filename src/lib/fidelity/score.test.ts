@@ -79,13 +79,41 @@ describe( 'scoreViewport', () => {
 		expect( score.pass ).toBe( true );
 	} );
 
-	it( 'fails when a same-page hash has no target in the copy', () => {
-		const score = scoreViewport(
-			at( 1440, { hashTargets: [ { fragment: 'team', resolved: true, targets: 1 } ] } ),
-			at( 1440, { hashTargets: [ { fragment: 'team', resolved: false, targets: 0 } ] } )
-		);
-		expect( score.pass ).toBe( false );
-		expect( score.failures[ 0 ] ).toMatch( /#team/ );
+	it.each( [
+		{
+			name: 'a fragment the source resolves is lost on the copy',
+			source: [ { fragment: 'team', resolved: true, targets: 1, rendered: true } ],
+			copy: [ { fragment: 'team', resolved: false, targets: 0, rendered: true } ],
+			fails: true,
+		},
+		{
+			name: 'the copy renders a dead link the source lacks',
+			source: [],
+			copy: [ { fragment: 'team', resolved: false, targets: 0, rendered: true } ],
+			fails: true,
+		},
+		{
+			name: 'an older observation without rendered counts as rendered',
+			source: [],
+			copy: [ { fragment: 'team', resolved: false, targets: 0 } ],
+			fails: true,
+		},
+		{
+			name: 'the source carries the same dead link',
+			source: [ { fragment: 'team', resolved: false, targets: 0, rendered: true } ],
+			copy: [ { fragment: 'team', resolved: false, targets: 0, rendered: true } ],
+			fails: false,
+		},
+		{
+			name: 'the dead copy link is not rendered',
+			source: [],
+			copy: [ { fragment: 'team', resolved: false, targets: 0, rendered: false } ],
+			fails: false,
+		},
+	] )( 'scores unresolved same-page anchors against the source: $name', ( { source, copy, fails } ) => {
+		const score = scoreViewport( at( 1440, { hashTargets: source } ), at( 1440, { hashTargets: copy } ) );
+		expect( score.pass ).toBe( ! fails );
+		if ( fails ) expect( score.failures[ 0 ] ).toMatch( /same-page anchor\(s\) missing: #team/ );
 	} );
 
 	it( 'fails when a hash resolves in the copy but to more places than the source', () => {
