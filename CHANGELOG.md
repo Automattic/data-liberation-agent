@@ -15,6 +15,16 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.35.49] - 2026-11-18
+
+### Changed
+- regenerate plugin bundles
+- give carousel exploration browser passes an explicit timeout
+
+### Fixed
+- await late-mounting footer media within readiness bound
+- remove late consent banners before serialization
+
 ## [0.35.48] - 2026-11-18
 
 ### Changed
