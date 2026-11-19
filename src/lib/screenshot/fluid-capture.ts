@@ -458,7 +458,10 @@ export async function learnAndApplyFluidGeometry(
 					await waitForRestGeometry( page, baseline );
 					await baseline.evaluate( state => state.restore() );
 				}
-				await baseline.evaluate( state => state.cleanup() );
+				await baseline.evaluate( state => {
+					( state as unknown as { appended?: { observer: MutationObserver } } ).appended?.observer.disconnect();
+					state.cleanup();
+				} );
 			} )(), 8000 );
 		} finally {
 			await baseline.dispose();
@@ -1484,6 +1487,11 @@ async function resizeViewport( page: Page, size: { width: number; height: number
  * inside the swept extent and its pending-image set has no new work, instead
  * of paying a full scroll-through at every width. Entrance replay still
  * sweeps for its own sake: its scroll-through is the point.
+ *
+ * The swept extent is the captured document's. A sweep that reaches an
+ * infinite feed's load trigger appends more of that feed; the appended run is
+ * not growth, so it is never chased, never re-swept, and later sweeps stop at
+ * the captured end instead of triggering the feed again.
  */
 async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typeof captureFluidBaseline>>, settleMs = 0, lazy = false, properties: readonly string[] = LEARNABLE_PROPERTIES, reuseSweep = false ): Promise< FluidWidthTiming['rest'] > {
 	const { withEvaluateTimeout, installImageReachability } = await import( './page-helpers.js' );
@@ -1570,6 +1578,64 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 			sources: new Map( [ ...document.images ].map( image =>
 				[ image, JSON.stringify( [ image.currentSrc, image.src, image.getAttribute( 'srcset' ) ] ) ] ) ),
 		} );
+		// Learning measures the captured document. A sweep that reaches an
+		// infinite feed's load trigger appends more of the list it visited: new
+		// elements repeating the tag of an element that was already there. Once
+		// the first sweep starts, those appended runs are recorded and are not
+		// learning's work: their height is not part of the extent a sweep visits
+		// or a later width compares against, and their images neither reveal new
+		// work nor gate rest. Content created in an empty slot or in place of
+		// replaced content is not an append and stays captured.
+		type Appended = { observer: MutationObserver; added: WeakSet< Node >; roots: Set< Element > };
+		const appendedState = state as unknown as { appended?: Appended };
+		const recordAppended = ( records: MutationRecord[] ) => {
+			const appended = appendedState.appended!;
+			for ( const record of records ) {
+				for ( const node of record.addedNodes ) {
+					appended.added.add( node );
+					if ( ! ( node instanceof Element ) ) continue;
+					let previous = node.previousElementSibling;
+					while ( previous && appended.added.has( previous ) ) previous = previous.previousElementSibling;
+					if ( previous && previous.tagName === node.tagName ) appended.roots.add( node );
+				}
+			}
+		};
+		const observeAppended = () => {
+			if ( appendedState.appended ) return;
+			const observer = new MutationObserver( recordAppended );
+			appendedState.appended = { observer, added: new WeakSet(), roots: new Set() };
+			observer.observe( document.documentElement, { childList: true, subtree: true } );
+		};
+		const isAppended = ( node: Element ) => {
+			const roots = appendedState.appended?.roots;
+			if ( ! roots?.size ) return false;
+			for ( let current: Element | null = node; current; current = current.parentElement ) if ( roots.has( current ) ) return true;
+			return false;
+		};
+		// The document's height without appended runs: each parent's appended
+		// run spans its first to last rendered root, and runs merge where they overlap.
+		const capturedHeight = () => {
+			const height = document.documentElement.scrollHeight;
+			const appended = appendedState.appended;
+			if ( ! appended ) return height;
+			recordAppended( appended.observer.takeRecords() );
+			const runs = new Map< Element | null, [ number, number ] >();
+			for ( const root of appended.roots ) {
+				if ( ! root.isConnected ) { appended.roots.delete( root ); continue; }
+				if ( root.getClientRects().length === 0 ) continue;
+				const box = root.getBoundingClientRect();
+				const run = runs.get( root.parentElement );
+				const top = box.top + window.scrollY, bottom = box.bottom + window.scrollY;
+				runs.set( root.parentElement, run ? [ Math.min( run[ 0 ], top ), Math.max( run[ 1 ], bottom ) ] : [ top, bottom ] );
+			}
+			let excluded = 0, end = -Infinity;
+			for ( const [ top, bottom ] of [ ...runs.values() ].sort( ( a, b ) => a[ 0 ] - b[ 0 ] ) ) {
+				const start = Math.max( top, end );
+				if ( bottom > start ) excluded += bottom - start;
+				end = Math.max( end, bottom );
+			}
+			return Math.max( 0, Math.round( height - excluded ) );
+		};
 		// Another sweep can only reach new work when the document grew or an image
 		// it may load newly entered the render tree: rendered, still pending, and
 		// reachable. Nodes and images that merely toggle within the swept extent
@@ -1577,7 +1643,7 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 		// their geometry effect is already part of the sampled snapshot.
 		const revealedPending = ( current: ReturnType< typeof content >, swept: ReturnType< typeof content > ) =>
 			[ ...current.rendered ].some( ( [ image, rendered ] ) =>
-				rendered && swept.rendered.get( image ) !== true && ! image.complete && ! renditionSwap( image ) && ! unreachable( image ) );
+				rendered && swept.rendered.get( image ) !== true && ! image.complete && ! renditionSwap( image ) && ! unreachable( image ) && ! isAppended( image ) );
 		// Two height memories with different jobs. The threshold keeps this width's
 		// own first read: scroll-linked chrome (a header that shrinks once scrolled)
 		// makes the same content shorter mid-sweep and taller again at the top, so
@@ -1587,7 +1653,7 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 		// width's resize handler and describe the previous viewport. It is what the
 		// reuse test below compares against and what the next width inherits.
 		const priorSweep = ( state as unknown as { swept?: { height: number; content: ReturnType< typeof content > | null } } ).swept;
-		let sweptHeight = Math.max( document.documentElement.scrollHeight, priorSweep?.height ?? 0 );
+		let sweptHeight = Math.max( capturedHeight(), priorSweep?.height ?? 0 );
 		let visitedHeight = priorSweep?.height ?? 0;
 		let sweptContent = content();
 		let didSweep = false;
@@ -1606,15 +1672,22 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 			// growth past the swept extent, or a newly rendered pending image. The
 			// page sits at the top when a sweep begins — the previous sweep returned
 			// there, and a reused width never scrolled.
-			for ( let y = window.innerHeight; y < document.documentElement.scrollHeight && Date.now() - started < 20_000; y += window.innerHeight ) {
-				window.scrollTo( { top: y, left: 0, behavior: 'instant' } );
+			// The sweep visits the captured extent only: it re-reads that extent
+			// as lazy content grows it, but never chases a feed it appends to, and
+			// it stops at the captured end rather than bringing the appended
+			// run's own load trigger into view again.
+			observeAppended();
+			for ( let y = window.innerHeight, extent = capturedHeight(); y < extent && Date.now() - started < 20_000; y += window.innerHeight ) {
+				const beyond = document.documentElement.scrollHeight > extent;
+				window.scrollTo( { top: beyond ? Math.min( y, Math.max( 0, extent - window.innerHeight ) ) : y, left: 0, behavior: 'instant' } );
 				await sleep( 60 );
-				sweptHeight = Math.max( sweptHeight, document.documentElement.scrollHeight );
-				visitedHeight = Math.max( visitedHeight, document.documentElement.scrollHeight );
+				extent = capturedHeight();
+				sweptHeight = Math.max( sweptHeight, extent );
+				visitedHeight = Math.max( visitedHeight, extent );
 			}
 			window.scrollTo( { top: 0, left: 0, behavior: 'instant' } );
-			sweptHeight = Math.max( sweptHeight, document.documentElement.scrollHeight );
-			visitedHeight = Math.max( visitedHeight, document.documentElement.scrollHeight );
+			sweptHeight = Math.max( sweptHeight, capturedHeight() );
+			visitedHeight = Math.max( visitedHeight, capturedHeight() );
 			// Source libraries (e.g. MooTools) replace window.Event; the document's
 			// native factory still builds a real event.
 			const scrolled = document.createEvent( 'Event' );
@@ -1629,7 +1702,7 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 		// compare against what the last sweep actually saw.
 		const priorContent = priorSweep?.content ?? null;
 		const reuse = lazy && reuseSweep && priorContent !== null &&
-			document.documentElement.scrollHeight <= priorSweep!.height && ! revealedPending( sweptContent, priorContent );
+			capturedHeight() <= priorSweep!.height && ! revealedPending( sweptContent, priorContent );
 		if ( reuse ) sweptContent = priorContent;
 		else if ( lazy ) await sweep();
 		// The rest budget bounds a page that never rests. Additional sweeps share it.
@@ -1641,8 +1714,8 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 			await sleep( 16 );
 			const currentContent = content();
 			const changedImages = [ ...currentContent.sources ].filter( ( [ image, source ] ) =>
-				source !== sweptContent.sources.get( image ) && ! renditionSwap( image ) );
-			const currentHeight = document.documentElement.scrollHeight;
+				source !== sweptContent.sources.get( image ) && ! renditionSwap( image ) && ! isAppended( image ) );
+			const currentHeight = capturedHeight();
 			visitedHeight = Math.max( visitedHeight, currentHeight );
 			if ( lazy && ( revealedPending( currentContent, sweptContent ) ||
 				changedImages.some( ( [ image ] ) => ! image.complete ) || currentHeight > sweptHeight ) ) {
@@ -1672,7 +1745,7 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 			// visibility is re-read above, so a later reveal invalidates the sweep.
 			// Native-lazy images clipped out of view by an overflow ancestor are
 			// equally unreachable by this vertical sweep.
-			const imagesReady = ! lazy || [ ...document.images ].every( image => image.complete || renditionSwap( image ) || image.getClientRects().length === 0 || unreachable( image ) ||
+			const imagesReady = ! lazy || [ ...document.images ].every( image => image.complete || renditionSwap( image ) || image.getClientRects().length === 0 || unreachable( image ) || isAppended( image ) ||
 				stuck.get( image ) === currentContent.sources.get( image ) );
 			// Pending timeouts cover debounces. A missing tagged role can also
 			// be between an unwrap and an rAF-driven refit: allow a second quiet
@@ -1684,7 +1757,7 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 		}
 		if ( lazy && ended === 'deadline' ) {
 			for ( const [ image, source ] of content().sources ) {
-				if ( ! image.complete && image.getClientRects().length > 0 && ! unreachable( image ) ) stuck.set( image, source );
+				if ( ! image.complete && image.getClientRects().length > 0 && ! unreachable( image ) && ! isAppended( image ) ) stuck.set( image, source );
 			}
 		}
 		// Later widths reuse this wait's visited extent and content (see `reuse`),
