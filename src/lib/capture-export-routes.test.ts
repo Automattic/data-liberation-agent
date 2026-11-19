@@ -217,6 +217,42 @@ describe( 'capture export route stage', () => {
 		expect( routes.duplicateRoutes ).toEqual( [ { url: base.url, canonicalUrl: alias.url, path: 'website/index.html' } ] );
 	} );
 
+	it( 'collapses a directory and its default document with self-links and self-canonicals', () => {
+		mkdirSync( '.tmp-test', { recursive: true } );
+		const dir = mkdtempSync( join( '.tmp-test', 'liberation-directory-index-' ) );
+		dirs.push( dir );
+		// Issue #2022: one document captured at `/` and `/index.html`; a head
+		// script ran only at `/`, so every capture node id is shifted by one.
+		const body = ( first: number, path = '/index.html' ) => `<header data-blocks-engine-node-id="n${ first }"><a href="${ path }#home" data-blocks-engine-node-id="n${ first + 1 }">Home</a><a href="${ path }#trainingen">Trainingen</a></header>`;
+		const root = { ...entry( dir, 'root.html', 'https://example.com/', `<html><head><link rel="canonical" href="https://example.com"><meta name="hint"></head><body>${ body( 4, '/' ) }</body></html>` ), canonicalUrl: 'https://example.com', canonicalLinkUrl: 'https://example.com' };
+		const defaultDocument = { ...entry( dir, 'default.html', 'https://example.com/index.html', `<html><head><link rel="canonical" href="https://example.com/index.html"></head><body>${ body( 3 ) }</body></html>` ), canonicalUrl: 'https://example.com/index.html', canonicalLinkUrl: 'https://example.com/index.html' };
+		const about = entry( dir, 'about.html', 'https://example.com/about.html', `<html><body>${ body( 3 ) }<main>About</main></body></html>` );
+		for ( const entries of [ [ root, defaultDocument, about ], [ about, defaultDocument, root ] ] ) {
+			const routes = allocateCaptureRoutes( entries, root.url, [] );
+			expect( routes.retainedEntries ).toEqual( [ root, about ] );
+			expect( routes.routePathOf( defaultDocument.url ) ).toBe( 'index.html' );
+			expect( routes.canonicalRouteAliases.get( defaultDocument.url ) ).toBe( 'index.html' );
+			expect( routes.duplicateRoutes ).toEqual( [ { url: defaultDocument.url, canonicalUrl: root.url, path: 'website/index.html' } ] );
+			expect( routes.pathDiagnostics ).toEqual( [] );
+		}
+	} );
+
+	it.each( [
+		[ '#home', 'index.html#home', true ],
+		[ '/section/#home', 'https://example.com/section/index.html#home', true ],
+		[ '#home', 'index.html#other', false ],
+		[ '#home', 'index.html?other#home', false ],
+		[ '#home', 'https://other.example/section/index.html#home', false ],
+	] )( 'compares default-document link targets %s and %s (alias: %s)', ( directoryHref, defaultHref, alias ) => {
+		mkdirSync( '.tmp-test', { recursive: true } );
+		const dir = mkdtempSync( join( '.tmp-test', 'liberation-default-links-' ) );
+		dirs.push( dir );
+		const directory = entry( dir, 'directory.html', 'https://example.com/section/', `<a href="${ directoryHref }">Home</a>` );
+		const defaultDocument = entry( dir, 'default.html', 'https://example.com/section/index.html', `<a href="${ defaultHref }">Home</a>` );
+		const routes = allocateCaptureRoutes( [ directory, defaultDocument ], directory.url, [] );
+		expect( routes.retainedEntries ).toEqual( alias ? [ directory ] : [ directory, defaultDocument ] );
+	} );
+
 	it( 'returns the selected entrypoint document for later media selection and preserves redirects to allocated pages', () => {
 		mkdirSync( '.tmp-test', { recursive: true } );
 		const dir = mkdtempSync( join( '.tmp-test', 'liberation-route-stage-' ) );
