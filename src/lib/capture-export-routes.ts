@@ -212,7 +212,9 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 		return path.replace( /\\/g, '/' );
 	};
 	const allocatedPaths = new Map< string, string >();
-	const reservedPaths = new Set( capturedEntries.map( ( entry ) => naturalRoutePath( entry.url ) ) );
+	// Portable paths must also be unique on case-insensitive hosts.
+	const pathKey = ( path: string ) => path.toLowerCase();
+	const reservedPaths = new Set( capturedEntries.map( ( entry ) => pathKey( naturalRoutePath( entry.url ) ) ) );
 	const entryForAddress = ( url: string ): T | undefined => {
 		const exact = capturedEntries.find( entry => documentRequestUrl( entry.url ) === documentRequestUrl( url ) );
 		if (exact) return exact;
@@ -225,13 +227,13 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 	// sibling: undefined leaves the route on the contested path, where the claim
 	// below drops it as a path collision.
 	const allocateCollisionPath = ( path: string, query: boolean, preferred?: string ): string | undefined => {
-		if ( [ ...reservedPaths ].some( reserved => path.startsWith( `${ reserved }/` ) ) ) return undefined;
+		if ( [ ...reservedPaths ].some( reserved => pathKey( path ).startsWith( `${ reserved }/` ) ) ) return undefined;
 		const extension = extname( path );
 		const stem = extension ? path.slice( 0, -extension.length ) : path;
-		const conflicts = ( candidate: string ) => [ ...reservedPaths ].some( reserved => reserved === candidate ||
-			reserved.startsWith( `${ candidate }/` ) || candidate.startsWith( `${ reserved }/` ) );
+		const conflicts = ( candidate: string ) => [ ...reservedPaths ].some( reserved => reserved === pathKey( candidate ) ||
+			reserved.startsWith( `${ pathKey( candidate ) }/` ) || pathKey( candidate ).startsWith( `${ reserved }/` ) );
 		if ( preferred && ! conflicts( preferred ) ) {
-			reservedPaths.add( preferred );
+			reservedPaths.add( pathKey( preferred ) );
 			return preferred;
 		}
 		let suffix = query ? 1 : 2;
@@ -239,7 +241,7 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 		do {
 			allocated = `${ stem }-${ query ? 'query-' : '' }${ suffix++ }${ extension }`;
 		} while ( conflicts( allocated ) );
-		reservedPaths.add( allocated );
+		reservedPaths.add( pathKey( allocated ) );
 		return allocated;
 	};
 	// Keep DOM structure, attributes and media (not just text) as identity proof;
@@ -295,15 +297,22 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 			contentAliasPartners.set( directory.url, entry.url );
 		}
 	}
+	// Case variants compete for one portable filename, but case alone is not
+	// alias proof: only matching captured content permits collapsing them.
+	const caseAlias = ( left: T, right: T ) => {
+		const leftPath = naturalRoutePath( left.url );
+		const rightPath = naturalRoutePath( right.url );
+		return leftPath !== rightPath && pathKey( leftPath ) === pathKey( rightPath ) && contentDigest( left ) === contentDigest( right );
+	};
 	const routePathOf = ( url: string ) => allocatedPaths.get( url ) ?? naturalRoutePath( url );
 	const pathGroups = new Map< string, T[] >();
 	for ( const entry of capturedEntries ) {
-		const path = routePathOf( entry.url );
+		const path = pathKey( routePathOf( entry.url ) );
 		const group = pathGroups.get( path ) ?? [];
 		group.push( entry );
 		pathGroups.set( path, group );
 	}
-	for ( const [ path, group ] of pathGroups ) {
+	for ( const group of pathGroups.values() ) {
 		if ( group.length < 2 ) continue;
 		const sorted = [ ...group ].sort( ( left, right ) => left.url.localeCompare( right.url ) );
 		// Form proven alias groups before assigning filenames, including aliases
@@ -312,7 +321,7 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 		for ( const entry of sorted ) {
 			const matching = clusters.filter( cluster => cluster.some( member =>
 				declaresCanonicalRoute( entry, member ) || declaresCanonicalRoute( member, entry ) ||
-				contentAliasPartners.get( entry.url ) === member.url ) );
+				contentAliasPartners.get( entry.url ) === member.url || caseAlias( entry, member ) ) );
 			const cluster = [ entry, ...matching.flat() ];
 			for ( const matched of matching ) clusters.splice( clusters.indexOf( matched ), 1 );
 			clusters.push( cluster );
@@ -324,8 +333,12 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 		const preferred = representatives.find( entry => entry.url === entrypointUrl )
 			?? representatives.find( entry => ! new URL( entry.url ).search && !new URL(entry.url).pathname.endsWith('/index.html') )
 			?? representatives.find( entry => ! new URL( entry.url ).search ) ?? representatives[ 0 ];
+		const path = naturalRoutePath( preferred.url );
 		for ( const [ index, entry ] of representatives.entries() ) {
-			if ( entry === preferred ) continue;
+			if ( entry === preferred ) {
+				for ( const alias of clusters[ index ] ) allocatedPaths.set( alias.url, path );
+				continue;
+			}
 			const queryUrl = new URL( entry.url );
 			const queryValue = queryUrl.searchParams.size === 1 ? queryUrl.searchParams.values().next().value : undefined;
 			const directory = path.replace( /\/[^/]*$/, '' );
@@ -360,23 +373,25 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 			Number( !! new URL( left.url ).search ) - Number( !! new URL( right.url ).search ) || left.url.localeCompare( right.url ) ),
 	] ) {
 		const routePath = routePathOf( entry.url );
-		const claimed = claimedRoutes.get( routePath );
+		const key = pathKey( routePath );
+		const claimed = claimedRoutes.get( key );
 		if ( ! claimed ) {
-			const inside = claimedDirectories.get( routePath );
-			const fileParent = parentDirectories( routePath ).find( directory => claimedRoutes.has( directory ) );
+			const inside = claimedDirectories.get( key );
+			const fileParent = parentDirectories( key ).find( directory => claimedRoutes.has( directory ) );
 			if ( inside ) collide( entry, routePath, `website/${ routePath } is a directory holding the page of ${ inside.url } (website/${ routePathOf( inside.url ) })` );
 			else if ( fileParent ) collide( entry, routePath, `website/${ routePath } needs website/${ fileParent } as a directory, which is the page of ${ claimedRoutes.get( fileParent )!.url }` );
 			else {
-				claimedRoutes.set( routePath, entry );
-				for ( const directory of parentDirectories( routePath ) ) if ( ! claimedDirectories.has( directory ) ) claimedDirectories.set( directory, entry );
+				claimedRoutes.set( key, entry );
+				for ( const directory of parentDirectories( key ) ) if ( ! claimedDirectories.has( directory ) ) claimedDirectories.set( directory, entry );
 				retained.add( entry );
 			}
 			continue;
 		}
-		if ( ! declaresCanonicalRoute( entry, claimed ) && ! declaresCanonicalRoute( claimed, entry ) && contentAliasPartners.get( entry.url ) !== claimed.url ) {
+		if ( ! declaresCanonicalRoute( entry, claimed ) && ! declaresCanonicalRoute( claimed, entry ) && contentAliasPartners.get( entry.url ) !== claimed.url && ! caseAlias( entry, claimed ) ) {
 			collide( entry, routePath, `website/${ routePath } is already claimed by ${ claimed.url }` );
 			continue;
 		}
+		allocatedPaths.set( entry.url, routePathOf( claimed.url ) );
 		if ( entry.sourceData.length > 0 ) duplicateSourceData.push( { claimed, sourceData: entry.sourceData } );
 		duplicateRoutes.push( { url: entry.url, canonicalUrl: claimed.url, path: `website/${ routePath }` } );
 		canonicalRouteAliases.set( documentRequestUrl( entry.url ), routePath );

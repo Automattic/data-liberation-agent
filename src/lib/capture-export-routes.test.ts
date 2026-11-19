@@ -15,6 +15,26 @@ function entry( dir: string, filename: string, url: string, html: string ): Rout
 }
 
 describe( 'capture export route stage', () => {
+	it( 'folds identical case variants and allocates distinct content around case-folded reservations', () => {
+		mkdirSync( '.tmp-test', { recursive: true } );
+		const dir = mkdtempSync( join( '.tmp-test', 'liberation-case-routes-' ) ); dirs.push( dir );
+		const home = entry( dir, 'home.html', 'https://example.com/', '<h1>Home</h1>' );
+		const seminar = entry( dir, 'one.html', 'https://example.com/seminars/particle', '<h1>Seminar</h1>' );
+		const alias = entry( dir, 'two.html', 'https://example.com/seminars/Particle', '<h1>Seminar</h1>' );
+		const different = entry( dir, 'three.html', 'https://example.com/SEMINARS/PARTICLE', '<h1>Other seminar</h1>' );
+		const reserved = entry( dir, 'four.html', 'https://example.com/SEMINARS/PARTICLE/INDEX-2.HTML', '<h1>Reserved</h1>' );
+		const entries = [ home, seminar, alias, different, reserved ];
+		const stage = allocateCaptureRoutes( entries, home.url, [] );
+		const reversed = allocateCaptureRoutes( [ ...entries ].reverse(), home.url, [] );
+		expect( entries.map( item => stage.routePathOf( item.url ) ) ).toEqual( entries.map( item => reversed.routePathOf( item.url ) ) );
+		expect( stage.duplicateRoutes ).toHaveLength( 1 );
+		expect( stage.routePathOf( alias.url ) ).toBe( stage.routePathOf( seminar.url ) );
+		expect( stage.duplicateRoutes[ 0 ].path ).toBe( `website/${ stage.routePathOf( seminar.url ) }` );
+		expect( stage.canonicalRouteAliases.get( stage.duplicateRoutes[ 0 ].url ) ).toBe( stage.routePathOf( seminar.url ) );
+		const paths = stage.retainedEntries.map( item => stage.routePathOf( item.url ).toLowerCase() );
+		expect( new Set( paths ).size ).toBe( 4 );
+		expect( stage.pathDiagnostics ).toEqual( [] );
+	} );
 	it( 'allocates independent nonquery collisions deterministically around authored files and directories', () => {
 		mkdirSync('.tmp-test', {recursive: true});
 		const dir = mkdtempSync(join('.tmp-test', 'liberation-document-collisions-')); dirs.push(dir);
