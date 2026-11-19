@@ -19,6 +19,7 @@ class ProbeRealm {
   private decorated = new WeakSet<object>();
   constructor(private page: Page) {
     this.session = page.context().newCDPSession(page);
+    this.session.catch(() => {});
     const addInitScript = page.addInitScript.bind(page);
     page.addInitScript = async (script, arg) => {
       if (typeof script === 'function') return addInitScript({ content: `(${source(script)})(${JSON.stringify(arg) ?? 'undefined'})` });

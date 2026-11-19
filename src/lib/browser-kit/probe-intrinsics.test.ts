@@ -7,6 +7,7 @@ import { captureScreenshots } from '../screenshot/screenshotter.js';
 import { createReferenceCollector, type FidelityReference } from '../fidelity/reference.js';
 
 import { createSourceContext } from './source-identity.js';
+import { installProbeIntrinsics } from './probe-intrinsics.js';
 import { learnAndApplyFluidGeometry } from '../screenshot/fluid-capture.js';
 import { captureNativeViewTimelines } from '../screenshot/native-view-timelines.js';
 
@@ -23,6 +24,19 @@ const it = browserTest.extend<{ sourceServer: void }>({ sourceServer: [async ({ 
 }, { auto: true }] });
 let server: Server;
 let url: string;
+
+it('handles a probe session rejection when a page closes before attach', async ({ context }) => {
+  const rejections: unknown[] = [];
+  const onRejection = (reason: unknown) => { rejections.push(reason); };
+  process.on('unhandledRejection', onRejection);
+  try {
+    await installProbeIntrinsics(context);
+    const page = await context.newPage();
+    await page.close();
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(rejections).toEqual([]);
+  } finally { process.off('unhandledRejection', onRejection); }
+});
 
 // One real fluid sweep (~2s). No source globals are repaired by the probe.
 it('protects page, locator and retained-handle probes across navigation', async ({ browser }) => {
