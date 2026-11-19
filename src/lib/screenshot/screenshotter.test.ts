@@ -56,6 +56,13 @@ vi.mock('./runtime-memory.js', () => ({
 	availableRuntimeMemory: () => process.availableMemory(),
 }));
 
+// Collection ownership is covered with real DOMs in collection-capture.test.ts.
+// The generic evaluate fallback below returns design tokens, not region arrays;
+// it must not accidentally stand in for collection discovery.
+vi.mock('./collection-capture.js', () => ({
+	captureCollections: vi.fn().mockResolvedValue([]),
+}));
+
 import { capturePageHtml, captureScreenshots, geometryCandidateIsSafe, getHomepageUrl } from './screenshotter.js';
 import { classifyUrl } from '../extraction/sitemap.js';
 import { connectBrowser } from '../browser-kit/index.js';
