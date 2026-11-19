@@ -2,6 +2,15 @@ import { expect, it } from 'vitest';
 import { templateFingerprint } from '../../lib/template-groups.js';
 import { squarespaceAdapter } from './index.js';
 
+it( 'ignores only complete scroll-animation state tokens in template fingerprints', () => {
+	const fingerprint = ( classes: string ) => templateFingerprint( `<body><div class="content ${ classes }">Text</div></body>`, 'https://example.com/post', undefined, undefined, squarespaceAdapter.runtimeStateClasses );
+	const plain = fingerprint( '' );
+	for ( const animation of [ 'Scale', 'Fade', 'Slide', 'Clip', 'Flex' ] ) {
+		expect( fingerprint( `pre${ animation } ${ animation.toLowerCase() }In` ) ).toEqual( plain );
+	}
+	expect( fingerprint( 'preScaleCustom' ).skeleton ).not.toBe( plain.skeleton );
+} );
+
 it( 'groups Squarespace item churn without hiding authored CSS or other script dependencies', () => {
 	const font = ( name: string ) => `@font-face{font-family:${ name };src:url(${ name }.woff2)}`;
 	const page = ( id: string, fonts: string[], hash: string, count: number ) => `
