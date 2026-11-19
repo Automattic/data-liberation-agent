@@ -17,7 +17,8 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('publishes complete source-bound box t
 		h1::before{content:"★";display:inline-block;width:16px;height:18px;padding:2px;border:1px solid black;color:rgb(90,80,70)}
 		h1::after{content:none}
 		.overlay{position:absolute;top:10px;right:4px;background:red;background-position:20% 30%;background-size:12px 14px}
-		@media(max-width:600px){.grid{grid-template-columns:1fr}}
+		.grid{padding-top:4px;transition:padding-top 2s linear}
+		@media(max-width:600px){.grid{grid-template-columns:1fr;padding-top:40px}}
 	</style></head><body><main><div><div><div class="grid"><div><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E"></div><div><h1>Builder</h1></div><span class="overlay">Overlay</span></div></div></div></main><a href="/other">Other</a><div id="fluid-offset" style="position:absolute;top:200px">Fluid</div><script>
 		function layout() { document.querySelector('#fluid-offset').style.inset = '200px auto auto ' + (innerWidth < 700 ? 20 : innerWidth * 0.1) + 'px'; }
 		addEventListener('resize', layout);
@@ -78,6 +79,8 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('publishes complete source-bound box t
 				expect(badge.used_styles).toMatchObject({ position: 'absolute', top: '10px', right: '4px', 'background-position-x': '20%', 'background-position-y': '30%', 'background-size': '12px 14px' });
 				expect(badge.pseudo).toBeUndefined();
 			}
+			const mobileGrid = tree.nodes[$('.grid').attr(NODE_ID_ATTRIBUTE)!].viewports.mobile;
+			expect(mobileGrid.used_styles['padding-top']).toBe('40px');
 			files[entry.html] = html;
 			files[sidecar] = JSON.stringify(tree);
 		}

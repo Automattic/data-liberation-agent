@@ -187,6 +187,8 @@ export async function captureBoxTree(page: Page, html: string, viewports: BoxTre
 			await page.setViewportSize(size);
 			await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 			const observations = await page.evaluate(({ attribute, properties, topology, html, observerSource }) => {
+				// A visitor loading at this width sees the end state, not a resize transition mid-flight.
+				for (const animation of document.getAnimations()) if (animation instanceof CSSTransition) animation.finish();
 				const live = new Map(Array.from(document.querySelectorAll('*'), element => [element.getAttribute(attribute), element]));
 				for (const [id, expected] of Object.entries(topology)) {
 					const element = live.get(id);
