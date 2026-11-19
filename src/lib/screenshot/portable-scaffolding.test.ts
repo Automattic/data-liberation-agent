@@ -5,6 +5,8 @@ import { load } from 'cheerio';
 import { expect } from 'vitest';
 import { it } from '../../../test/browser.js';
 import { capturePageHtml, captureScreenshots } from './screenshotter.js';
+import { cleanPortableScaffolding } from './portable-scaffolding.js';
+import { captureBoxTree, type BoxTreeObservation } from './box-tree.js';
 import { dismissOverlays } from './page-helpers.js';
 import type { ProfileDiagnostic } from './manifest-queue.js';
 import { exportWebsiteCapture } from '../capture-export.js';
@@ -114,4 +116,59 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('keeps script-rendered fragment links 
   expect($('.name > a[href="#detail"]').text()).toBe('ALPHA');
   expect($('#hidden-top').length).toBe(0);
   expect(diagnostics.filter(item => item.code === 'hidden_navigation_affordance_removed').map(item => item.reason)).toEqual(['a#hidden-top: hidden in-page link without a content target']);
+}, 30_000);
+
+// #2042: one page, expected wall time under 3 seconds.
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('unwraps only wrappers proven inert, without changing a pixel', async ({ newPage }) => {
+  const fixture = `<!doctype html><html><head><style>
+    body { margin:0; font:16px/1.4 sans-serif } section { padding:16px }
+    .a > .b { color:rgb(200,0,0) }
+    .list > :first-child { font-weight:700 }
+    .nth > :nth-child(2) { color:rgb(0,120,0) }
+    .pad { padding:8px } .bg { background:rgb(240,240,240) }
+    @media (max-width:600px) { .narrow { padding:4px } }
+  </style></head><body><section>
+    <div class="w1"><div class="w2"><div class="w3" style="display:contents"><p class="text">Stacked <span class="sw"><span><em>inline</em></span></span> text</p></div></div></div>
+    <div class="a"><div class="childwrap"><p class="b">Child combinator</p></div></div>
+    <div class="list"><div class="firstwrap"><p>One</p><p>Two</p></div></div>
+    <div class="nth"><p>x</p><div class="nthwrap"><p>y1</p><p>y2</p></div><p>z</p></div>
+    <div class="pad"><p>Padded</p></div><div class="bg"><p>Background</p></div>
+    <div class="narrow"><p>Narrow padding</p></div>
+  </section><section><div class="grouped" role="group"><p>Role</p></div></section></body></html>`;
+  const source = await newPage();
+  await source.setViewportSize({ width: 1280, height: 800 });
+  await source.setContent(fixture);
+  const diagnostics: ProfileDiagnostic[] = [];
+  const projected = await capturePageHtml(source, diagnostics);
+  const $ = load(projected);
+  // `.a` itself is inert; its child wrapper is not, because `.a > .b` would then match.
+  expect($('.w1, .w2, .w3, .sw, .text span, .a').length).toBe(0);
+  expect($('section > p.text > em').text()).toBe('inline');
+  for (const kept of ['.childwrap', '.firstwrap', '.nthwrap', '.pad', '.bg', '.grouped', '.narrow']) expect($(kept).length, kept).toBe(1);
+  const summary = diagnostics.find(item => item.code === 'inert_wrappers_unwrapped');
+  expect(summary?.reason).toMatch(/ 6 unwrapped, 5 kept by proof, .* max depth 9 -> 5$/);
+  // The live page is restored, element for element.
+  expect(await source.locator('.w1 > .w2 > .w3 > p.text > .sw > span > em').count()).toBe(1);
+  const copy = await newPage({ javaScriptEnabled: false });
+  await copy.setViewportSize({ width: 1280, height: 800 });
+  await copy.setContent(projected);
+  expect(Buffer.compare(await copy.screenshot({ fullPage: true }), await source.screenshot({ fullPage: true }))).toBe(0);
+
+  // Box-tree widths observed later see through the wrappers the live page still has.
+  let observation: BoxTreeObservation | undefined;
+  const stamped = await capturePageHtml(source, [], undefined, observed => { observation = observed; });
+  expect(observation && 'unwrapped' in observation ? observation.unwrapped : []).toHaveLength(6);
+  const tree = await captureBoxTree(source, stamped, { desktop: { width: 1280, height: 800 }, mobile: { width: 390, height: 800 } },
+    { name: 'desktop', ...(observation as Extract<BoxTreeObservation, { nodes: unknown }>) });
+  expect(Object.keys(tree?.viewports ?? {})).toEqual(['desktop', 'mobile']);
+
+  // Exhausted work leaves the remaining candidates in place and says so.
+  const limited = await source.evaluate(({ clean }) => {
+    (globalThis as typeof globalThis & { __name?: (fn: unknown) => unknown }).__name ??= fn => fn;
+    const run = new Function(`return (${clean})`)() as typeof cleanPortableScaffolding;
+    const snapshot = document.documentElement.cloneNode(true) as HTMLElement;
+    return { findings: run(document, snapshot, { workBudget: 1 }).findings, wrappers: snapshot.querySelectorAll('.w1, .w2, .w3').length };
+  }, { clean: cleanPortableScaffolding.toString() });
+  expect(limited.wrappers).toBe(3);
+  expect(limited.findings.map(finding => finding.code)).toEqual(['inert_wrappers_unwrapped', 'inert_wrapper_budget_exhausted']);
 }, 30_000);

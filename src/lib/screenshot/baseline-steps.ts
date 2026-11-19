@@ -337,7 +337,7 @@ export function baselineSteps(
 	state: BaselineState,
 	fail: ( stage: FailureEntry['stage'], error: unknown, attempt?: number ) => void,
 	sourceErrors: () => string[],
-	capturePageHtml: ( page: Page, diagnostics?: ProfileDiagnostic[], serverHtml?: string, onBoxTree?: (observation: BoxTreeObservation | undefined) => void, onPainted?: ( painted: string[] ) => void ) => Promise<string>,
+	capturePageHtml: ( page: Page, diagnostics?: ProfileDiagnostic[], serverHtml?: string, onBoxTree?: (observation: BoxTreeObservation | undefined) => void, onPainted?: ( painted: string[] ) => void, options?: { unwrapInertWrappers?: boolean } ) => Promise<string>,
 ): CaptureStep<{ page: Page }>[] {
 	const { page, viewport, plan, url, slug, evaluateTimeoutMs, screenshotTimeoutMs, outputDir, entry, responsiveImages, resourceStore, mobileHeights, shouldAnalyze, aggregator } = args;
 	const { serverHtml, navigationUrl, sourcePolicy } = sourceLoad;
@@ -399,7 +399,8 @@ export function baselineSteps(
 		} );
 		entry.sourceDeadFragments = { ...entry.sourceDeadFragments, [ viewport.id ]: sourceDeadFragments };
 		let laterNodes: BoxTree['nodes'] | undefined;
-		const learned = await capturePageHtml( page, args.diagnostics, undefined, observation => { laterNodes = observation && 'nodes' in observation ? observation.nodes : undefined; } );
+		// Projection keeps the initial document's structure, so this pass does not re-prove wrappers.
+		const learned = await capturePageHtml( page, args.diagnostics, undefined, observation => { laterNodes = observation && 'nodes' in observation ? observation.nodes : undefined; }, undefined, { unwrapInertWrappers: false } );
 		if (state.boxTree && laterNodes) {
 			// Learning adds inert evidence sheets after the initial snapshot. Observe
 			// those new nodes synchronously too, without replacing baseline geometry.
@@ -541,7 +542,7 @@ export function baselineSteps(
 				}
 				const observed: BoxTreeObservation | undefined = boxNodes;
 				if (observed && 'mismatch' in observed) state.boxTreeMismatch = observed.mismatch;
-				else if (observed) state.boxTree = await captureBoxTree(page, state.initialDocument, boxViewports(), { name: viewport.id, nodes: observed.nodes }, mismatch => { state.boxTreeMismatch = mismatch; });
+				else if (observed) state.boxTree = await captureBoxTree(page, state.initialDocument, boxViewports(), { name: viewport.id, nodes: observed.nodes, unwrapped: observed.unwrapped }, mismatch => { state.boxTreeMismatch = mismatch; });
 				if ( await args.absentDocument?.( state.initialDocument ) ) {
 					fail( 'goto', 'HTTP 404 (render matches absent nonce sibling)' );
 					state.stopped = true;

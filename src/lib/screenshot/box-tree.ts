@@ -52,7 +52,8 @@ export type BoxTreeMismatch = {
 	path: string;
 	detail?: string;
 };
-export type BoxTreeObservation = { nodes: BoxTree['nodes'] } | { mismatch: BoxTreeMismatch };
+/** `unwrapped`: identities of proven-inert wrappers the serializer removed but the live page keeps. */
+export type BoxTreeObservation = { nodes: BoxTree['nodes']; unwrapped?: string[] } | { mismatch: BoxTreeMismatch };
 
 export function describeBoxTreeMismatch(mismatch: BoxTreeMismatch): string {
 	const node = mismatch.id ? ` ${mismatch.id}` : '';
@@ -160,7 +161,7 @@ export function bindBoxTree<T extends BoundTree>(html: string, tree: T | undefin
 }
 
 /** Observe extra widths immediately after serialization, keeping only stable ones. */
-export async function captureBoxTree(page: Page, html: string, viewports: BoxTree['viewports'], initial?: { name: string; nodes: BoxTree['nodes'] }, onUnproven?: (mismatch: BoxTreeMismatch) => void): Promise<Omit<BoxTree, 'source_path' | 'source_hash'> | undefined> {
+export async function captureBoxTree(page: Page, html: string, viewports: BoxTree['viewports'], initial?: { name: string; nodes: BoxTree['nodes']; unwrapped?: string[] }, onUnproven?: (mismatch: BoxTreeMismatch) => void): Promise<Omit<BoxTree, 'source_path' | 'source_hash'> | undefined> {
 	const $ = cheerio.load(html);
 	const nodes: BoxTree['nodes'] = {};
 	let mismatch: BoxTreeMismatch | undefined;
@@ -186,13 +187,19 @@ export async function captureBoxTree(page: Page, html: string, viewports: BoxTre
 			if (name === initial?.name) continue;
 			await page.setViewportSize(size);
 			await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
-			const observations = await page.evaluate(({ attribute, properties, topology, html, observerSource }) => {
+			const observations = await page.evaluate(({ attribute, properties, topology, html, observerSource, unwrapped }) => {
 				const live = new Map(Array.from(document.querySelectorAll('*'), element => [element.getAttribute(attribute), element]));
+				const seeThrough = new Set(unwrapped);
+				// A wrapper the serializer unwrapped contributes its children in its place.
+				const retainedChildren = (element: Element): Array<string | null> => Array.from(element.children).flatMap(child => {
+					const id = child.getAttribute(attribute);
+					return id && seeThrough.has(id) && !topology[id] ? retainedChildren(child) : [id];
+				});
 				for (const [id, expected] of Object.entries(topology)) {
 					const element = live.get(id);
 					if (!element) return;
 					// Ignore source-only nodes removed by serialization, but never accept a changed retained tree.
-					const children = Array.from(element.children, child => child.getAttribute(attribute)).filter(child => child && topology[child]);
+					const children = retainedChildren(element).filter(child => child && topology[child]);
 					if (JSON.stringify(children) !== JSON.stringify(expected.children)) return;
 				}
 				// The protected constructor binds saved probe intrinsics; indirect eval
@@ -200,7 +207,7 @@ export async function captureBoxTree(page: Page, html: string, viewports: BoxTre
 				const observe = new Function(`return (${observerSource})`)() as typeof observeBoxTree;
 				const observed = observe(new DOMParser().parseFromString(html, 'text/html').documentElement, properties, attribute);
 				return 'nodes' in observed ? Object.fromEntries(Object.entries(observed.nodes).map(([id, node]) => [id, node.viewports.capture])) : undefined;
-			}, { attribute: NODE_ID_ATTRIBUTE, properties: BOX_TREE_STYLES, topology: nodes, html, observerSource: observeBoxTree.toString() });
+			}, { attribute: NODE_ID_ATTRIBUTE, properties: BOX_TREE_STYLES, topology: nodes, html, observerSource: observeBoxTree.toString(), unwrapped: initial?.unwrapped ?? [] });
 			if (!observations) {
 				if (!initial && size.width === original?.width && size.height === original?.height) return;
 				continue;

@@ -146,7 +146,7 @@ import { assignNodeIds, observeBoxTree, BOX_TREE_STYLES, NODE_ID_ATTRIBUTE } fro
 /** Failure reason for a route whose source app crashed into its client error shell. */
 const CLIENT_ERROR_SHELL_FAILURE = 'client error shell';
 
-export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnostic[], serverHtml?: string, onBoxTree?: (observation: import('./box-tree.js').BoxTreeObservation | undefined) => void, onPainted?: ( painted: string[] ) => void ): Promise< string > {
+export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnostic[], serverHtml?: string, onBoxTree?: (observation: import('./box-tree.js').BoxTreeObservation | undefined) => void, onPainted?: ( painted: string[] ) => void, options: { unwrapInertWrappers?: boolean } = {} ): Promise< string > {
 	const iframeEvidenceAttributes = {
 		src: 'data-blocks-engine-capture-visual-iframe-src',
 		width: 'data-blocks-engine-capture-visual-iframe-width',
@@ -322,7 +322,7 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 		// The installed source cleanup sweeps first, in this same task: the
 		// settle and media waits above give the source time to mount a widget
 		// after the last sweep, and no source script runs between these two.
-		const result = await page.evaluate( ( { boxTreeSource, boxTreeProperties, captureBoxes, stampSource, nodeIdAttribute, observeControlSource, controlAttribute, portMapsSource, mapHostSource, iframeEvidenceAttributes, scaffoldingSource, shadowSource, parseSrcsetSource, srcsetShapedSource, initialScrollClassAttribute } ) => {
+		const result = await page.evaluate( ( { boxTreeSource, boxTreeProperties, captureBoxes, stampSource, nodeIdAttribute, observeControlSource, controlAttribute, portMapsSource, mapHostSource, iframeEvidenceAttributes, scaffoldingSource, shadowSource, parseSrcsetSource, srcsetShapedSource, initialScrollClassAttribute, unwrapInertWrappers } ) => {
 			( window as unknown as { __dlaCleanup?: { sweep: () => void } } ).__dlaCleanup?.sweep();
 			const box = ( node: Element | null ) => {
 				const bounds = node?.getBoundingClientRect();
@@ -542,7 +542,7 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				const clean = new Function( 'return (' + scaffoldingSource + ')' )() as typeof cleanPortableScaffolding;
 				const portShadow = new Function( 'return (' + shadowSource + ')' )() as typeof portStaticShadowContent;
 				const flattenShadow = portShadow( document, snapshot );
-				const findings = clean( document, snapshot );
+				const { findings, unwrapped } = clean( document, snapshot, { unwrap: unwrapInertWrappers, nodeIdAttribute } );
 				portMaps( document, snapshot, iframeEvidenceAttributes, new Function( 'return (' + mapHostSource + ')' )() as typeof isGoogleMapHost );
 				flattenShadow();
 				for ( const node of snapshot.querySelectorAll( `[${ initialScrollClassAttribute }]` ) ) {
@@ -560,7 +560,9 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				// copy. This runs last: the walks above pair document and snapshot
 				// nodes by position.
 				for ( const hidden of snapshot.querySelectorAll( '[data-blocks-engine-capture-cleanup-hidden]' ) ) hidden.remove();
-				const boxNodes = captureBoxes ? (new Function('return (' + boxTreeSource + ')')() as typeof observeBoxTree)(snapshot, boxTreeProperties, nodeIdAttribute) : undefined;
+				const observedBoxes = captureBoxes ? (new Function('return (' + boxTreeSource + ')')() as typeof observeBoxTree)(snapshot, boxTreeProperties, nodeIdAttribute) : undefined;
+				// Unwrapped wrappers stay in the live page; later widths see through them.
+				const boxNodes = observedBoxes && 'nodes' in observedBoxes && unwrapped.length ? { ...observedBoxes, unwrapped } : observedBoxes;
 				return { html: `<!DOCTYPE html>${ snapshot.outerHTML }`, boxNodes, findings, omittedStyles: ( window as typeof window & { __dlaOmittedRuntimeStyles?: Array<{ bytes: number; rules: number }> } ).__dlaOmittedRuntimeStyles ?? [] };
 			} finally {
 				restoreParagraphDescendants();
@@ -583,7 +585,7 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				}
 				for ( const { element, parent, next } of detached.reverse() ) parent.insertBefore( element, next );
 			}
-		}, { boxTreeSource: observeBoxTree.toString(), boxTreeProperties: BOX_TREE_STYLES, captureBoxes: Boolean(onBoxTree), stampSource: assignNodeIds.toString(), nodeIdAttribute: NODE_ID_ATTRIBUTE, initialScrollClassAttribute: INITIAL_SCROLL_CLASS_ATTRIBUTE, observeControlSource: observeNativeControlState.toString(), controlAttribute: NATIVE_CONTROL_STATE_ATTRIBUTE, portMapsSource: portRenderedGoogleMaps.toString(), mapHostSource: isGoogleMapHost.toString(), iframeEvidenceAttributes, scaffoldingSource: cleanPortableScaffolding.toString(), shadowSource: portStaticShadowContent.toString(), parseSrcsetSource: parseSrcset.toString(), srcsetShapedSource: isSrcsetShaped.toString() } );
+		}, { boxTreeSource: observeBoxTree.toString(), boxTreeProperties: BOX_TREE_STYLES, captureBoxes: Boolean(onBoxTree), stampSource: assignNodeIds.toString(), nodeIdAttribute: NODE_ID_ATTRIBUTE, initialScrollClassAttribute: INITIAL_SCROLL_CLASS_ATTRIBUTE, observeControlSource: observeNativeControlState.toString(), controlAttribute: NATIVE_CONTROL_STATE_ATTRIBUTE, portMapsSource: portRenderedGoogleMaps.toString(), mapHostSource: isGoogleMapHost.toString(), iframeEvidenceAttributes, scaffoldingSource: cleanPortableScaffolding.toString(), shadowSource: portStaticShadowContent.toString(), parseSrcsetSource: parseSrcset.toString(), srcsetShapedSource: isSrcsetShaped.toString(), unwrapInertWrappers: options.unwrapInertWrappers !== false } );
 		if ( onPainted ) onPainted( await readPaintedTokens( page ) );
 		onBoxTree?.(result.boxNodes);
 		diagnostics?.push( ...result.findings );
