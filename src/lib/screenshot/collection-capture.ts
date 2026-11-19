@@ -16,6 +16,11 @@ export interface CollectionEvidence {
 
 /** Discover a repeated region and its nearest control-owning ancestor, without site vocabulary. */
 export async function collectionRegions(page: Page, skip?: string): Promise<Array<{ selector: string; owner: string }>> {
+	return (await collectionCandidates(page, skip)).map(({ selector, owner }) => ({ selector, owner }));
+}
+
+/** Discovery and probing share exactly the same control-ownership rules. */
+async function collectionCandidates(page: Page, skip?: string) {
 	return page.evaluate(excluded => {
 		const selector = (node: Element): string => {
 			if (node.id) return '#' + CSS.escape(node.id);
@@ -27,7 +32,33 @@ export async function collectionRegions(page: Page, skip?: string): Promise<Arra
 			}
 			return 'body > ' + parts.join(' > ');
 		};
-		const found: Array<{ selector: string; owner: string }> = [];
+		const controlsFor = (root: Element, owner: Element) => {
+			const boundary = 'main,section,article,aside,[role="main"],[role="region"],[role="complementary"]';
+			const branch = (node: Element): Element => {
+				while (node.parentElement && node.parentElement !== owner) node = node.parentElement;
+				return node;
+			};
+			const regionBranch = branch(root);
+			return Array.from(owner.querySelectorAll('button,input[type="search"],select')).filter(control => {
+				if (Array.from(root.children).some(member => member.contains(control)) || excluded && control.matches(excluded)) return false;
+				// Explicit ownership is stronger than layout proximity, including for forms.
+				const targets = (control.getAttribute('aria-controls') ?? '').split(/\s+/).filter(Boolean);
+				if (targets.length) return targets.some(id => document.getElementById(id) === root);
+				const controlBranch = branch(control);
+				// Never borrow controls from an independent section or a nested form.
+				for (let node: Element | null = control; node && node !== owner; node = node.parentElement) {
+					if (node.matches(boundary) && !node.contains(root)) return false;
+					if (node.matches('form') && !node.contains(root) && node !== controlBranch) return false;
+				}
+				if (controlBranch === regionBranch) return true;
+				const adjacent = regionBranch.previousElementSibling === controlBranch || regionBranch.nextElementSibling === controlBranch;
+				// A page-level/multi-section ancestor is not a collection owner by itself.
+				// Only a neighboring control/toolbar/header can establish local ownership.
+				const broad = owner.matches('main,[role="main"]') || Array.from(owner.children).some(child => child !== regionBranch && child.matches(boundary));
+				return !broad || adjacent && !controlBranch.querySelector(boundary);
+			}).map(node => ({ selector: selector(node), tag: node.tagName, label: node.getAttribute('aria-label') || node.textContent || '', options: node instanceof HTMLSelectElement ? Array.from(node.options).map(option => option.value) : [] }));
+		};
+		const found: Array<{ selector: string; owner: string; controls: ReturnType<typeof controlsFor> }> = [];
 		for (const root of document.querySelectorAll('main *,section,ul,[role="list"]')) {
 			if (root.closest('header,footer,nav') || excluded && root.matches(excluded)) continue;
 			// An unrendered region (hidden itself, inside a hidden ancestor such as a dismissed dialog, or zero-size) is not a collection.
@@ -39,8 +70,9 @@ export async function collectionRegions(page: Page, skip?: string): Promise<Arra
 			let owner: Element | null = root.parentElement;
 			for (let depth = 0; owner && owner !== document.body && depth < 3; depth++, owner = owner.parentElement) {
 				// A control the adapter excluded from probing is never driven, so it cannot make a region a collection.
-				if (!Array.from(owner.querySelectorAll('button,input[type="search"],select')).some(control => !children.some(member => member.contains(control)) && (!excluded || !control.matches(excluded)))) continue;
-				found.push({ selector: selector(root), owner: selector(owner) }); break;
+				const controls = controlsFor(root, owner);
+				if (!controls.length) continue;
+				found.push({ selector: selector(root), owner: selector(owner), controls }); break;
 			}
 		}
 		return found.slice(0, 4);
@@ -91,19 +123,7 @@ export async function captureCollections(page: Page, skip?: string, record?: (di
 				}
 				return members.map(member => member.key);
 			};
-			const controls = await probe.locator(region.owner).evaluate((root, { excluded, regionSelector }) => {
-				const members = Array.from(document.querySelector(regionSelector)!.children);
-				const selector = (node: Element): string => {
-					if (node.id) return '#' + CSS.escape(node.id);
-					const parts: string[] = [];
-					while (node !== document.body && node.parentElement) {
-						const siblings = Array.from(node.parentElement.children).filter(other => other.tagName === node.tagName);
-						parts.unshift(`${node.tagName.toLowerCase()}:nth-of-type(${siblings.indexOf(node) + 1})`); node = node.parentElement;
-					}
-					return 'body > ' + parts.join(' > ');
-				};
-				return Array.from(root.querySelectorAll('button,input[type="search"],select')).filter(node => !members.some(member => member.contains(node)) && (!excluded || !node.matches(excluded))).map(node => ({ selector: selector(node), tag: node.tagName, label: node.getAttribute('aria-label') || node.textContent || '', options: node instanceof HTMLSelectElement ? Array.from(node.options).map(option => option.value) : [] }));
-			}, { excluded: skip, regionSelector: region.selector });
+			const controls = (await collectionCandidates(probe, skip)).find(candidate => candidate.selector === region.selector)?.controls ?? [];
 			evidence.controls = controls.map(control => control.selector);
 			if (controls.length > limits.controls) evidence.coverage = 'partial';
 			const next = controls.find(control => /^(?:next(?: page)?|load more|show more|older|›|»|→)$/i.test(control.label.trim()));
