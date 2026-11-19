@@ -554,6 +554,53 @@ describe( 'responsive readiness contract', () => {
 		} finally { await page.close(); }
 	}, 30_000 );
 
+	// One local page (~4s): the feed appends a page of items whenever the viewport nears its bottom.
+	it( 'does not chase or resweep an infinite feed the sweep itself extends', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			await page.setContent( `<style>body{margin:0}.item{height:300px}footer{height:200px}</style>
+				<div id="box" style="width:720px;height:40px">Neutral text</div>
+				<ul id="feed">${ Array.from( { length: 10 }, ( _, index ) => `<li class="item">Entry ${ index }</li>` ).join( '' ) }</ul>
+				<footer>Neutral footer</footer>
+				<script>
+				window.sweeps = 0;
+				const scroll = window.scrollTo.bind(window);
+				window.scrollTo = options => { if (options.top === innerHeight) sweeps++; scroll(options); };
+				const box = document.querySelector('#box');
+				function resize() { box.style.width = innerWidth / 2 + 'px'; }
+				addEventListener('resize', resize); resize();
+				const feed = document.querySelector('#feed');
+				addEventListener('scroll', () => {
+					if (scrollY + innerHeight < document.documentElement.scrollHeight - 400) return;
+					for (let index = 0; index < 5; index++) {
+						const item = document.createElement('li');
+						item.className = 'item';
+						item.textContent = 'Entry ' + feed.children.length;
+						feed.append(item);
+					}
+				});
+				</script>` );
+			const baseline = await page.evaluate( () => document.querySelectorAll( '.item' ).length );
+			const observed: Array< { items: number; height: number } > = [];
+			const result = await learnAndApplyFluidGeometry( page, {
+				widths: [ 390, 768, 1024, 1440 ], settleMs: 200,
+				prepareViewport: async source => { observed.push( await source.evaluate( () => ( {
+					items: document.querySelectorAll( '.item' ).length, height: document.documentElement.scrollHeight,
+				} ) ) ); },
+			} );
+			const sweeps = await page.evaluate( () => ( window as unknown as { sweeps: number } ).sweeps );
+			console.info( JSON.stringify( { fixture: 'infinite-feed', baseline, observed, sweeps, result } ) );
+			expect( result.applied ).toBeGreaterThan( 0 );
+			expect( observed ).toHaveLength( 4 );
+			// The first sweep visits the captured document's bottom once, which can
+			// append one page; it never chases that page, and no later width adds one.
+			expect( observed[ 0 ]!.items ).toBeLessThanOrEqual( baseline + 5 );
+			for ( const entry of observed ) expect( entry ).toEqual( observed[ 0 ] );
+			expect( await page.evaluate( () => document.querySelectorAll( '.item' ).length ) ).toBe( observed[ 0 ]!.items );
+			expect( sweeps ).toBe( 1 );
+		} finally { await page.close(); }
+	}, 60_000 );
+
 	it( 'sweeps a later width that reveals a new pending image inside the swept extent', async ({ newPage }) => {
 		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
