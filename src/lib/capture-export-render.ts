@@ -327,6 +327,31 @@ function bindSrcsetShapedImageSrc( html: string ): string {
 	} );
 }
 
+const PORTABLE_IMAGE_TYPES: Record< string, string > = {
+	avif: 'image/avif', webp: 'image/webp', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', svg: 'image/svg+xml',
+};
+
+// A `<source type>` names the format of its srcset files. Platforms label a
+// source by its URL spelling while serving another format, and localization
+// keeps the files actually served. Once every candidate is a portable file,
+// declare the type those files are, or none when they differ.
+function truthfulSourceTypes( html: string ): string {
+	return html.replace( /<source\b[^>]*>/gi, ( tag ) => {
+		const type = /\stype\s*=\s*(?:(["'])[\s\S]*?\1|[^\s>]+)/i.exec( tag );
+		const srcset = /\ssrcset\s*=\s*(["'])([\s\S]*?)\1/i.exec( tag );
+		if ( ! type || ! srcset ) return tag;
+		const candidates = srcsetCandidates( srcset[ 2 ].replace( /&amp;/g, '&' ) );
+		const types = new Set< string >();
+		for ( const { url } of candidates ) {
+			const mime = /^\/(?!\/)/.test( url ) ? PORTABLE_IMAGE_TYPES[ /\.(\w+)(?:[?#]|$)/.exec( url )?.[ 1 ].toLowerCase() ?? '' ] : undefined;
+			if ( ! mime ) return tag;
+			types.add( mime );
+		}
+		if ( types.size === 0 ) return tag;
+		return tag.replace( type[ 0 ], types.size === 1 ? ` type="${ [ ...types ][ 0 ] }"` : '' );
+	} );
+}
+
 // A captured interaction state carries the HTML of a revealed panel. That HTML
 // is serialized from the live DOM, so an image can name the exact CDN rendition
 // the runtime chose for the viewport at the moment of capture. That rendition
@@ -641,7 +666,7 @@ export function renderRoutePages( { canonicalizeHtml, retainedEntries, websiteDi
 		unresolvedAnchors.push( ...uncapturedRouteAnchors( originalHtml, url, capturedRouteKeys, absentRouteKeys, omittedRouteKeys, resourceInputKeys, routeScope, boundaryRoutes ) );
 		// Rewrite route links once, after wiring dialogs below. A portable path
 		// can also name a source route that was allocated a different filename.
-		const identityHtml = localizeMetadataImageReferences( originalHtml, url, metadataPathsBySource, content => bindSrcsetShapedImageSrc(
+		const identityHtml = localizeMetadataImageReferences( originalHtml, url, metadataPathsBySource, content => truthfulSourceTypes( bindSrcsetShapedImageSrc(
 			localizeDataAttributeMedia(
 				replaceResources(
 					rewriteMediaUrls(
@@ -652,7 +677,7 @@ export function renderRoutePages( { canonicalizeHtml, retainedEntries, websiteDi
 				),
 				portableUrlByFamily
 			)
-		) );
+		) ) );
 		const normalizedHtml = routePhoneDocumentFragments(
 			rewriteCapturedRouteLinks(
 				wireCapturedRouteNavigation(
