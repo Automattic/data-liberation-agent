@@ -380,6 +380,24 @@ export function baselineSteps(
 		await recordLateConsent();
 		await waitForMountedMedia();
 		await stampNodeIds( page );
+		const sourceDeadFragments = await page.evaluate( () => {
+			const dead = new Set< string >();
+			const documentUrl = new URL( document.URL );
+			documentUrl.hash = '';
+			for ( const link of document.querySelectorAll< HTMLAnchorElement >( 'a[href]' ) ) {
+				try {
+					const target = new URL( link.href );
+					const fragment = decodeURIComponent( target.hash.slice( 1 ) );
+					target.hash = '';
+					if ( ! fragment || target.href !== documentUrl.href ) continue;
+					if ( ! document.getElementById( fragment ) && ! Array.from( document.querySelectorAll( 'a[name]' ) ).some( anchor => anchor.getAttribute( 'name' ) === fragment ) ) dead.add( fragment );
+				} catch {
+					// Invalid URLs/fragments cannot supply evidence.
+				}
+			}
+			return [ ...dead ];
+		} );
+		entry.sourceDeadFragments = { ...entry.sourceDeadFragments, [ viewport.id ]: sourceDeadFragments };
 		let laterNodes: BoxTree['nodes'] | undefined;
 		const learned = await capturePageHtml( page, args.diagnostics, undefined, observation => { laterNodes = observation && 'nodes' in observation ? observation.nodes : undefined; } );
 		if (state.boxTree && laterNodes) {

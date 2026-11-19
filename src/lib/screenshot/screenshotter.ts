@@ -1573,6 +1573,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				opts.withdrawSourceProfile?.( url, viewport.id );
 				return false;
 			}
+			const sourceDeadFragments = { ...entry.sourceDeadFragments, ...profileEntry.sourceDeadFragments };
 			const profileRecord = profileEntry.profiles?.[ viewport.id ];
 			const { profiles: _profiles, ...passEntry } = profileEntry;
 			if ( viewport.id === 'desktop' ) Object.assign( entry, passEntry );
@@ -1584,6 +1585,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				if ( profileEntry.fluidMobile ) entry.fluidMobile = profileEntry.fluidMobile;
 			}
 			if ( viewport.id !== 'desktop' && profileEntry.sourceOutcomes?.length ) entry.sourceOutcomes = [ ...previousOutcomes, ...profileEntry.sourceOutcomes ];
+			entry.sourceDeadFragments = sourceDeadFragments;
 			entry.documents = { ...previousDocuments, ...profileEntry.documents };
 			const blockLosses = [ ...previousBlockLosses, ...( profileEntry.blockLosses ?? [] ) ];
 			entry.blockLosses = blockLosses.length ? blockLosses : undefined;

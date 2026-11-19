@@ -13,7 +13,7 @@
 // question, and it lives in check.ts.
 //
 import { join } from 'node:path';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { readResolvedPage } from '../site-includes.js';
 import * as cheerio from 'cheerio';
 import { ASSET_LINK_REL, isRemoteAssetUrl } from '../self-contain.js';
@@ -77,6 +77,22 @@ function fragmentTargets(
 	return targets.filter( ( _index, target ) => $!( target ).parents().filter( ( _i, parent ) => targets.is( parent ) ).length === 0 ).length;
 }
 
+/** Missing or older evidence never exempts a fragment. */
+function readSourceDeadFragments( websiteDir: string ): Map< string, Set< string > > {
+	const result = new Map< string, Set< string > >();
+	try {
+		const profile = JSON.parse( readFileSync( join( websiteDir, '..', 'source-profile.json' ), 'utf8' ) );
+		if ( profile.schema !== 'blocks-engine-capture/source-profile/v1' || ! Array.isArray( profile.sourceDeadFragments ) ) return result;
+		for ( const row of profile.sourceDeadFragments ) {
+			if ( typeof row?.path !== 'string' || ! Array.isArray( row.fragments ) || ! row.fragments.every( ( fragment: unknown ) => typeof fragment === 'string' ) ) continue;
+			result.set( join( websiteDir, row.path ), new Set( row.fragments ) );
+		}
+	} catch {
+		// Unavailable or malformed source evidence leaves the strict check intact.
+	}
+	return result;
+}
+
 /**
  * Check every route in the copy for defects visible without the source.
  *
@@ -90,6 +106,7 @@ export function checkSelfConsistency(
 ): SelfConsistencyReport {
 	const findings: Finding[] = [];
 	const documents = new Map< string, cheerio.CheerioAPI | null >();
+	const sourceDeadFragments = readSourceDeadFragments( websiteDir );
 
 	for ( const [ route, relative ] of routeFiles ) {
 		let html: string;
@@ -137,6 +154,7 @@ export function checkSelfConsistency(
 				return;
 			}
 			if ( targets === 0 ) {
+				if ( target === join( websiteDir, relative ) && sourceDeadFragments.get( target )?.has( fragment ) ) return;
 				findings.push( { route, kind: 'anchor-missing', detail: href } );
 			} else if ( targets > 1 ) {
 				// Two targets and the browser silently picks the first, which is how

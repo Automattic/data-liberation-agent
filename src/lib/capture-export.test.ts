@@ -774,6 +774,17 @@ describe( 'exportWebsiteCapture', () => {
 		expect( $( 'p[class*="responsive-counterpart"]' ) ).toHaveLength( 0 );
 	} );
 
+	it( 'persists live source-dead fragments with their exported route file', () => {
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( 'https://example.com/', '<html><body><a href="#nav">Menu</a></body></html>', {
+			entry: { html: 'html/homepage.html', sourceDeadFragments: { desktop: [ 'nav' ], mobile: [ 'nav', 'phone' ] } },
+		} );
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
+		const profile = JSON.parse( readFileSync( join( outputDir, 'source-profile.json' ), 'utf8' ) );
+		expect( profile.sourceDeadFragments ).toEqual( [ { path: 'index.html', fragments: [ 'nav', 'phone' ] } ] );
+	} );
+
 	it( 'switches documents at the width the source stops adapting at, not a hardcoded one', () => {
 		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
 		const outputDir = capture.build();
