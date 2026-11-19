@@ -10,6 +10,8 @@ import { isRouteDrift } from './screenshot/document-integrity.js';
 import { SOURCE_DOCUMENT_MAX_BYTES } from './source-document-policy.js';
 import { SOURCE_REQUEST_GOVERNOR_DEFAULTS, SourceRequestGovernor, type SourceRequestGovernors } from './source-request-governor.js';
 import { spreadSample } from './route-budget.js';
+import { canonicalLinkHref, queryOnlyAliasCandidates, type CanonicalRouteAlias } from './route-aliases.js';
+import { documentRequestUrl } from './url/route-key.js';
 import { routeInScope } from './url/route-scope.js';
 
 /**
@@ -256,6 +258,7 @@ export function templateFingerprint( html: string, baseUrl: string, normalizatio
 
 /** Why a route has no fingerprint. */
 export type UnfingerprintedReason =
+	| 'canonical_alias' // server canonical names a surviving inventory route
 	| 'not_sampled' // over `maxRoutes`
 	| 'time_budget' // the pass ran out of time before or while fetching it, throttle waits included
 	| 'byte_budget' // the pass ran out of response bytes before fetching it
@@ -316,6 +319,8 @@ export interface TemplateGroupsReport {
 	selection?: TemplateGroupsSelection;
 	/** Bounded late pass, including unmatched fingerprints and fetch failures. */
 	frontier?: TemplateGroupsReport;
+	/** Canonical aliases excluded using this pass's server HTML. */
+	canonicalAliases?: CanonicalRouteAlias[];
 }
 
 export interface TemplateGroupingInput {
@@ -333,6 +338,8 @@ export interface TemplateGroupingInput {
 	 * of the capture. Default: a governor of this pass alone.
 	 */
 	governors?: SourceRequestGovernors;
+	/** Known routes against which frontier query aliases can be excluded. */
+	canonicalAliasInventory?: readonly string[];
 }
 
 /**
@@ -360,6 +367,10 @@ type RouteOutcome = { fingerprint: TemplateFingerprint } | { reason: Unfingerpri
 export async function buildTemplateGroups( input: TemplateGroupingInput, dependencies = { fetch: safeFetch } ): Promise< TemplateGroupsReport > {
 	const limits: TemplateGroupingLimits = { ...TEMPLATE_GROUPING_LIMITS, ...input.limits };
 	const urls = [ ...input.urls ];
+	const aliasInventory = [ ...input.canonicalAliasInventory ?? [], ...urls ];
+	const aliasCandidates = new Set( queryOnlyAliasCandidates( aliasInventory ) );
+	const aliasTargets = new Map( aliasInventory.map( url => [ documentRequestUrl( url ), url ] ) );
+	const aliases = new Map< string, CanonicalRouteAlias >();
 	const outcomes: RouteOutcome[] = urls.map( () => ( { reason: 'not_sampled' } ) );
 	const sampled = new Set( limits.maxRoutes === 'all' ? urls : spreadSample( urls, limits.maxRoutes ) );
 	const order = progressiveOrder( urls.length ).filter( index => sampled.has( urls[ index ]! ) );
@@ -412,13 +423,30 @@ export async function buildTemplateGroups( input: TemplateGroupingInput, depende
 			} catch {
 				decoder = new TextDecoder( 'utf-8' );
 			}
-			return { fingerprint: templateFingerprint( decoder.decode( response.body ), response.finalUrl, input.styleNormalization, input.templateIdentity, input.runtimeStateClasses ) };
+			const html = decoder.decode( response.body );
+			if ( input.canonicalAliasInventory && aliasCandidates.has( url ) && url !== input.sourceUrl ) {
+				const canonical = canonicalLinkHref( html, response.finalUrl );
+				const target = canonical && routeInScope( canonical, input.routeScope ) ? aliasTargets.get( documentRequestUrl( canonical ) ) : undefined;
+				if ( target && documentRequestUrl( target ) !== documentRequestUrl( url ) ) aliases.set( url, { url, canonicalUrl: target } );
+			}
+			return { fingerprint: templateFingerprint( html, response.finalUrl, input.styleNormalization, input.templateIdentity, input.runtimeStateClasses ) };
 		} catch {
 			return { reason: 'fetch_failed' };
 		}
 	}
 
-	return groupTemplates( input.sourceUrl, urls, outcomes, limits, throttleEvents );
+	// As in the initial alias probe, chains and cycles must not drop the
+	// document that would have carried another alias's evidence.
+	const dropped = new Set( [ ...aliases.keys() ].map( documentRequestUrl ) );
+	const surviving = urls.flatMap( ( url, index ) => {
+		const alias = aliases.get( url );
+		if ( ! alias || dropped.has( documentRequestUrl( alias.canonicalUrl ) ) ) return [];
+		outcomes[ index ] = { reason: 'canonical_alias' };
+		return [ alias ];
+	} );
+	const report = groupTemplates( input.sourceUrl, urls, outcomes, limits, throttleEvents );
+	if ( surviving.length ) report.canonicalAliases = surviving;
+	return report;
 }
 
 function groupTemplates( sourceUrl: string, urls: string[], outcomes: RouteOutcome[], limits: TemplateGroupingLimits, throttleEvents: number ): TemplateGroupsReport {
@@ -457,8 +485,11 @@ function groupTemplates( sourceUrl: string, urls: string[], outcomes: RouteOutco
  * The late pass retains its own coverage/limits evidence.
  * Capture contains any stage-level failure, as it does initial grouping.
  */
-export async function extendTemplateGroups( report: TemplateGroupsReport, input: TemplateGroupingInput, admitNewGroups = false ): Promise< void > {
-	const frontier = await buildTemplateGroups( input );
+export async function extendTemplateGroups( report: TemplateGroupsReport, input: TemplateGroupingInput, admitNewGroups = false, dependencies = { fetch: safeFetch } ): Promise< void > {
+	const frontier = await buildTemplateGroups( {
+		...input,
+		canonicalAliasInventory: input.canonicalAliasInventory ?? [ report.sourceUrl, ...report.groups.flatMap( group => group.members ), ...report.unfingerprinted.map( row => row.url ) ],
+	}, dependencies );
 	const byKey = new Map( report.groups.filter( group => admitNewGroups || group.size >= 2 ).map( group => [ group.key, group ] ) );
 	const grouped = new Set( report.groups.flatMap( group => group.members ) );
 	let joined = 0;

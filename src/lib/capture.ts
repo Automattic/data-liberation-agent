@@ -22,7 +22,7 @@ import { actionUrlExclusion, platformRuntimeExclusion, ROUTE_EXCLUDED_ACTION_URL
 import { galleryFrameMediaUrls } from './screenshot/gallery-capture.js';
 import type { ManifestEntry } from './screenshot/manifest-queue.js';
 import { budgetOmittedRoutes, hasUncapturedProfiles, missingRoutes, withExportDroppedRoutes, type MissingRoute } from './capture-usability.js';
-import { DEFAULT_CAPTURE_TIME_BUDGET_MS, ROUTE_OMITTED_BY_BUDGET, routeBudgetReason, rankTemplateClusterRoutes, selectRouteBudget, validateRouteLimit, validateRouteSelection, type RouteLimit } from './route-budget.js';
+import { DEFAULT_CAPTURE_TIME_BUDGET_MS, ROUTE_OMITTED_BY_BUDGET, routeBudgetReason, templateVerificationMember, rankTemplateClusterRoutes, selectRouteBudget, validateRouteLimit, validateRouteSelection, type RouteLimit } from './route-budget.js';
 import type { RouteDiagnostic } from './capture-export-routes.js';
 import { ROUTE_ALIAS_CANONICAL, probeCanonicalRouteAliases } from './route-aliases.js';
 import { writeSourceFindings } from './source-findings.js';
@@ -698,8 +698,15 @@ async function runCaptureWebsite(
 						styleNormalization: adapter.templateStyleNormalization, templateIdentity: adapter.templateIdentity, runtimeStateClasses: adapter.runtimeStateClasses,
 						limits: { ...frontierGroupingLimits, maxRoutes: urls.length, maxTotalBytes: Math.floor( frontierGroupingLimits.maxTotalBytes / 3 ), timeBudgetMs: Math.max( 1, frontierDeadline - Date.now() ) },
 					}, true );
+					const aliases = report.frontier?.canonicalAliases ?? [];
+					aliasProbe.aliases.push( ...aliases );
+					for ( const { url, canonicalUrl } of aliases ) discoveryDiagnostics.push( {
+						code: ROUTE_ALIAS_CANONICAL, url: documentRequestUrl( url ),
+						reason: `Route skipped before capture: its server-HTML rel=canonical resolves to ${ documentRequestUrl( canonicalUrl ) }, another inventory route`,
+					} );
 					// Rank pending work against the groups this frontier pass admitted.
 					clusterRankingGroups = templateClusterRankingGroups( report.groups, structuredMemberShape( contentSource, contentEntries ) );
+					return aliases;
 				} catch ( error ) {
 					process.stderr.write( `[template-groups] frontier grouping unavailable: ${ error instanceof Error ? error.message : String( error ) }\n` );
 				}
@@ -1376,16 +1383,13 @@ export async function deriveTemplateClusterMembers( input: {
 				// A captured member is the stronger verification: its real capture
 				// exists on disk, so the derived-vs-real comparison is actually
 				// scored. Preferred verification members are already in the budget.
-				const capturedMembers = group.members
-					.filter( url => url !== group.representative && isCaptured( url ) && ! derivedUrls.includes( url ) )
-					.sort( ( a, b ) => Number( feedEntries.has( normalizedUrl( b ) ) ) - Number( feedEntries.has( normalizedUrl( a ) ) ) || a.localeCompare( b ) );
-				const verificationUrl = capturedMembers[ 0 ] ?? members[ 0 ];
+				const verificationUrl = templateVerificationMember( group.members, group.representative, url => isCaptured( url ) && ! derivedUrls.includes( url ) );
 				const verificationCaptured = verificationUrl !== undefined &&
 					isCaptured( verificationUrl );
 				let verified = false;
 				let verificationRecord: import('./template-clusters.js').TemplateClusterRecord['verification'] =
 					{ url: verificationUrl ?? group.representative, captured: verificationCaptured };
-				if ( verificationUrl === undefined ) continue;
+
 				if ( verificationCaptured ) {
 					const realEntry = capturedEntry( verificationUrl )!;
 					const realHtml = readFileSync( resolve( input.outputDir, realEntry.html! ), 'utf8' );

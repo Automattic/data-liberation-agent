@@ -2115,7 +2115,10 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				}
 			}
 			if (frontier) {
-				if ( opts.groupLinkedRoutes && candidates.size && ! routeBudget?.closed() ) await opts.groupLinkedRoutes( [ ...candidates ] );
+				if ( opts.groupLinkedRoutes && candidates.size && ! routeBudget?.closed() ) {
+					const aliases = await opts.groupLinkedRoutes( [ ...candidates ] );
+					if ( aliases ) frontier.registerAliases( aliases );
+				}
 				const rankedCandidates = opts.groupLinkedRoutes && opts.prioritizePendingRoutes ? opts.prioritizePendingRoutes( [ ...candidates ] ) : candidates;
 				for (const url of rankedCandidates) enqueue(url, candidateDepths.get(url)!);
 				if ( opts.groupLinkedRoutes && opts.prioritizePendingRoutes ) {

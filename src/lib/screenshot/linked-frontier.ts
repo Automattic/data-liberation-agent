@@ -41,8 +41,8 @@ export class LinkedFrontier {
 
 	constructor(limits: LinkedPageLimits & {capturePageLimit?: number} = {}, now = Date.now(), private readonly routeScope?: SiteRouteScope,
 		/** Routes dropped before capture because their rel=canonical is another inventory route. */
-		private readonly aliases: ReadonlyMap<string, string> = new Map(),
-		private readonly aliasRecords: readonly CanonicalRouteAlias[] = [],
+		private aliases: ReadonlyMap<string, string> = new Map(),
+		private aliasRecords: readonly CanonicalRouteAlias[] = [],
 		private readonly runtime?: { sourceUrl: string; runtimePaths?: readonly string[] }) {
 		this.capturePageLimit = limits.capturePageLimit;
 		if (routeScope) validateRouteScope(routeScope);
@@ -55,6 +55,11 @@ export class LinkedFrontier {
 			if (!Number.isSafeInteger(value) || value < (name === 'maxDepth' ? 0 : 1)) throw new Error(`Invalid linked-page ${name}`);
 		}
 		this.deadline = now + this.limits.timeoutMs;
+	}
+
+	registerAliases( aliases: readonly CanonicalRouteAlias[] ): void {
+		this.aliases = new Map( [ ...this.aliases, ...aliases.map( ( { url, canonicalUrl } ) => [ scopedRouteKey( url, this.routeScope ), scopedRouteKey( canonicalUrl, this.routeScope ) ] as const ) ] );
+		this.aliasRecords = [ ...this.aliasRecords, ...aliases ];
 	}
 
 	admit(url: string, depth: number, now = Date.now(), ownership: 'linked' | 'inventory' | 'alias' = 'linked', redirectFrom?: string): boolean {
