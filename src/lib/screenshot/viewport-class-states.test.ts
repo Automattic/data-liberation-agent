@@ -57,6 +57,29 @@ it( 'serves script-toggled class state at the widths the source applied it', asy
 	}
 }, 60_000 );
 
+// One browser pass (~1s): only the CSS-named token needs a breakpoint search.
+it( 'skips breakpoint probes for tokens no stylesheet names', async () => {
+	const browser = await chromium.launch();
+	try {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await page.setContent( `<!doctype html><style>.named{color:red}</style>
+		<div>Viewport state</div><script>
+		const sync=()=>{
+			const element=document.querySelector('div');
+			element.classList.toggle('named',innerWidth>=700);
+			element.classList.toggle('unnamed',innerWidth>=1100);
+		};addEventListener('resize',sync);sync();
+		</script>` );
+		const result = await captureViewportClassStates( page, { widths: [ 390, 1440 ], settleMs: 0 } );
+		expect( result.aliased ).toBe( 1 );
+		expect( result.sampledWidths ).not.toContain( 1100 );
+		expect( result.sampledWidths ).not.toContain( 1099 );
+		expect( result.sampledWidths.filter( width => width > 1024 && width < 1440 ) ).toEqual( [] );
+	} finally {
+		await browser.close();
+	}
+}, 30_000 );
+
 // One browser pass (~3s): scroll proves the entrance before the width sweep.
 it( 'excludes entrance pose tokens per element but keeps genuine width tokens', async () => {
 	const browser = await chromium.launch();
