@@ -15,6 +15,14 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.37.0] - 2026-11-19
+
+### Added
+- mark cross-origin in-flow runtime-owned form regions with inert provenance
+
+### Changed
+- regenerate plugin bundles
+
 ## [0.36.19] - 2026-11-19
 
 ### Changed
