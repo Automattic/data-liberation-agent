@@ -215,6 +215,18 @@ function pruneWidthArms( root: postcss.Root, enclosing: readonly string[] = [] )
 	} );
 }
 
+/** Class tokens eligible for projection; keyframe steps are not selectors. */
+function ruleClassNames( rule: postcss.Rule ): Set<string> {
+	const names = new Set<string>();
+	if ( rule.parent?.type === 'atrule' && /keyframes$/i.test( rule.parent.name ) ) return names;
+	try {
+		selectorParser( selectors => selectors.walkClasses( node => { names.add( node.value ); } ) ).processSync( rule.selector );
+	} catch {
+		return new Set();
+	}
+	return names;
+}
+
 /** Project each affected rule into both states, retaining specificity and context. */
 export function aliasRules( sheets: readonly string[], aliases: readonly WidthClassAlias[], canMatch: ( selector: string, contract: WidthClassAlias ) => boolean = () => true ): string[] {
 	const copies: string[] = [];
@@ -228,16 +240,8 @@ export function aliasRules( sheets: readonly string[], aliases: readonly WidthCl
 			continue;
 		}
 		root.walkRules( rule => {
-			if ( rule.parent?.type === 'atrule' && /keyframes$/i.test( ( rule.parent as postcss.AtRule ).name ) ) return;
-			const relevant = contracts.filter( contract => {
-				let named = false;
-				try {
-					selectorParser( selectors => selectors.walkClasses( node => {
-						if ( node.value === contract.token ) named = true;
-					} ) ).processSync( rule.selector );
-				} catch { return false; }
-				return named && canMatch( rule.selector, contract );
-			} );
+			const names = ruleClassNames( rule );
+			const relevant = contracts.filter( contract => names.has( contract.token ) && canMatch( rule.selector, contract ) );
 			if ( relevant.length === 0 ) return;
 			const groups = new Map<string, WidthClassAlias[]>();
 			for ( const contract of relevant ) {
@@ -528,6 +532,21 @@ export async function captureViewportClassStates( page: Page, options: { widths?
 		}
 		if ( toggles.size === 0 ) return { ...none, sampledWidths };
 
+		const css = await stylesheetTexts( page );
+		if ( css === null ) return { ...none, sampledWidths };
+		const named = new Set<string>();
+		for ( const sheet of css ) {
+			let root: postcss.Root;
+			try { root = postcss.parse( sheet ); } catch { continue; }
+			root.walkRules( rule => { for ( const token of ruleClassNames( rule ) ) named.add( token ); } );
+		}
+		for ( const [ key, toggle ] of toggles ) {
+			if ( named.has( toggle.token ) ) continue;
+			toggles.delete( key );
+			presence.delete( key );
+		}
+		if ( toggles.size === 0 ) return { ...none, sampledWidths };
+
 		// Locate each flip between adjacent ladder widths: the first width
 		// that shows the wider side's state.
 		for ( const [ key, toggle ] of toggles ) if ( ! presence.has( key ) ) presence.set( key, ladder.map( width => ( { width, present: present( memo.get( width )!, toggle ) } ) ) );
@@ -599,8 +618,6 @@ export async function captureViewportClassStates( page: Page, options: { widths?
 		}
 		if ( aliases.length === 0 ) return { ...none, sampledWidths };
 
-		const css = await stylesheetTexts( page );
-		if ( css === null ) return { ...none, sampledWidths };
 		const copies = aliasRules( css, aliases );
 		await page.evaluate( ( { key, aliases, marker, contractsAttribute } ) => {
 			const state = ( window as unknown as Record< symbol, { elements: Element[] } > )[ Symbol.for( key ) ]!;
