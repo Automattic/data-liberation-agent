@@ -137,7 +137,8 @@ export async function attributedPixelRegionFailures( page: Page, sourcePng: Buff
 			}
 			if ( ! common || common === document.body || common === document.documentElement ) return 'page';
 			for ( let ancestor: Element | null = common; ancestor && ancestor !== document.body; ancestor = ancestor.parentElement ) {
-				const block = [ ...ancestor.classList ].find( token => /^wp-block-[a-z0-9]+(?:-[a-z0-9]+)*$/.test( token ) );
+				// Layout state classes (`wp-block-group-is-layout-flex`) name a variant, not the block.
+				const block = [ ...ancestor.classList ].find( token => /^wp-block-[a-z0-9]+(?:-[a-z0-9]+)*$/.test( token ) && ! token.includes( '-is-layout-' ) );
 				if ( block ) return `core/${ block.slice( 'wp-block-'.length ) }`;
 			}
 			return common.tagName.toLowerCase();

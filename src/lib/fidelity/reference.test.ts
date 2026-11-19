@@ -25,7 +25,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			const page = await context.newPage();
 			await page.setContent( `<style>body{margin:0;min-height:768px}section{position:absolute;left:48px;width:96px;height:48px}i{display:block;float:left;width:48px;height:48px}</style>
 				<section class="wp-block-cover" style="top:48px"><i style="width:96px"></i></section>
-				<section class="wp-block-group" style="top:144px"><i class="wp-block-image"></i><i class="wp-block-cover"></i></section>
+				<section class="wp-block-group-is-layout-flex wp-block-group" style="top:144px"><i class="wp-block-image"></i><i class="wp-block-cover"></i></section>
 				<section style="top:240px"><svg width="96" height="48"></svg></section>` );
 			const source = await page.screenshot( { fullPage: true } );
 			await page.addStyleTag( { content: 'i,svg{background:black}body{background:linear-gradient(black,black) 240px 336px/48px 48px no-repeat}' } );
