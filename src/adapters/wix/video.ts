@@ -25,6 +25,7 @@
 
 import type { Page } from 'playwright';
 import { MAX_PORTABLE_MEDIA_BYTES } from '../../lib/portable-media-limits.js';
+import { closingConnection } from '../../lib/browser-kit/api-request-connection.js';
 
 const VIDEO_MARKER = 'data-blocks-engine-capture-wix-video';
 const HEAD_TIMEOUT_MS = 10_000;
@@ -153,7 +154,7 @@ export function selectWixVideoRendition(
 
 async function renditionBytes( page: Page, url: string ): Promise< number | undefined > {
 	try {
-		const response = await page.request.head( url, { timeout: HEAD_TIMEOUT_MS, maxRetries: 0 } );
+		const response = await page.request.head( url, { headers: closingConnection(), timeout: HEAD_TIMEOUT_MS, maxRetries: 0 } );
 		if ( ! response.ok() ) return undefined;
 		const length = Number( response.headers()[ 'content-length' ] );
 		return Number.isFinite( length ) && length > 0 ? length : undefined;

@@ -1,6 +1,7 @@
 import type { APIResponse, BrowserContext, Page, Request, Route } from 'playwright';
 import { isSourceTransportThrottle } from '../source-request-governor.js';
 import type { SourceRequestAttribution, SourceReplayOutcome, SourceRequestCategory, SourceRequestGovernors } from '../source-request-governor.js';
+import { closingConnection } from './api-request-connection.js';
 
 const traffic = new WeakMap<BrowserContext, { governors: SourceRequestGovernors; origin: string; category?: SourceRequestCategory; phase?: string; device?: string; inFlight: Set<Request> }>();
 
@@ -190,7 +191,7 @@ export async function sourceDocumentHtml(context: BrowserContext, url: string, h
 
 /** Document-only re-sampling uses the same context identity and origin admission. */
 export async function getSourceResponse(context: BrowserContext, url: string, options: NonNullable<Parameters<BrowserContext['request']['get']>[1]> = {}): Promise<APIResponse> {
-  const response = await governedResponse(context, url, timeout => context.request.get(url, { ...options, timeout }), 4, url, 'device-check', options.timeout);
+  const response = await governedResponse(context, url, timeout => context.request.get(url, { ...options, headers: closingConnection(options.headers), timeout }), 4, url, 'device-check', options.timeout);
   if (options.headers && response.ok()) await rememberSourceDocument(context, url, options.headers, {
     url, status: response.status(), headers: response.headers(), body: await response.body(),
   });
@@ -223,6 +224,7 @@ async function governedResponse(context: BrowserContext, url: string, task: (tim
 export async function fetchSourceRoute(route: Route, options: NonNullable<Parameters<Route['fetch']>[0]> = {}, maxAttempts = 4, context = route.request().frame().page().context()): Promise<APIResponse> {
   const state = traffic.get(context);
   const url = options.url ?? route.request().url();
-  if (!state || new URL(url).origin !== state.origin) return route.fetch(options);
-  return governedResponse(context, url, timeout => route.fetch({ ...options, timeout, maxRetries: 0, maxRedirects: 0 }), maxAttempts, owningDocumentUrl(route.request()), route.request().resourceType() === 'document' ? state.category ?? 'document' : 'subresource', options.timeout, route.request());
+  const fetchOptions = { ...options, headers: closingConnection(options.headers ?? route.request().headers()) };
+  if (!state || new URL(url).origin !== state.origin) return route.fetch(fetchOptions);
+  return governedResponse(context, url, timeout => route.fetch({ ...fetchOptions, timeout, maxRetries: 0, maxRedirects: 0 }), maxAttempts, owningDocumentUrl(route.request()), route.request().resourceType() === 'document' ? state.category ?? 'document' : 'subresource', options.timeout, route.request());
 }
