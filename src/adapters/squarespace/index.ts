@@ -14,5 +14,7 @@ export const squarespaceAdapter: PlatformAdapter = {
   sourceTelemetry: ['/api/census/'],
   id: 'squarespace', detection, discover, templateStyleNormalization, structuredContent: squarespaceStructuredContent,
   acquisition: squarespaceAcquisition,
+  // Scroll-animation states depend on which elements entered the viewport.
+  runtimeStateClasses: [/^pre(Scale|Fade|Slide|Clip|Flex)$/, /^(scale|fade|slide|clip|flex)In$/],
   liberation: { ...capture, cleanupRules: providerCreditRules('squarespace', ['squarespace.com'], 'Squarespace') },
 };

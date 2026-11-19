@@ -5,6 +5,18 @@ import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
+it('ignores only adapter-declared runtime state classes in the comparison skeleton', () => {
+	const page = (state: string) => `<body><header class="site-title ${state}">Title</header><main><div class="content ${state}">Same member</div></main></body>`;
+	const input = { baseUrl: 'https://fixture.example/post', derivedHtml: page('beforeReveal'), realHtml: page('revealed') };
+	const runtimeStateClasses = [/^(beforeReveal|revealed)$/g];
+	// Without the declaration, these are real template differences.
+	expect(compareDerivedWithCapture(input).checks.skeleton).toBe(false);
+	for (let pass = 0; pass < 2; pass++) {
+		expect(compareDerivedWithCapture({ ...input, runtimeStateClasses }).equal).toBe(true);
+	}
+	expect(compareDerivedWithCapture({ ...input, runtimeStateClasses, realHtml: page('revealed alternate-layout') }).checks.skeleton).toBe(false);
+});
+
 it('ignores an inline style a runtime probe injected into one capture only', () => {
 	const page = (...styles: string[]) => `<html><head>${styles.map(text => `<style>${text}</style>`).join('')}</head><body><p>Same member</p></body></html>`;
 	const context = { baseUrl: 'https://fixture.example/post', repServerHtml: page('body { color: black }'), memberServerHtml: page('body { color: black }') };

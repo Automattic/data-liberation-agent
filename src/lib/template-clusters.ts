@@ -739,6 +739,8 @@ export function compareDerivedWithCapture( input: {
 	/** Both server documents are required to distinguish runtime-only stylesheet links. */
 	repServerHtml?: string;
 	memberServerHtml?: string;
+	/** Runtime-only class token patterns, shared with template grouping. */
+	runtimeStateClasses?: readonly RegExp[];
 	/** The adapter's style canonicalization, e.g. for server-shuffled @font-face rules. */
 	styleNormalization?: TemplateStyleNormalization;
 	baseUrl: string;
@@ -808,7 +810,7 @@ export function compareDerivedWithCapture( input: {
 	const skeleton = ( $: cheerio.CheerioAPI ): string => {
 		// Same collapsed skeleton the grouping uses: compare across members of
 		// the same cluster, so a different fingerprint version is fine here.
-		const { skeleton: hash } = templateFingerprint( $.html(), input.baseUrl );
+		const { skeleton: hash } = templateFingerprint( $.html(), input.baseUrl, undefined, undefined, input.runtimeStateClasses );
 		return hash;
 	};
 	const checks = {

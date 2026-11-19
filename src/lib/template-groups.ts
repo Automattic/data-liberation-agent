@@ -152,8 +152,13 @@ export interface TemplateFingerprint {
 	divergence: TemplateDivergence;
 }
 
-function stableClassTokens( element: Element ): string[] {
-	return [ ...new Set( ( element.attribs.class ?? '' ).split( /\s+/ ).filter( token => token && ! VOLATILE_CLASS.test( token ) ) ) ].sort();
+function stableClassTokens( element: Element, runtimeStateClasses: readonly RegExp[] = [] ): string[] {
+	const volatileClasses = [ VOLATILE_CLASS, ...runtimeStateClasses ];
+	return [ ...new Set( ( element.attribs.class ?? '' ).split( /\s+/ ).filter( token => token && ! volatileClasses.some( pattern => {
+		// Global/sticky adapter patterns must be deterministic across tokens and calls.
+		pattern.lastIndex = 0;
+		return pattern.test( token );
+	} ) ) ) ].sort();
 }
 
 const isElement = ( node: AnyNode ): node is Element => node.type === 'tag' || node.type === 'script' || node.type === 'style';
@@ -164,8 +169,8 @@ const isContentContainer = ( element: Element ): boolean => element.name === 'ar
 const PROSE_SKELETON = digest( '~prose' );
 
 /** `tag.stable.classes[role=…]`: an element's template identity, shared by grouping and member slot derivation. */
-export const elementDescriptor = ( element: Element ): string =>
-	`${ element.name }${ stableClassTokens( element ).map( token => `.${ token }` ).join( '' ) }${ element.attribs.role ? `[role=${ element.attribs.role }]` : '' }`;
+export const elementDescriptor = ( element: Element, runtimeStateClasses?: readonly RegExp[] ): string =>
+	`${ element.name }${ stableClassTokens( element, runtimeStateClasses ).map( token => `.${ token }` ).join( '' ) }${ element.attribs.role ? `[role=${ element.attribs.role }]` : '' }`;
 
 /**
  * Collapsed skeleton hash of one element: tag, stable classes and `role`, then
@@ -174,14 +179,14 @@ export const elementDescriptor = ( element: Element ): string =>
  * collapse to one, so 4 vs 9 paragraphs or 1 vs 3 figures hash alike;
  * classless prose blocks and the inside of content containers are content.
  */
-function skeletonHash( element: Element, depth: number ): string {
-	const classes = stableClassTokens( element );
+function skeletonHash( element: Element, depth: number, runtimeStateClasses?: readonly RegExp[] ): string {
+	const classes = stableClassTokens( element, runtimeStateClasses );
 	if ( PROSE_ELEMENTS.has( element.name ) && ! classes.length && ! element.attribs.role ) return PROSE_SKELETON;
-	const self = elementDescriptor( element );
+	const self = elementDescriptor( element, runtimeStateClasses );
 	if ( depth >= MAX_SKELETON_DEPTH || isContentContainer( element ) ) return digest( self );
 	const children = new Set< string >();
 	for ( const child of element.children ) {
-		if ( isElement( child ) && ! SKIPPED_ELEMENTS.has( child.name ) && ! INLINE_ELEMENTS.has( child.name ) ) children.add( skeletonHash( child, depth + 1 ) );
+		if ( isElement( child ) && ! SKIPPED_ELEMENTS.has( child.name ) && ! INLINE_ELEMENTS.has( child.name ) ) children.add( skeletonHash( child, depth + 1, runtimeStateClasses ) );
 	}
 	return digest( children.size ? `${ self }(${ [ ...children ].sort().join( ',' ) })` : self );
 }
@@ -223,13 +228,13 @@ function pageStyleText( styles: readonly TemplateStyleBlock[], normalization?: T
 }
 
 /** Fingerprint one server HTML document. Pure and deterministic. */
-export function templateFingerprint( html: string, baseUrl: string, normalization?: TemplateStyleNormalization, identity?: TemplateIdentity ): TemplateFingerprint {
+export function templateFingerprint( html: string, baseUrl: string, normalization?: TemplateStyleNormalization, identity?: TemplateIdentity, runtimeStateClasses?: readonly RegExp[] ): TemplateFingerprint {
 	const $ = cheerio.load( html );
 	const body = $( 'body' ).get( 0 );
 	const declaredIdentity = identity?.( html, baseUrl );
-	const skeleton = declaredIdentity ? digest( `adapter:${ declaredIdentity }` ) : body ? skeletonHash( body, 0 ) : digest( '' );
+	const skeleton = declaredIdentity ? digest( `adapter:${ declaredIdentity }` ) : body ? skeletonHash( body, 0, runtimeStateClasses ) : digest( '' );
 	const styleText = pageStyleText( styleBlocks( $ ), normalization );
-	const describe = ( selector: string, kind?: string ) => $( selector ).toArray().filter( isElement ).map( element => `${ kind ? `${ kind }:` : '' }${ elementDescriptor( element ) }` );
+	const describe = ( selector: string, kind?: string ) => $( selector ).toArray().filter( isElement ).map( element => `${ kind ? `${ kind }:` : '' }${ elementDescriptor( element, runtimeStateClasses ) }` );
 	const controls = [
 		...describe( '[role=tab],[role=tablist],[role=tabpanel]', 'tab' ),
 		...describe( '[aria-controls],[aria-expanded]', 'disclosure' ),
@@ -322,6 +327,7 @@ export interface TemplateGroupingInput {
 	/** Platform-owned `<style>` aggregation for the divergence fingerprint. */
 	styleNormalization?: TemplateStyleNormalization;
 	templateIdentity?: TemplateIdentity;
+	runtimeStateClasses?: readonly RegExp[];
 	/**
 	 * The capture's per-origin source request governors, shared with the rest
 	 * of the capture. Default: a governor of this pass alone.
@@ -406,7 +412,7 @@ export async function buildTemplateGroups( input: TemplateGroupingInput, depende
 			} catch {
 				decoder = new TextDecoder( 'utf-8' );
 			}
-			return { fingerprint: templateFingerprint( decoder.decode( response.body ), response.finalUrl, input.styleNormalization, input.templateIdentity ) };
+			return { fingerprint: templateFingerprint( decoder.decode( response.body ), response.finalUrl, input.styleNormalization, input.templateIdentity, input.runtimeStateClasses ) };
 		} catch {
 			return { reason: 'fetch_failed' };
 		}
