@@ -14,7 +14,7 @@ const observation = ( viewport: number ) => ( {
 	target: { x: 0, y: 0, width: 100, height: 24 },
 	simulated: { x: 0, y: 0, width: 100, height: 24 },
 	facts: { display: 'block', position: 'static', visibility: 'visible', childCount: 1 },
-	invariants: { runtime: true, semantics: true },
+	invariants: { selectors: true, runtime: true, semantics: true },
 } );
 
 function deepInput( sourcePath: string, candidates: number ) {
@@ -130,6 +130,18 @@ describe( 'buildLayoutGeometryProof', () => {
 		] );
 		expect( stale.proof ).toBeUndefined();
 		expect( stale.report.omissions ).toMatchObject( { geometry_or_invariant_unproven: 1 } );
+
+		// Sidecars measured before real wrapper removal never proved selectors.
+		const unprovenSelectors = buildLayoutGeometryProof( [
+			{
+				sourcePath: 'website/index.html',
+				html,
+				identityHtml,
+				observations: [ { ...observation( 1440 ), invariants: { runtime: true, semantics: true } } ],
+			},
+		] );
+		expect( unprovenSelectors.proof ).toBeUndefined();
+		expect( unprovenSelectors.report.omissions ).toMatchObject( { geometry_or_invariant_unproven: 1 } );
 
 		const bounded = buildLayoutGeometryProof( [
 			{

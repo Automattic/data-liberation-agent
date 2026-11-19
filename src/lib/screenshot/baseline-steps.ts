@@ -226,6 +226,21 @@ async function captureLayoutGeometry( page: Page, viewport: Viewport ): Promise<
 					( key ) =>
 						Math.abs( left[key as keyof typeof left] - right[key as keyof typeof right] ) <= 1
 				);
+			const DESCENDANT_LIMIT = 200;
+			type AtomicMove = ( node: Node, child: Node | null ) => void;
+			const atomicMove = typeof ( Element.prototype as unknown as { moveBefore?: AtomicMove } ).moveBefore === 'function';
+			const move = ( into: Node, node: Node, before: Node | null ) => {
+				const moveBefore = ( into as unknown as { moveBefore?: AtomicMove } ).moveBefore;
+				if ( typeof moveBefore === 'function' ) {
+					try {
+						moveBefore.call( into, node, before );
+						return;
+					} catch {
+						// Fall back to a plain insertion when an atomic move is refused.
+					}
+				}
+				into.insertBefore( node, before );
+			};
 			const runtimeSources = Array.from( document.scripts, ( script ) => script.textContent ?? '' );
 			const observations: GeometryCapture['observations'] = [];
 			for ( const wrapper of Array.from(
@@ -270,15 +285,44 @@ async function captureLayoutGeometry( page: Page, viewport: Viewport ): Promise<
 					omit( 'display_unproven' );
 					continue;
 				}
+				const parent = wrapper.parentNode;
+				const descendants = Array.from( target.querySelectorAll( '*' ) );
+				if ( !parent ) {
+					omit( 'runtime_or_semantics_unproven' );
+					continue;
+				}
+				if ( descendants.length > DESCENDANT_LIMIT ) {
+					omit( 'descendant_limit' );
+					continue;
+				}
+				// Without an atomic move, moving these would reload or pause them.
+				if ( !atomicMove && [target, ...descendants].some( ( node ) => /^(?:iframe|frame|object|embed|video|audio)$/i.test( node.tagName ) ) ) {
+					omit( 'runtime_or_semantics_unproven' );
+					continue;
+				}
 				const sourceWrapper = box( wrapper );
 				const sourceTarget = box( target );
-				const wrapperHtml = wrapper as HTMLElement;
-				const priorDisplay = wrapperHtml.style.display;
-				wrapperHtml.style.display = 'contents';
-				const simulated = box( target );
-				wrapperHtml.style.display = priorDisplay;
+				const sourceDescendants = descendants.map( box );
+				// Perform the real removal, so author selectors through the wrapper
+				// stop matching exactly as they would in the reduced document.
+				const targetNext = target.nextSibling;
+				let simulated: ReturnType<typeof box>;
+				let descendantsHeld: boolean;
+				move( parent, target, wrapper );
+				parent.removeChild( wrapper );
+				try {
+					simulated = box( target );
+					descendantsHeld = descendants.every( ( node, index ) => equal( sourceDescendants[index], box( node ) ) );
+				} finally {
+					parent.insertBefore( wrapper, target );
+					move( wrapper, target, targetNext );
+				}
 				if ( !equal( sourceWrapper, sourceTarget ) || !equal( sourceTarget, simulated ) ) {
 					omit( 'geometry_unproven' );
+					continue;
+				}
+				if ( !descendantsHeld ) {
+					omit( 'descendant_geometry_unproven' );
 					continue;
 				}
 				// Desktop and mobile DOMs can be composed into one portable document.
@@ -301,7 +345,7 @@ async function captureLayoutGeometry( page: Page, viewport: Viewport ): Promise<
 						visibility: targetStyle.visibility,
 						childCount: wrapper.children.length,
 					},
-					invariants: { runtime: true, semantics: true },
+					invariants: { selectors: true, runtime: true, semantics: true },
 				} );
 			}
 			await new Promise<void>( ( resolve ) =>
