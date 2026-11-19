@@ -139,7 +139,7 @@ describe( 'exportWebsiteCapture', () => {
 		const entries = Object.fromEntries( [ 'home', 'about' ].map( ( slug, i ) => {
 			const html = `html/${ slug }.html`;
 			capture.file( html, `<html><body><div>${ header }<main><div data-blocks-engine-capture-geometry-id="wrapper"><section data-blocks-engine-capture-geometry-id="target"><h1>Route ${ i }</h1><a href="#copyright">Copyright</a></section></div></main>${ footer }</div></body></html>` );
-			capture.json( join( 'layout-geometry', `${ slug }.desktop.json` ), {  schema: 'blocks-engine-capture/layout-geometry-capture/v1', omissions: {}, observations: [ {  wrapperIdentity: 'wrapper', targetIdentity: 'target', viewport: 1440, state: 'default',  wrapper: { x: 0, y: 0, width: 100, height: 24 }, target: { x: 0, y: 0, width: 100, height: 24 }, simulated: { x: 0, y: 0, width: 100, height: 24 },  facts: { display: 'block', position: 'static', visibility: 'visible', childCount: 1 }, invariants: { runtime: true, semantics: true },  } ],  } );
+			capture.json( join( 'layout-geometry', `${ slug }.desktop.json` ), {  schema: 'blocks-engine-capture/layout-geometry-capture/v1', omissions: {}, observations: [ {  wrapperIdentity: 'wrapper', targetIdentity: 'target', viewport: 1440, state: 'default',  wrapper: { x: 0, y: 0, width: 100, height: 24 }, target: { x: 0, y: 0, width: 100, height: 24 }, simulated: { x: 0, y: 0, width: 100, height: 24 },  facts: { display: 'block', position: 'static', visibility: 'visible', childCount: 1 }, invariants: { selectors: true, runtime: true, semantics: true },  } ],  } );
 			return [ i ? 'https://example.test/about' : 'https://example.test/', { html, slug } ];
 		} ) );
 		capture.manifest( { version: 1, entries } );
@@ -496,7 +496,7 @@ describe( 'exportWebsiteCapture', () => {
 			target: { x: 0, y: 0, width: 100, height: 24 },
 			simulated: { x: 0, y: 0, width: 100, height: 24 },
 			facts: { display: 'block', position: 'static', visibility: 'visible', childCount: 1 },
-			invariants: { runtime: true, semantics: true },
+			invariants: { selectors: true, runtime: true, semantics: true },
 		} );
 		for ( const [ viewport, width ] of [
 			[ 'desktop', 1440 ],
@@ -858,7 +858,7 @@ describe( 'exportWebsiteCapture', () => {
 			target: { x: 0, y: 0, width: 100, height: 24 },
 			simulated: { x: 0, y: 0, width: 100, height: 24 },
 			facts: { display: 'block', position: 'static', visibility: 'visible', childCount: 1 },
-			invariants: { runtime: true, semantics: true },
+			invariants: { selectors: true, runtime: true, semantics: true },
 		} );
 		capture.json( join( 'layout-geometry', 'homepage.desktop.json' ), {  schema: 'blocks-engine-capture/layout-geometry-capture/v1',  observations: [ observation( 1440, 'desktop' ) ],  omissions: {},  } );
 		capture.json( join( 'layout-geometry', 'homepage.mobile.json' ), {  schema: 'blocks-engine-capture/layout-geometry-capture/v1',  observations: [ observation( 390, 'mobile' ) ],  omissions: {},  } );

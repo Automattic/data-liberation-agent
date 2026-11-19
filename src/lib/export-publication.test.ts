@@ -140,7 +140,7 @@ describe( 'export publication', () => {
 				target: { x: 0, y: 0, width: 100, height: 24 },
 				simulated: { x: 0, y: 0, width: 100, height: 24 },
 				facts: { display: 'block', position: 'static', visibility: 'visible', childCount: 1 },
-				invariants: { runtime: true, semantics: true },
+				invariants: { selectors: true, runtime: true, semantics: true },
 			} ],
 			omissions: {},
 		};
@@ -401,7 +401,7 @@ describe( 'export publication', () => {
 				target: { x: 0, y: 0, width: 100, height: 24 },
 				simulated: { x: 0, y: 0, width: 100, height: 24 },
 				facts: { display: 'block', position: 'static', visibility: 'visible', childCount: 1 },
-				invariants: { runtime: true, semantics: true },
+				invariants: { selectors: true, runtime: true, semantics: true },
 			} ],
 			omissions: {},
 		};

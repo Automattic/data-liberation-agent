@@ -25,7 +25,12 @@ export interface GeometryObservation {
 	target: GeometryBox;
 	simulated: GeometryBox;
 	facts: { display: string; position: string; visibility: string; childCount: number };
-	invariants: { runtime: boolean; semantics: boolean };
+	/**
+	 * `selectors`: the wrapper was really removed in the live page and the
+	 * target and every descendant box held, so no author selector through
+	 * the wrapper changes layout. Absent in sidecars that predate the check.
+	 */
+	invariants: { selectors?: boolean; runtime: boolean; semantics: boolean };
 }
 
 export interface GeometryCapture {
@@ -206,6 +211,7 @@ export function buildLayoutGeometryProof(
 			if (
 				ordered.some(
 					( observation ) =>
+						observation.invariants.selectors !== true ||
 						! observation.invariants.runtime ||
 						! observation.invariants.semantics ||
 						! sameBox( observation.wrapper, observation.target ) ||
@@ -342,7 +348,12 @@ export function buildLayoutGeometryProof(
 			wrapper,
 			target,
 			kind: candidate.kind,
-			invariants: { selectors: true, runtime: true, semantics: true, viewports: true },
+			invariants: {
+				selectors: candidate.ordered.every( ( observation ) => observation.invariants.selectors === true ),
+				runtime: true,
+				semantics: true,
+				viewports: true,
+			},
 			corrective_css: {
 				declarations: [ { property: 'display', value: candidate.ordered[ 0 ].facts.display } ],
 			},
