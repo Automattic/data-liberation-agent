@@ -11,22 +11,29 @@
  * `observeMotionHold` is installed with `addInitScript` before source scripts.
  * While held, callbacks of timeouts, intervals and animation frames the page
  * registered before the hold do not run: timeouts and frames are deferred until
- * release, interval ticks are skipped. Callbacks registered during the hold
- * (probe code awaiting its own timer) run normally. The source's state is never
- * rewritten; its clock is paused.
+ * release, interval ticks are skipped. Callbacks the source's own scripts
+ * register during the hold (a component re-arming its autoplay interval after a
+ * re-render or a mouseleave) are held too: a registration whose call stack runs
+ * through a page script URL is source work. Probe code awaiting its own timer
+ * has no such frame and runs normally. The source's state is never rewritten;
+ * its clock is paused. In-flight CSS transitions are settled before a held
+ * document is read or screenshotted, so a slide fading in paints its end state.
  *
  * Capture holds around its baseline serialization and records which text and
  * images are painted in that document, plus what changed on its own while the
  * capture page was alive. The reference holds before it reads its document and
  * screenshots; when a rotating token disagrees with capture, it releases and
- * re-holds until the source reaches the captured state or the bound ends.
+ * re-holds until the source reaches the captured state or the bound ends. At
+ * capture's own width, text or images that capture painted and the reference
+ * only holds hidden (and the reverse) count as rotating too, so a carousel
+ * slower than either page's own readings is still aligned.
  */
 import type { Page } from 'playwright';
 import { orElse } from '../failure-class.js';
 
 export const MOTION_HOLD_KEY = 'data-liberation.motion-hold';
 /** Upper bound for a reference cell to wait for the captured rotation state. */
-export const MOTION_ALIGN_TIMEOUT_MS = 12_000;
+export const MOTION_ALIGN_TIMEOUT_MS = 30_000;
 const MOTION_ALIGN_POLL_MS = 100;
 /** In-flight CSS transitions settle within this bound before tokens are read. */
 const TRANSITION_SETTLE_MS = 1_000;
@@ -36,6 +43,17 @@ export interface SourceMotion {
 	painted: string[];
 	/** Tokens observed rotating (one appeared while another disappeared) on the capture page. */
 	rotating: string[];
+	/** Tokens present in the serialized document but not painted (hidden slides). */
+	latent?: string[];
+	/** Viewport width the capture document was read at. */
+	width?: number;
+}
+
+/** One reading of a page: what paints, what is present but hidden, at which width. */
+export interface PaintReading {
+	painted: string[];
+	latent: string[];
+	width: number;
 }
 
 export function observeMotionHold(): void {
@@ -53,15 +71,27 @@ export function observeMotionHold(): void {
 	const nativeClearInterval = scope.clearInterval;
 	const nativeFrame = scope.requestAnimationFrame;
 	const nativeCancelFrame = scope.cancelAnimationFrame;
+	const NativeError = Error;
 	let sequence = 0;
 	// 0 while running; otherwise callbacks registered before this sequence are held.
 	let heldFrom = 0;
 	const held = ( registered: number ) => heldFrom !== 0 && registered < heldFrom;
+	// Page scripts carry their URL in stack frames; probe code evaluated through
+	// DevTools and init scripts are anonymous.
+	const sourceFrame = /^\s*at .*\b(?:https?|file):\/\//m;
+	const fromSource = (): boolean => {
+		try {
+			const stack: unknown = new NativeError().stack;
+			return typeof stack === 'string' && sourceFrame.test( stack );
+		} catch { return false; }
+	};
+	// A source registration during a hold is stamped as pre-existing, so it is held.
+	const stamp = () => heldFrom !== 0 && fromSource() ? 0 : ++sequence;
 	const timeouts = new Map<number, () => void>();
 	const frames = new Map<number, FrameRequestCallback>();
 	scope.setTimeout = function ( handler, delay, ...args ) {
 		if ( typeof handler !== 'function' ) return nativeSet.call( window, handler, delay, ...args );
-		const registered = ++sequence;
+		const registered = stamp();
 		const run = () => ( handler as ( ...values: unknown[] ) => unknown ).apply( window, args );
 		const id: number = nativeSet.call( window, () => {
 			if ( held( registered ) ) { timeouts.set( id, run ); return; }
@@ -71,7 +101,7 @@ export function observeMotionHold(): void {
 	};
 	scope.setInterval = function ( handler, delay, ...args ) {
 		if ( typeof handler !== 'function' ) return nativeInterval.call( window, handler, delay, ...args );
-		const registered = ++sequence;
+		const registered = stamp();
 		return nativeInterval.call( window, () => {
 			if ( ! held( registered ) ) ( handler as ( ...values: unknown[] ) => unknown ).apply( window, args );
 		}, delay );
@@ -88,7 +118,7 @@ export function observeMotionHold(): void {
 	if ( typeof nativeFrame === 'function' ) {
 		scope.requestAnimationFrame = function ( callback ) {
 			if ( typeof callback !== 'function' ) return nativeFrame.call( window, callback );
-			const registered = ++sequence;
+			const registered = stamp();
 			const id: number = nativeFrame.call( window, time => {
 				if ( held( registered ) ) { frames.set( id, callback ); return; }
 				callback( time );
@@ -136,17 +166,43 @@ export async function releaseSourceMotion( page: Page ): Promise<void> {
 }
 
 /**
- * Text and image tokens that paint: visible, not fully transparent, and inside
- * every clipping ancestor. Off-screen content still paints; a slide parked
- * outside its carousel's clip, hidden or at opacity 0 does not. In-flight CSS
- * transitions get a bounded chance to finish first.
+ * Let in-flight CSS transitions finish, then complete any still running at the
+ * bound. A transition only animates towards styles the document already has, so
+ * finishing it never changes the document; it makes the paint match it.
  */
-export async function readPaintedTokens( page: Page ): Promise<string[]> {
+export async function settleTransitions( page: Page ): Promise<void> {
 	const deadline = Date.now() + TRANSITION_SETTLE_MS;
-	while ( Date.now() < deadline && await page.evaluate( () => document.getAnimations().some( animation => typeof CSSTransition !== 'undefined' && animation instanceof CSSTransition && animation.playState === 'running' ) ).catch( orElse( false ) ) === true ) {
+	const running = () => page.evaluate( () => document.getAnimations().some( animation => typeof CSSTransition !== 'undefined' && animation instanceof CSSTransition && animation.playState === 'running' ) ).catch( orElse( false ) );
+	while ( await running() === true ) {
+		if ( Date.now() >= deadline ) {
+			await page.evaluate( () => {
+				for ( const animation of document.getAnimations() ) {
+					if ( typeof CSSTransition !== 'undefined' && animation instanceof CSSTransition && animation.playState === 'running' ) {
+						try { animation.finish(); } catch { /* an unfinishable transition keeps painting as is */ }
+					}
+				}
+			} ).catch( orElse( undefined ) );
+			return;
+		}
 		await new Promise( resolve => setTimeout( resolve, 50 ) );
 	}
-	const tokens: unknown = await page.evaluate( () => {
+}
+
+/**
+ * Text and image tokens that paint: visible, not fully transparent (on the
+ * element or any ancestor), and inside every clipping ancestor. Off-screen
+ * content still paints; a slide parked outside its carousel's clip, hidden,
+ * `visibility: hidden` or at opacity 0 does not. In-flight CSS transitions are
+ * settled first.
+ */
+export async function readPaintedTokens( page: Page ): Promise<string[]> {
+	return ( await readPaintState( page ) ).painted;
+}
+
+/** Painted tokens plus the tokens present in the document that do not paint. */
+export async function readPaintState( page: Page ): Promise<PaintReading> {
+	await settleTransitions( page );
+	const reading: unknown = await page.evaluate( () => {
 		type Box = { left: number; top: number; right: number; bottom: number };
 		const unbounded: Box = { left: -Infinity, top: -Infinity, right: Infinity, bottom: Infinity };
 		const clips = new Map<Element, Box>();
@@ -165,12 +221,18 @@ export async function readPaintedTokens( page: Page ): Promise<string[]> {
 			return clip;
 		};
 		const visible = new Map<Element, boolean>();
+		// Opacity is inherited by paint, not by computed style: an opacity-0
+		// ancestor hides its whole subtree (checkVisibility already walks them).
+		const transparent = ( element: Element | null ): boolean => {
+			for ( let current = element; current; current = current.parentElement ) if ( Number.parseFloat( getComputedStyle( current ).opacity ) === 0 ) return true;
+			return false;
+		};
 		const shows = ( element: Element ): boolean => {
 			const known = visible.get( element );
 			if ( known !== undefined ) return known;
 			const result = typeof element.checkVisibility === 'function'
 				? element.checkVisibility( { checkOpacity: true, checkVisibilityCSS: true } )
-				: getComputedStyle( element ).visibility !== 'hidden' && element.getClientRects().length > 0;
+				: getComputedStyle( element ).visibility !== 'hidden' && element.getClientRects().length > 0 && ! transparent( element );
 			visible.set( element, result );
 			return result;
 		};
@@ -178,24 +240,31 @@ export async function readPaintedTokens( page: Page ): Promise<string[]> {
 			Math.min( rect.right, clip.right ) - Math.max( rect.left, clip.left ) > 0.5 &&
 			Math.min( rect.bottom, clip.bottom ) - Math.max( rect.top, clip.top ) > 0.5;
 		const tokens = new Set<string>();
-		if ( ! document.body ) return [];
+		const latent = new Set<string>();
+		const width = window.innerWidth;
+		if ( ! document.body ) return { painted: [], latent: [], width };
 		const walker = document.createTreeWalker( document.body, NodeFilter.SHOW_TEXT );
 		const range = document.createRange();
 		for ( let node = walker.nextNode(); node && tokens.size < 20_000; node = walker.nextNode() ) {
 			const parent = node.parentElement;
 			const text = node.textContent?.replace( /\s+/g, ' ' ).trim().slice( 0, 160 );
-			if ( ! parent || ! text || parent.closest( 'script,style,noscript,template' ) || ! shows( parent ) ) continue;
+			if ( ! parent || ! text || parent.closest( 'script,style,noscript,template' ) ) continue;
+			const token = `text:${ text }`;
+			if ( ! shows( parent ) ) { latent.add( token ); continue; }
 			range.selectNodeContents( node );
-			if ( paints( range.getBoundingClientRect(), clipOf( parent ) ) ) tokens.add( `text:${ text }` );
+			( paints( range.getBoundingClientRect(), clipOf( parent ) ) ? tokens : latent ).add( token );
 		}
 		for ( const image of Array.from( document.images ) ) {
 			const source = image.currentSrc || image.getAttribute( 'src' ) || '';
-			if ( ! source || source.startsWith( 'data:' ) || ! shows( image ) ) continue;
-			if ( paints( image.getBoundingClientRect(), clipOf( image.parentElement ) ) ) tokens.add( `image:${ source.replace( /[?#].*$/, '' ).split( '/' ).pop() }` );
+			if ( ! source || source.startsWith( 'data:' ) ) continue;
+			const token = `image:${ source.replace( /[?#].*$/, '' ).split( '/' ).pop() }`;
+			( shows( image ) && paints( image.getBoundingClientRect(), clipOf( image.parentElement ) ) ? tokens : latent ).add( token );
 		}
-		return [ ...tokens ].sort();
-	} ).catch( orElse( [] as string[] ) );
-	return Array.isArray( tokens ) ? tokens.filter( ( token ): token is string => typeof token === 'string' ) : [];
+		return { painted: [ ...tokens ].sort(), latent: [ ...latent ].filter( token => ! tokens.has( token ) ).sort(), width };
+	} ).catch( orElse( undefined ) );
+	const strings = ( value: unknown ) => Array.isArray( value ) ? value.filter( ( token ): token is string => typeof token === 'string' ) : [];
+	const record = reading && typeof reading === 'object' ? reading as Record<string, unknown> : {};
+	return { painted: strings( record.painted ), latent: strings( record.latent ), width: typeof record.width === 'number' ? record.width : 0 };
 }
 
 /**
@@ -209,6 +278,20 @@ export function motionChanges( before: readonly string[], after: readonly string
 	const appeared = after.filter( token => ! was.has( token ) );
 	const disappeared = before.filter( token => ! now.has( token ) );
 	return appeared.length && disappeared.length ? [ ...appeared, ...disappeared ].sort() : [];
+}
+
+/**
+ * Tokens that swapped between capture and an observation at the same width:
+ * something capture painted is only present hidden now, while something hidden
+ * at capture paints now. Static content does not swap at one width; a slide does.
+ */
+export function capturedSwaps( captured: SourceMotion, observed: PaintReading ): string[] {
+	if ( ! captured.latent || ! captured.width || captured.width !== observed.width ) return [];
+	const wasPainted = new Set( captured.painted );
+	const wasLatent = new Set( captured.latent );
+	const shown = observed.painted.filter( token => wasLatent.has( token ) );
+	const hidden = observed.latent.filter( token => wasPainted.has( token ) );
+	return shown.length && hidden.length ? [ ...shown, ...hidden ].sort() : [];
 }
 
 /** Rotating tokens whose painted state differs between capture and the observed page. */
@@ -260,16 +343,29 @@ export async function alignSourceMotion( page: Page, captured: SourceMotion | un
 	for ( let index = 1; index < earlier.length; index++ ) for ( const token of motionChanges( earlier[ index - 1 ]!, earlier[ index ]! ) ) rotating.add( token );
 	const deadline = Date.now() + timeoutMs;
 	let previous = earlier.at( -1 );
+	const observe = async (): Promise<string[]> => {
+		const reading = await readPaintState( page );
+		if ( previous ) for ( const token of motionChanges( previous, reading.painted ) ) rotating.add( token );
+		if ( captured ) for ( const token of capturedSwaps( captured, reading ) ) rotating.add( token );
+		previous = reading.painted;
+		return reading.painted;
+	};
 	for ( ;; ) {
 		const held = await holdSourceMotion( page );
-		// Without capture evidence there is nothing to agree with: just hold.
-		if ( ! captured ) return { held, disagreement: [], release: () => releaseSourceMotion( page ) };
-		const current = await readPaintedTokens( page );
-		if ( previous ) for ( const token of motionChanges( previous, current ) ) rotating.add( token );
-		const disagreement = motionDisagreement( captured.painted, current, rotating );
+		// Without capture evidence there is nothing to agree with: hold and let
+		// in-flight transitions reach the state the document already has.
+		if ( ! captured ) {
+			await settleTransitions( page );
+			return { held, disagreement: [], release: () => releaseSourceMotion( page ) };
+		}
+		const disagreement = motionDisagreement( captured.painted, await observe(), rotating );
 		if ( ! disagreement.length || ! held || Date.now() >= deadline ) return { held, disagreement, release: () => releaseSourceMotion( page ) };
+		// Let the source run, unheld, until it shows the captured state: a held
+		// page skips its interval ticks, so polling under a hold never advances.
 		await releaseSourceMotion( page );
-		await new Promise( resolve => setTimeout( resolve, MOTION_ALIGN_POLL_MS ) );
-		previous = current;
+		while ( Date.now() < deadline ) {
+			await new Promise( resolve => setTimeout( resolve, MOTION_ALIGN_POLL_MS ) );
+			if ( ! motionDisagreement( captured.painted, await observe(), rotating ).length ) break;
+		}
 	}
 }

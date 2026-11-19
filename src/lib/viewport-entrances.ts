@@ -64,6 +64,8 @@ export function observeViewportEntrances(): void {
 		confirmed: boolean;
 		supported: boolean;
 		scrollDriven?: boolean;
+		/** A scroll-promoted target that returned to its before pose with no scroll: autonomous motion (a carousel slide), not an entrance. */
+		timeDriven?: boolean;
 	}>();
 	// Attribute delivery precedes transitionrun. Keep candidates separate from
 	// entrance state: an exit or unrelated mutation must never acquire an after pose.
@@ -245,7 +247,17 @@ export function observeViewportEntrances(): void {
 			const element = mutation.target;
 			const name = mutation.attributeName;
 			if ( ! ( element instanceof Element ) || ! name || ! /^(class|style|data-.+)$/.test( name ) || name.startsWith( 'data-blocks-engine-capture-' ) ) continue;
-			if ( targets.has( element ) ) { captureState( element ); continue; }
+			const target = targets.get( element );
+			if ( target ) {
+				// An entrance reverts only when scrolled out. A slide that left the
+				// pose it entered with on its own clock is rotation (#2007).
+				if ( target.scrollDriven && target.confirmed && performance.now() - scrolledAt > 150 ) {
+					const now = attributes( element );
+					if ( Object.keys( target.state.attributes ).every( key => ( now[ key ] ?? null ) === target.state.attributes[ key ].before ) ) target.timeDriven = true;
+				}
+				captureState( element );
+				continue;
+			}
 			if ( performance.now() - scrolledAt > 150 ) continue;
 			if ( ! before.has( element ) ) before.set( element, attributes( element ) );
 		}
@@ -339,7 +351,7 @@ export function observeViewportEntrances(): void {
 				if ( element.getAttribute( 'style' ) !== record.settled ) element.setAttribute( 'style', record.settled );
 			}
 			for ( const [ element, target ] of targets ) {
-				if ( ! element.isConnected ) continue;
+				if ( ! element.isConnected || target.timeDriven ) continue;
 				captureState( element );
 				if ( target.loss || target.cssCandidate && ! target.cssComplete ) {
 					element.setAttribute( 'data-blocks-engine-capture-viewport-entrance-loss', target.loss ?? ( target.cssStarted ? 'CSS entrance has no observed terminal attribute switch' : 'CSS viewport lifecycle was not observed' ) );

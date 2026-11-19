@@ -34,7 +34,7 @@ import { projectRootClassContracts, rootClassContracts, RootClassEvidence, sampl
 import { restoreRuntimeEmoji } from './runtime-emoji.js';
 import { restoreLoadTimeSheets } from './runtime-style-writes.js';
 import { removeRuntimeWidgets } from './runtime-widgets.js';
-import { alignSourceMotion, motionChanges, readPaintedTokens, recordSourceMotion, type RouteMotionEvidence } from './motion-hold.js';
+import { alignSourceMotion, motionChanges, type PaintReading, readPaintedTokens, recordSourceMotion, type RouteMotionEvidence } from './motion-hold.js';
 import { analyzePage } from './site-analysis.js';
 import { preserveStreamedVideoPosters } from './streamed-video.js';
 import { captureViewportClassStates, type ViewportClassMemo } from './viewport-class-states.js';
@@ -337,7 +337,7 @@ export function baselineSteps(
 	state: BaselineState,
 	fail: ( stage: FailureEntry['stage'], error: unknown, attempt?: number ) => void,
 	sourceErrors: () => string[],
-	capturePageHtml: ( page: Page, diagnostics?: ProfileDiagnostic[], serverHtml?: string, onBoxTree?: (observation: BoxTreeObservation | undefined) => void, onPainted?: ( painted: string[] ) => void ) => Promise<string>,
+	capturePageHtml: ( page: Page, diagnostics?: ProfileDiagnostic[], serverHtml?: string, onBoxTree?: (observation: BoxTreeObservation | undefined) => void, onPainted?: ( reading: PaintReading ) => void ) => Promise<string>,
 ): CaptureStep<{ page: Page }>[] {
 	const { page, viewport, plan, url, slug, evaluateTimeoutMs, screenshotTimeoutMs, outputDir, entry, responsiveImages, resourceStore, mobileHeights, shouldAnalyze, aggregator } = args;
 	const { serverHtml, navigationUrl, sourcePolicy } = sourceLoad;
@@ -530,9 +530,9 @@ export function baselineSteps(
 				try {
 					state.initialDocument = await capturePageHtml( page, args.diagnostics, serverHtml,
 						(isDesktop || isMobile) && (plan.captureHtml || plan.captureMobileHtml) ? observation => { boxNodes = observation; } : undefined,
-						args.observeSource ? painted => {
+						args.observeSource ? ( { painted, latent, width } ) => {
 							samplePainted( painted );
-							const motion = { painted, rotating: [ ...new Set( [ ...rotating, ...routeMoment?.rotating ?? [] ] ) ].sort() };
+							const motion = { painted, latent, width, rotating: [ ...new Set( [ ...rotating, ...routeMoment?.rotating ?? [] ] ) ].sort() };
 							recordSourceMotion( page, motion );
 							args.routeMotion?.claim( url, motion );
 						} : undefined );
