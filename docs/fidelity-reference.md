@@ -139,10 +139,15 @@ across its baseline serialization and records which text and images paint, plus
 the tokens that rotated (one appeared while another disappeared) while its page
 was alive. Later profiles of the route wait, held, for that same moment before
 they serialize. A reference cell releases and re-holds until every rotating token
-agrees with capture, bounded to 12 seconds; a cell that never agrees records a
+agrees with capture, bounded to 30 seconds; a cell that never agrees records a
 `source motion disagrees with capture` diagnostic and keeps its last moment.
 Static width differences never block agreement because only rotating tokens are
 compared, so an autoplaying carousel's reference shows the slide `website/` shows.
+At capture's own width, a token capture painted that the cell only holds hidden
+(and the reverse) is rotation. At any other width that swap is a candidate: the
+cell releases its page for up to 10 seconds, and a candidate that changes on its
+own is rotation and aligned like any other; one that never changes is responsive
+content and stays as that width renders it.
 Image geometry and typography use resting authored styles: animation keyframes
 (including ancestor, infinite, and scroll-driven effects) are temporarily removed
 on both sides, with static transforms preserved. Original keyframes are restored

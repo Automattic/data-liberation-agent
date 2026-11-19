@@ -26,7 +26,10 @@
  * re-holds until the source reaches the captured state or the bound ends. At
  * capture's own width, text or images that capture painted and the reference
  * only holds hidden (and the reverse) count as rotating too, so a carousel
- * slower than either page's own readings is still aligned.
+ * slower than either page's own readings is still aligned. At any other width
+ * such a swap is only a candidate, because responsive content legitimately
+ * differs by width: the reference releases its page for a bounded window, and
+ * only a candidate that changes on its own there is rotation and aligned.
  */
 import type { Page } from 'playwright';
 import { orElse } from '../failure-class.js';
@@ -35,6 +38,12 @@ export const MOTION_HOLD_KEY = 'data-liberation.motion-hold';
 /** Upper bound for a reference cell to wait for the captured rotation state. */
 export const MOTION_ALIGN_TIMEOUT_MS = 30_000;
 const MOTION_ALIGN_POLL_MS = 100;
+/**
+ * Upper bound for a reference cell at a width other than capture's to watch a
+ * hidden/painted swap against capture change on its own before treating it as
+ * responsive content. Only cells with such a candidate wait.
+ */
+export const MOTION_CONFIRM_TIMEOUT_MS = 10_000;
 /** In-flight CSS transitions settle within this bound before tokens are read. */
 const TRANSITION_SETTLE_MS = 1_000;
 
@@ -286,7 +295,22 @@ export function motionChanges( before: readonly string[], after: readonly string
  * at capture paints now. Static content does not swap at one width; a slide does.
  */
 export function capturedSwaps( captured: SourceMotion, observed: PaintReading ): string[] {
-	if ( ! captured.latent || ! captured.width || captured.width !== observed.width ) return [];
+	if ( ! captured.width || captured.width !== observed.width ) return [];
+	return swaps( captured, observed );
+}
+
+/**
+ * The same swap observed at a width other than capture's. Responsive content
+ * can swap that way too, so it is a candidate: rotation only once the observed
+ * page changes those tokens on its own.
+ */
+export function swapCandidates( captured: SourceMotion, observed: PaintReading ): string[] {
+	if ( ! captured.width || ! observed.width || captured.width === observed.width ) return [];
+	return swaps( captured, observed );
+}
+
+function swaps( captured: SourceMotion, observed: PaintReading ): string[] {
+	if ( ! captured.latent ) return [];
 	const wasPainted = new Set( captured.painted );
 	const wasLatent = new Set( captured.latent );
 	const shown = observed.painted.filter( token => wasLatent.has( token ) );
@@ -338,15 +362,21 @@ export interface MotionAlignment {
  * them, and since the last of them, counts too. The page is left held: the caller reads its document and
  * screenshots, then releases.
  */
-export async function alignSourceMotion( page: Page, captured: SourceMotion | undefined, earlier: readonly ( readonly string[] )[] = [], timeoutMs = MOTION_ALIGN_TIMEOUT_MS ): Promise<MotionAlignment> {
+export async function alignSourceMotion( page: Page, captured: SourceMotion | undefined, earlier: readonly ( readonly string[] )[] = [], timeoutMs = MOTION_ALIGN_TIMEOUT_MS, confirmMs = MOTION_CONFIRM_TIMEOUT_MS ): Promise<MotionAlignment> {
 	const rotating = new Set( captured?.rotating ?? [] );
 	for ( let index = 1; index < earlier.length; index++ ) for ( const token of motionChanges( earlier[ index - 1 ]!, earlier[ index ]! ) ) rotating.add( token );
-	const deadline = Date.now() + timeoutMs;
+	const start = Date.now();
+	const deadline = start + timeoutMs;
+	const confirmDeadline = start + Math.min( confirmMs, timeoutMs );
+	// Cross-width swaps against capture: rotation once one changes on its own.
+	const candidates = new Set<string>();
+	const unconfirmed = () => candidates.size > 0 && ! [ ...candidates ].some( token => rotating.has( token ) );
 	let previous = earlier.at( -1 );
 	const observe = async (): Promise<string[]> => {
 		const reading = await readPaintState( page );
 		if ( previous ) for ( const token of motionChanges( previous, reading.painted ) ) rotating.add( token );
 		if ( captured ) for ( const token of capturedSwaps( captured, reading ) ) rotating.add( token );
+		if ( captured ) for ( const token of swapCandidates( captured, reading ) ) candidates.add( token );
 		previous = reading.painted;
 		return reading.painted;
 	};
@@ -359,6 +389,16 @@ export async function alignSourceMotion( page: Page, captured: SourceMotion | un
 			return { held, disagreement: [], release: () => releaseSourceMotion( page ) };
 		}
 		const disagreement = motionDisagreement( captured.painted, await observe(), rotating );
+		if ( ! disagreement.length && held && unconfirmed() && Date.now() < confirmDeadline ) {
+			// Watch the candidates, unheld: rotation changes them on its own,
+			// responsive content never does and stays as this width renders it.
+			await releaseSourceMotion( page );
+			while ( Date.now() < confirmDeadline && unconfirmed() ) {
+				await new Promise( resolve => setTimeout( resolve, MOTION_ALIGN_POLL_MS ) );
+				await observe();
+			}
+			continue;
+		}
 		if ( ! disagreement.length || ! held || Date.now() >= deadline ) return { held, disagreement, release: () => releaseSourceMotion( page ) };
 		// Let the source run, unheld, until it shows the captured state: a held
 		// page skips its interval ticks, so polling under a hold never advances.
