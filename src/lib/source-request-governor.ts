@@ -136,6 +136,20 @@ function abortReason( signal: AbortSignal ): unknown {
 	return signal.reason ?? new DOMException( 'The operation was aborted', 'AbortError' );
 }
 
+/**
+ * A retried throttle response is never returned, so nothing will read its
+ * body. An unread `fetch` body pauses undici's parser; if the source then
+ * closes the socket, Node 22's undici fails `assert(!this.paused)` inside a
+ * socket event handler and the whole process exits. Cancel it before retrying.
+ * Buffered results (and browser responses, disposed by their task) have no
+ * stream to cancel.
+ */
+async function discardThrottledBody( response: unknown ): Promise< void > {
+	const body = ( response as { body?: unknown } ).body as { cancel?: unknown } | null | undefined;
+	if ( typeof body?.cancel !== 'function' ) return;
+	try { await ( body as ReadableStream ).cancel(); } catch { /* already consumed or errored */ }
+}
+
 export class SourceRequestGovernor {
 	readonly origin: string;
 	readonly maxConcurrency: number;
@@ -360,6 +374,7 @@ export class SourceRequestGovernor {
 			options.onThrottle?.( response.status );
 			// The next acquire rejects once the signal has aborted.
 			if ( attempt >= maxAttempts ) return { response, attempts: attempt, throttles };
+			await discardThrottledBody( response );
 		}
 	}
 

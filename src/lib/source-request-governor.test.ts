@@ -135,6 +135,25 @@ describe( 'SourceRequestGovernor', () => {
 		expect( throttles ).toEqual( [ 503, 503, 503 ] );
 	} );
 
+	it( 'cancels the unread body of a throttle response it retries, and leaves the returned one readable', async () => {
+		// An unread fetch body pauses undici's parser; a source that then closes
+		// the socket crashes Node 22 with `assert(!this.paused)`.
+		const governor = new SourceRequestGovernor( 'https://source.example' );
+		const cancelled: number[] = [];
+		const response = ( status: number, attempt: number ) => new Response(
+			new ReadableStream( { pull: controller => controller.enqueue( new Uint8Array( 1 ) ), cancel: () => { cancelled.push( attempt ); } } ),
+			{ status, headers: { 'retry-after': '0' } }
+		);
+		const retried = await governor.run( async attempt => response( attempt < 3 ? 503 : 200, attempt ) );
+		expect( retried.attempts ).toBe( 3 );
+		expect( cancelled ).toEqual( [ 1, 2 ] );
+		expect( retried.response.bodyUsed ).toBe( false );
+		cancelled.length = 0;
+		const exhausted = await governor.run( async attempt => response( 429, attempt ), { maxAttempts: 2 } );
+		expect( cancelled ).toEqual( [ 1 ] );
+		expect( exhausted.response.bodyUsed ).toBe( false );
+	} );
+
 	it( 'rejects promptly when the deadline aborts a throttle wait or a queued request', async () => {
 		const governor = new SourceRequestGovernor( 'https://source.example', { concurrency: 1 } );
 		const deadline = AbortSignal.timeout( 50 );
