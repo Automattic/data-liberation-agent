@@ -1,8 +1,29 @@
 import type { Page } from 'playwright';
 import { PNG } from 'pngjs';
 
-/** Full-page baseline after the caller's cleanup, lazy-load sweep and readiness. */
+/**
+ * Full-page baseline after the caller's cleanup, lazy-load sweep and readiness.
+ *
+ * CSS transitions are off while it is taken. Chromium's beyond-viewport capture
+ * transiently re-evaluates the document's media queries, and a scroll probe that
+ * just returned to the top can still be delivering its scroll event; either
+ * starts a transition (a shrinking navbar logo growing back over 0.3s) that the
+ * raster would catch part-way. Without transitions every style change lands on
+ * its end value, which is the document's own resting state (#2048).
+ */
 export async function captureFullPageScreenshot( page: Page, excludedMotion: string[] = [] ): Promise<Buffer> {
+	const transitions = await page.evaluateHandle( async () => {
+		const sheet = new CSSStyleSheet();
+		sheet.replaceSync( '*, *::before, *::after { transition: none !important; }' );
+		document.adoptedStyleSheets = [ ...document.adoptedStyleSheets, sheet ];
+		// Deliver pending scroll/resize work so a class it toggles lands now, at rest.
+		await new Promise<void>( resolve => {
+			const done = setTimeout( resolve, 100 );
+			requestAnimationFrame( () => requestAnimationFrame( () => { clearTimeout( done ); resolve(); } ) );
+		} );
+		getComputedStyle( document.documentElement ).transitionProperty;
+		return sheet;
+	} );
 	// Use the same authored-rest/terminal-entrance pose as geometry measurement.
 	const hidden = await page.evaluateHandle( selectors => selectors.flatMap( selector => [ ...document.querySelectorAll<HTMLElement>( selector ) ] ).map( element => {
 		const visibility = element.style.visibility;
@@ -45,6 +66,8 @@ export async function captureFullPageScreenshot( page: Page, excludedMotion: str
 		await effects.dispose();
 		await hidden.evaluate( entries => { for ( const { element, visibility } of entries ) element.style.visibility = visibility; } );
 		await hidden.dispose();
+		await transitions.evaluate( sheet => { document.adoptedStyleSheets = document.adoptedStyleSheets.filter( item => item !== sheet ); } );
+		await transitions.dispose();
 	}
 }
 

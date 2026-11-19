@@ -3,7 +3,7 @@ import { chromium, devices } from 'playwright';
 import { PNG } from 'pngjs';
 import { describe, expect } from 'vitest';
 import { it } from '../../../test/browser.js';
-import { captureViewportScreenshot } from './viewport-screenshot.js';
+import { captureFullPageScreenshot, captureViewportScreenshot } from './viewport-screenshot.js';
 
 describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )( 'compositor viewport evidence', () => {
 	it( 'captures the complete fixed-width mobile frame without changing its viewport or raster', async ({ newContext }) => {
@@ -36,5 +36,29 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			const raster = PNG.sync.read( await captureViewportScreenshot( page ) );
 			expect( [ raster.width, raster.height ] ).toEqual( [ 1440, 900 ] );
 		}
+	}, 30_000 );
+	it( 'paints the resting pose of a scroll-state transition still settling when the full page is taken', async ({ newPage }) => {
+		// #2048: a navbar shrinks on scroll and grows back over 0.3s. A scroll
+		// probe that just returned to the top, and the beyond-viewport capture
+		// itself (it re-evaluates media queries), start that transition; the
+		// raster must show where it ends, not part-way.
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+		await page.setContent( `<style>
+			body { margin: 0; background: rgb(255,255,255) } main { height: 4000px }
+			#logo { position: fixed; top: 0; left: 0; height: 40px; width: 100px; background: rgb(255,0,0) }
+			@media (min-width: 992px) { #logo { width: 300px; transition: width 2s linear } #logo.shrink { width: 100px } }
+		</style><div id="logo"></div><main></main>
+		<script>document.addEventListener( 'scroll', () => document.getElementById( 'logo' ).classList.toggle( 'shrink', scrollY > 0 ) );</script>` );
+		await page.evaluate( async () => {
+			scrollTo( 0, 1200 );
+			await new Promise<void>( resolve => requestAnimationFrame( () => requestAnimationFrame( () => resolve() ) ) );
+			await new Promise<void>( resolve => setTimeout( resolve, 2_100 ) );
+			scrollTo( 0, 0 );
+		} );
+		const raster = PNG.sync.read( await captureFullPageScreenshot( page ) );
+		const red = ( x: number ) => raster.data[ ( 20 * raster.width + x ) * 4 ] === 255 && raster.data[ ( 20 * raster.width + x ) * 4 + 1 ] === 0;
+		expect( [ red( 150 ), red( 290 ), red( 310 ) ] ).toEqual( [ true, true, false ] );
+		// The page keeps its own transitions once the screenshot is taken.
+		expect( await page.evaluate( () => getComputedStyle( document.getElementById( 'logo' )! ).transitionProperty ) ).toBe( 'width' );
 	}, 30_000 );
 } );
