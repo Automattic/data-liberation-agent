@@ -204,6 +204,34 @@ describe( 'responsive readiness contract', () => {
 		} finally { await page.close(); }
 	} );
 
+	it( 'waits in place for an in-view image the resize gives a new rendition', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 500 } } );
+		try {
+			await page.route( /^https:\/\/neutral\.test\/rendition-\d+\.svg$/, async route => {
+				await new Promise( resolve => setTimeout( resolve, 300 ) );
+				await route.fulfill( { contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"/>' } );
+			} );
+			await page.setContent( `<style>body{margin:0}</style>
+				<img id="image" width="40" height="40" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40'/%3E">
+				<div id="box" style="width:720px;height:40px">Neutral text</div>
+				<div style="height:3500px"></div>
+				<script>
+				window.sweeps = 0;
+				const scroll = window.scrollTo.bind(window);
+				window.scrollTo = options => { if (options.top === innerHeight) sweeps++; scroll(options); };
+				addEventListener('resize', () => {
+					document.querySelector('#box').style.width = innerWidth / 2 + 'px';
+					document.querySelector('#image').src = 'https://neutral.test/rendition-' + innerWidth + '.svg';
+				});
+				</script>` );
+			const result = await learnAndApplyFluidGeometry( page, { widths: [ 390, 768, 1024, 1440 ], settleMs: 200 } );
+			expect( result.applied ).toBeGreaterThan( 0 );
+			// The first width sweeps the document; a new rendition of an image
+			// already in view loads without scrolling, so no later width sweeps.
+			expect( await page.evaluate( () => ( window as unknown as { sweeps: number } ).sweeps ) ).toBe( 1 );
+		} finally { await page.close(); }
+	}, 30_000 );
+
 	it( 'ignores perpetual paint-only writes without spending the rest deadline', async ({ newPage }) => {
 		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		try {

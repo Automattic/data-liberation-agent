@@ -1636,6 +1636,13 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 			}
 			return Math.max( 0, Math.round( height - excluded ) );
 		};
+		// Only a native-lazy image outside the viewport waits for a visit. A new
+		// rendition of any other image loads in place, and rest waits for it below.
+		const offscreenLazy = ( image: HTMLImageElement ) => {
+			if ( image.loading !== 'lazy' ) return false;
+			const box = image.getBoundingClientRect();
+			return box.top >= window.innerHeight || box.bottom <= 0;
+		};
 		// Another sweep can only reach new work when the document grew or an image
 		// it may load newly entered the render tree: rendered, still pending, and
 		// reachable. Nodes and images that merely toggle within the swept extent
@@ -1718,7 +1725,7 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 			const currentHeight = capturedHeight();
 			visitedHeight = Math.max( visitedHeight, currentHeight );
 			if ( lazy && ( revealedPending( currentContent, sweptContent ) ||
-				changedImages.some( ( [ image ] ) => ! image.complete ) || currentHeight > sweptHeight ) ) {
+				changedImages.some( ( [ image ] ) => ! image.complete && offscreenLazy( image ) ) || currentHeight > sweptHeight ) ) {
 				// Finite delayed resize/image work can introduce another offscreen
 				// tail after the first sweep. Observe it before declaring readiness.
 				sweptContent = currentContent;
@@ -1727,10 +1734,11 @@ async function waitForRestGeometry( page: Page, baseline: Awaited<ReturnType<typ
 				previous = snapshot();
 				continue;
 			}
-			// An existing image's completed rendition is not an offscreen load
-			// waiting for another visit. Still restart at-top rest: its intrinsic
-			// size can change layout. Pending replacements, new/replaced nodes,
-			// revealed images and document growth retain the full sweep above.
+			// An existing image's new rendition, other than a pending offscreen
+			// native-lazy one, is not a load waiting for another visit. Still
+			// restart at-top rest: its intrinsic size can change layout, and image
+			// readiness below waits for a pending one. Pending offscreen lazy
+			// replacements, revealed images and document growth retain the sweep above.
 			sweptContent = currentContent;
 			if ( lazy && changedImages.length ) {
 				quietSince = Date.now();
