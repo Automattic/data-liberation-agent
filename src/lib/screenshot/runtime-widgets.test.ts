@@ -114,17 +114,21 @@ it('marks a cross-origin in-flow embed form with inert provenance, not same-orig
 	const renderForm = (id: string) => `(() => { const script = document.currentScript; addEventListener('load', () => {
 		const root = document.createElement('div'); root.className = '${id}-root';
 		const form = document.createElement('form'); form.id = '${id}';
+		const header = document.createElement('header'); header.textContent = 'Contact form'; form.appendChild(header);
 		for (let index = 0; index < 4; index++) { const input = document.createElement('input'); input.type = 'text'; form.appendChild(input); }
 		const select = document.createElement('select'); select.appendChild(document.createElement('option')); form.appendChild(select);
 		form.appendChild(document.createElement('textarea'));
-		const submit = document.createElement('button'); submit.type = 'button'; submit.textContent = 'Submit'; form.appendChild(submit);
-		root.appendChild(form);
+		const footer = document.createElement('footer');
+		const submit = document.createElement('button'); submit.type = 'button'; submit.textContent = 'Submit'; footer.appendChild(submit); form.appendChild(footer);
+		if ('${id}' === 'page-runtime') {
+			const main = document.createElement('main'); main.appendChild(form); root.appendChild(main);
+		} else root.appendChild(form);
 		script.parentNode.insertBefore(root, script);
 	}); })();`;
 	const server = createServer((request, response) => {
-		if (request.url === '/f/embed.js' || request.url === '/own-form.js') {
+		if (request.url === '/f/embed.js' || request.url === '/own-form.js' || request.url === '/page-runtime.js') {
 			response.setHeader('Content-Type', 'application/javascript');
-			response.end(renderForm(request.url === '/own-form.js' ? 'own-form' : 'vendor-form'));
+			response.end(renderForm(request.url === '/own-form.js' ? 'own-form' : request.url === '/page-runtime.js' ? 'page-runtime' : 'vendor-form'));
 			return;
 		}
 		const port = (server.address() as { port: number }).port;
@@ -132,6 +136,7 @@ it('marks a cross-origin in-flow embed form with inert provenance, not same-orig
 		response.end(`<!doctype html><html><head><title>Embeds</title></head><body><main><h1>Contact</h1>
 			<div class="wcustomhtml"><script src="http://127.0.0.1:${port}/f/embed.js" data-key="SITE_FORM_KEY" data-form="1"></script></div>
 			<div class="own-embed"><script src="/own-form.js"></script></div>
+			<div class="page-runtime-container"><script src="http://127.0.0.1:${port}/page-runtime.js"></script></div>
 			<div class="hs-form-frame" data-portal-id="145288931" data-form-id="d320b12e-97d4-4fc0-91be-27d99192f4e9" data-region="eu1"></div>
 			<p>Enough authored prose to keep this the primary document.</p></main></body></html>`);
 	});
@@ -151,6 +156,12 @@ it('marks a cross-origin in-flow embed form with inert provenance, not same-orig
 		const $ = load(html);
 		// Rendered DOM stays as visual reference; no executable script ships.
 		expect($('#vendor-form').length).toBeGreaterThan(0);
+		expect($('#vendor-form > header').text()).toContain('Contact form');
+		expect($('#vendor-form > footer > button').length).toBeGreaterThan(0);
+		expect($('#vendor-form').closest('[data-blocks-engine-capture-runtime-owner]').length).toBeGreaterThan(0);
+		// A cross-origin page runtime still owns the page, not an embed region.
+		expect($('.page-runtime-root main #page-runtime').length).toBeGreaterThan(0);
+		expect($('.page-runtime-root').closest('[data-blocks-engine-capture-runtime-owner]').length).toBe(0);
 		// Only export's own inert data and runtime remain; nothing loads the embed.
 		expect($('script[src]').length).toBe(0);
 		expect($('script').toArray().some(script => !$(script).attr('data-blocks-engine-capture-source-evidence') && $(script).text().includes('127.0.0.1'))).toBe(false);
