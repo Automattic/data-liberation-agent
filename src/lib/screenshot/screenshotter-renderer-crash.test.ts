@@ -15,7 +15,16 @@ async function capture( mode: string ) {
 	} );
 	expect( stderr ).not.toMatch( /Assertion|uncaught|chrome-fidelity.*skipped/ );
 	expect( stderr ).toContain( '[retry] renderer crashed' );
-	return JSON.parse( stdout.trim().split( '\n' ).at( -1 )! );
+	const evidence = JSON.parse( stdout.trim().split( '\n' ).at( -1 )! );
+	for ( let attempt = 1; attempt <= evidence.crashes; attempt++ ) {
+		expect( evidence.pendingOutcomes.filter( ( outcome: { attempt: number } ) => outcome.attempt === attempt ) ).toEqual(
+			[ 'fetch evaluate', 'response body', 'hung evaluate', 'Page.crash' ].map( kind => ( {
+				attempt, kind, status: 'rejected',
+				message: expect.stringMatching( /crashed|closed|Execution context was destroyed/i ),
+			} ) ),
+		);
+	}
+	return evidence;
 }
 
 describe( 'renderer crash recovery in a child process', () => {
