@@ -1,8 +1,44 @@
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { extractSharedChrome } from './shared-chrome.js';
+
+it( 'keeps case-variant seminar documents intact on either filesystem', () => {
+	const root = mkdtempSync( join( tmpdir(), 'liberation-chrome-case-' ) );
+	try {
+		const header = `<header><a href="/">Brand</a><form action="/x"><input name="q">${ '<span>search help text</span>'.repeat( 12 ) }</form></header>`;
+		const before = '<!doctype html><html><body>';
+		const after = '<nav><ul><li><a href="/a">Alpha</a></li></ul></nav><main><h1>Seminar</h1></main></body></html>';
+		for ( const path of [ 'seminar', 'Seminar' ] ) {
+			mkdirSync( join( root, path ), { recursive: true } );
+			writeFileSync( join( root, path, 'index.html' ), before + header + after );
+		}
+		extractSharedChrome( root, [ 'seminar/index.html', 'Seminar/index.html' ] );
+		for ( const path of [ 'seminar', 'Seminar' ] ) {
+			const html = readFileSync( join( root, path, 'index.html' ), 'utf8' );
+			expect( html.startsWith( before ) ).toBe( true );
+			expect( html.endsWith( after ) ).toBe( true );
+		}
+	} finally { rmSync( root, { recursive: true, force: true } ); }
+} );
+
+it( 'does not count or rewrite a physical document twice through aliases', () => {
+	const root = mkdtempSync( join( tmpdir(), 'liberation-chrome-physical-' ) );
+	try {
+		const html = `<html><body><header>${ 'Brand '.repeat( 150 ) }</header><nav>Navigation</nav><main>Seminar</main></body></html>`;
+		writeFileSync( join( root, 'seminar.html' ), html );
+		symlinkSync( 'seminar.html', join( root, 'alias.html' ) );
+		extractSharedChrome( root, [ 'seminar.html', 'alias.html' ] );
+		expect( existsSync( join( root, 'parts' ) ) ).toBe( false );
+		expect( readFileSync( join( root, 'seminar.html' ), 'utf8' ) ).toBe( html );
+		writeFileSync( join( root, 'other.html' ), html );
+		extractSharedChrome( root, [ 'seminar.html', 'alias.html', 'other.html' ] );
+		const result = readFileSync( join( root, 'seminar.html' ), 'utf8' );
+		expect( result ).toBe( readFileSync( join( root, 'other.html' ), 'utf8' ) );
+		expect( result ).toMatch( /^<html><body><!--#include virtual="\/parts\/header-[a-f0-9]+\.html" --><nav>Navigation<\/nav><main>Seminar<\/main><\/body><\/html>$/ );
+	} finally { rmSync( root, { recursive: true, force: true } ); }
+} );
 
 it( 'counts each source path once when admitting exact shared regions', () => {
 	const root = mkdtempSync( join( tmpdir(), 'liberation-chrome-source-paths-' ) );

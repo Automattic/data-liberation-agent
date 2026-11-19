@@ -1,6 +1,6 @@
 import type { WebsiteInventory } from './website-inventory.js';
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AnyNode, Element } from 'domhandler';
 import { includeReferences, parseLocatedStructure, sourceRange, type HtmlRange } from './site-includes.js';
@@ -55,7 +55,11 @@ function shareChrome( root: string, paths: string[], descendants: boolean, inven
 	// route-local attributes is shared on no route, so every route keeps the same
 	// structure (and its own landmark) instead of a route-dependent partition.
 	const groups = new Map< string, { id: string; length: number; exact: Set< string >; occurrences: Array< HtmlRange & { path: string } > } >();
+	const physicalPaths = new Set< string >();
 	for ( const path of new Set( paths ) ) {
+		const identity = realpathSync( join( root, path ) );
+		if ( physicalPaths.has( identity ) ) continue;
+		physicalPaths.add( identity );
 		const html = readFileSync( join( root, path ), 'utf8' );
 		const $ = parseLocatedStructure( html );
 		const partRole = /^parts\/(header|footer)-[a-f0-9]+\.html$/.exec( path )?.[ 1 ];
@@ -98,7 +102,7 @@ function shareChrome( root: string, paths: string[], descendants: boolean, inven
 			groups.set( key, group );
 		} );
 	}
-	const replacements = new Map< string, Array< HtmlRange & { include: string } > >();
+	const replacements = new Map< string, Array< HtmlRange & { include: string; digest: string } > >();
 	const created: string[] = [];
 	// Prefer maximal shared regions and avoid overlapping source ranges.
 	for ( const group of [ ...groups.values() ].sort( ( a, b ) => b.length - a.length || a.id.localeCompare( b.id ) ) ) {
@@ -120,13 +124,17 @@ function shareChrome( root: string, paths: string[], descendants: boolean, inven
 		created.push( `parts/${ id }.html` );
 		for ( const occurrence of occurrences ) {
 			const list = replacements.get( occurrence.path ) ?? [];
-			list.push( { ...occurrence, include } );
+			list.push( { ...occurrence, include, digest: createHash( 'sha256' ).update( fragment ).digest( 'hex' ) } );
 			replacements.set( occurrence.path, list );
 		}
 	}
 	for ( const [ path, ranges ] of replacements ) {
 		let html = readFileSync( join( root, path ), 'utf8' );
-		for ( const range of ranges.sort( ( a, b ) => b.start - a.start ) ) html = html.slice( 0, range.start ) + range.include + html.slice( range.end );
+		for ( const range of ranges.sort( ( a, b ) => b.start - a.start ) ) {
+			// Never apply stale offsets to a document changed since indexing.
+			if ( createHash( 'sha256' ).update( html.slice( range.start, range.end ) ).digest( 'hex' ) !== range.digest ) continue;
+			html = html.slice( 0, range.start ) + range.include + html.slice( range.end );
+		}
 		writeFileSync( join( root, path ), html );
 		inventory?.add( path );
 	}
