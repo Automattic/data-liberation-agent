@@ -1367,6 +1367,56 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	// viewport × stage × attempt, the summary counts each failed URL once.
 	const failedRoutes = new Set< string >();
 
+	// URL spelling only selects candidates. Successful, byte-identical response
+	// bodies prove equivalence before device checks and browser capture. Sharing
+	// the proof also prevents parallel workers from observing different pairs.
+	const documentAliases = new Map< string, Promise< string | undefined > >();
+	const notifiedDocumentAliases = new Set< string >();
+	const directoryIndexAlias = ( url: string ): Promise< string | undefined > => {
+		const directory = new URL( url );
+		directory.pathname = directory.pathname.replace( /index\.html?$/i, '' );
+		if ( ! directory.pathname.endsWith( '/' ) ) return Promise.resolve( undefined );
+		const target = urls.find( candidate => documentRequestUrl( candidate ) === directory.href );
+		const index = urls.find( candidate => {
+			const parsed = new URL( candidate );
+			return parsed.origin === directory.origin && parsed.search === directory.search &&
+				parsed.pathname.replace( /index\.html?$/i, '' ) === directory.pathname && /\/index\.html?$/i.test( parsed.pathname );
+		} );
+		if ( ! target || ! index ) return Promise.resolve( undefined );
+		let proof = documentAliases.get( index );
+		if ( ! proof ) {
+			proof = ( async () => {
+				let context: BrowserContext | undefined;
+				try {
+					const profile = desktopProfile ?? viewports[ 0 ];
+					context = await createSourceContext( browser, profileContextOptions( profile, await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly, governors: opts.governors } ) ), { governors: opts.governors, sourceUrl: entryUrl, sourceTelemetry: opts.sourceTelemetry } );
+					const bodies: Buffer[] = [];
+					for ( const candidate of [ target, index ] ) {
+						const page = await context.newPage();
+						const navigation = await navigateSourceDocument( page, candidate, { publicUrlsOnly: opts.publicUrlsOnly ?? false, routeScope: opts.routeScope, timeoutMs: SOURCE_NAVIGATION_LIMITS.timeoutMs } );
+						if ( navigation.boundary || navigation.redirectedTo || navigation.scriptNavigationUrl || navigation.response?.status() !== 200 ||
+							! /\btext\/html\b/i.test( navigation.response.headers()[ 'content-type' ] ?? '' ) ) return undefined;
+						bodies.push( await navigation.response.body() );
+						await page.close();
+					}
+					if ( ! bodies[ 0 ].length || ! bodies[ 0 ].equals( bodies[ 1 ] ) ) return undefined;
+					if ( referenceRoutes?.has( index ) ) referenceRoutes.add( target );
+					opts.onRouteAlias?.( index, target );
+					notifiedDocumentAliases.add( index );
+					return target;
+				} catch ( error ) {
+					if ( isIntegrityError( error ) ) throw error; // failure-class: integrity
+					// Inconclusive evidence leaves normal capture/retries in charge.
+					return undefined;
+				} finally {
+					await context?.close().catch( orElse( undefined ) );
+				}
+			} )();
+			documentAliases.set( index, proof );
+		}
+		return proof.then( canonical => url === index ? canonical : undefined );
+	};
+
 	const capturedAt = () => new Date().toISOString();
 
 	const reusedRoutes = new Set< string >();
@@ -1397,13 +1447,23 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			// The alias's reference evidence belongs to the canonical route.
 			if ( targetRoute ) {
 				if ( referenceRoutes?.has( url ) ) referenceRoutes.add( targetRoute );
-				opts.onRouteAlias?.( url, targetRoute );
+				if ( ! notifiedDocumentAliases.has( url ) ) opts.onRouteAlias?.( url, targetRoute );
 			}
 			skipped++;
-			sendLog( server, `[alias] ${ url } redirects to ${ target }` );
+			sendLog( server, `[alias] ${ url } resolves to ${ target }` );
 			completed++;
 			opts.onProgress?.( completed, urls.length, url );
 		};
+		if ( ! reuseOnly ) {
+			const target = await directoryIndexAlias( url );
+			if ( target ) {
+				if ( routeBudget && ! routeBudget.commit( url ) ) return;
+				if ( ! routeDeadlines.commit( url ) ) return;
+				await manifest.updateEntry( url, { slug, capturedAt: capturedAt(), redirectedTo: target } );
+				finishAlias( target );
+				return;
+			}
+		}
 		// Query renditions can resolve from one rendered navigation. Do this
 		// before opening the device comparison pair, using the same canonical
 		// reader and alias ownership path as baseline capture (#1077).
