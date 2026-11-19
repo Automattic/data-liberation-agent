@@ -2102,6 +2102,24 @@ describe( 'exportWebsiteCapture', () => {
 		expect( $( '#lost' ).attr( 'src' ) ).toBe( 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=' );
 	} );
 
+	it( 'declares the type of the localized files on a picture source', () => {
+		const capture = exportFixture( { directories: [ 'html', 'media', 'screenshots' ] } );
+		const outputDir = capture.build();
+		const first = 'https://cdn.example/a.webp';
+		const second = 'https://cdn.example/b.webp';
+		capture.file( join( 'html', 'homepage.html' ), `<html><body><picture><source type="image/webp" srcset="${ first } 1x, ${ second } 2x">` +
+				`<img alt="Sample" src="${ first }"></picture></body></html>` );
+		capture.manifest( {  version: 1,  entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },  } );
+		const media = MediaStubStore.load( outputDir );
+		capture.media( first, 'media/a.avif', 'sample a' , media );
+		capture.media( second, 'media/b.avif', 'sample b' , media );
+		media.flush();
+		exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'generic',  summary: {},  failures: [],  } );
+		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+		expect( $( 'source' ).attr( 'srcset' ) ).toBe( '/media/a.avif 1x, /media/b.avif 2x' );
+		expect( $( 'source' ).attr( 'type' ) ).toBe( 'image/avif' );
+	} );
+
 	it( 'does not read a lazy data-src as the src of an image that never loaded', () => {
 		const capture = exportFixture( { directories: [ 'html', 'media', 'screenshots' ] } );
 		const outputDir = capture.build();
