@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 // @ts-ignore TS6059: test fixture lives outside production rootDir.
 import { exportFixture } from '../../test/export-fixture.js';
 import { exportWebsiteCapture } from './capture-export.js';
@@ -91,6 +91,26 @@ it('keeps desktop only when the route has no phone capture', () => {
 	const result = JSON.parse(readFileSync(join(root, 'website/box-tree/index.json'), 'utf8'));
 	expect(result.viewports).toEqual({ desktop: { width: 1440, height: 900 } });
 	expect(Object.keys(result.nodes)).toEqual(['n0', 'n1']);
+});
+
+it('leaves out a sidecar over the per-file limit instead of writing a file the importer refuses', () => {
+	const fixture = exportFixture();
+	const root = fixture.build();
+	// A long listing: one observed node per row, enough to exceed a small limit.
+	const rows = Array.from({ length: 200 }, (_, i) => `r${i}`);
+	fixture.file('website/index.html', `<html data-blocks-engine-node-id="n0"><body data-blocks-engine-node-id="n1">${rows.map(id => `<p data-blocks-engine-node-id="${id}">row</p>`).join('')}</body></html>`);
+	fixture.file('website/about.html', '<html data-blocks-engine-node-id="n0"><body data-blocks-engine-node-id="n1"></body></html>');
+	fixture.json('box-tree/home.json', captured('html/home.html', 'desktop', { width: 1440, height: 900 }, { n0: ['n1'], n1: rows, ...Object.fromEntries(rows.map(id => [id, []])) }, 100));
+	fixture.json('box-tree/about.json', captured('html/about.html', 'desktop', { width: 1440, height: 900 }, { n0: ['n1'], n1: [] }, 100));
+	const pages = [{ sourcePath: 'html/home.html', path: 'index.html' }, { sourcePath: 'html/about.html', path: 'about.html' }];
+	const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+	try {
+		expect(writeExportBoxTrees(root, join(root, 'website'), pages, new WebsiteInventory(join(root, 'website')), new Map(), 4096)).toEqual(['website/box-tree/about.json']);
+		expect(existsSync(join(root, 'website/box-tree/index.json'))).toBe(false);
+		expect(stderr.mock.calls.map(([line]) => String(line)).join('')).toMatch(/box-tree sidecar website\/box-tree\/index\.json is \d+ bytes, over the 4096-byte per-file limit; not written/);
+	} finally {
+		stderr.mockRestore();
+	}
 });
 
 it('keeps phone identities distinct in assembled documents, leaving width-selected wrappers unobserved', () => {

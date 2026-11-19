@@ -41,6 +41,14 @@ const hasDeviceDocuments = (html: string): boolean =>
 	(html.includes('data-blocks-engine-capture-mobile-document') || html.includes('data-blocks-engine-capture-middle-document'))
 	&& cheerio.load(html)(DEVICE_DOCUMENT_WRAPPERS).length > 0;
 
+/**
+ * Largest box-tree sidecar export writes, including JSON encoding and newline.
+ * Coupled to Static Site Importer's compiler `max_file_bytes` (10 MiB): it refuses
+ * the whole request bundle when any source file is over it, so an oversized sidecar
+ * would turn optional geometry evidence into a failed import. Change both together.
+ */
+export const MAX_BOX_TREE_FILE_BYTES = 10 * 1024 * 1024;
+
 /** Box-tree sidecar bound to a final page plus the shared parts it includes. */
 export type ExportBoxTree = BoxTree & { includes?: Record<string, string> };
 
@@ -154,7 +162,7 @@ export function mergeMobileBoxTree(desktop: BoxTree, desktopHtml: string, mobile
  * (`website/about/index.html`), the virtual root importers address artifact files by.
  * Returns the capture-root paths written.
  */
-export function writeExportBoxTrees(captureRoot: string, websiteDir: string, pages: Array<{ sourcePath: string; mobileSourcePath?: string; path: string }>, inventory: WebsiteInventory, excludedBoxTrees: ReadonlyMap<string, number> = new Map()): string[] {
+export function writeExportBoxTrees(captureRoot: string, websiteDir: string, pages: Array<{ sourcePath: string; mobileSourcePath?: string; path: string }>, inventory: WebsiteInventory, excludedBoxTrees: ReadonlyMap<string, number> = new Map(), maxFileBytes = MAX_BOX_TREE_FILE_BYTES): string[] {
 	const directory = join(captureRoot, 'box-tree');
 	if (!existsSync(directory)) return [];
 	const sources = new Map<string, string>();
@@ -200,8 +208,15 @@ export function writeExportBoxTrees(captureRoot: string, websiteDir: string, pag
 		const tree = projectExportBoxTree(resolved.html, captured, `website/${page.path}`, bytes, includes);
 		// A captured resource must never be overwritten by generated evidence.
 		if (existsSync(join(websiteDir, path))) continue;
+		const content = JSON.stringify(tree) + '\n';
+		const contentBytes = Buffer.byteLength(content);
+		// Optional evidence: the page imports without it, but not with a file the importer refuses.
+		if (contentBytes > maxFileBytes) {
+			process.stderr.write(`[budget] box-tree sidecar website/${path} is ${contentBytes} bytes, over the ${maxFileBytes}-byte per-file limit; not written\n`);
+			continue;
+		}
 		mkdirSync(dirname(join(websiteDir, path)), { recursive: true });
-		writeFileSync(join(websiteDir, path), JSON.stringify(tree) + '\n');
+		writeFileSync(join(websiteDir, path), content);
 		inventory.add(path);
 		written.push(`website/${path}`);
 	}
