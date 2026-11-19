@@ -18,7 +18,11 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('publishes complete source-bound box t
 		h1::after{content:none}
 		.overlay{position:absolute;top:10px;right:4px;background:red;background-position:20% 30%;background-size:12px 14px}
 		@media(max-width:600px){.grid{grid-template-columns:1fr}}
-	</style></head><body><main><div><div><div class="grid"><div><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E"></div><div><h1>Builder</h1></div><span class="overlay">Overlay</span></div></div></div></main><a href="/other">Other</a></body></html>`;
+	</style></head><body><main><div><div><div class="grid"><div><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E"></div><div><h1>Builder</h1></div><span class="overlay">Overlay</span></div></div></div></main><a href="/other">Other</a><div id="fluid-offset" style="position:absolute;top:200px">Fluid</div><script>
+		function layout() { document.querySelector('#fluid-offset').style.inset = '200px auto auto ' + (innerWidth < 700 ? 20 : innerWidth * 0.1) + 'px'; }
+		addEventListener('resize', layout);
+		layout();
+	</script></body></html>`;
 	const server = createServer((req, res) => {
 		if (req.url !== '/' && req.url !== '/other') { res.writeHead(404); res.end('Not found'); return; }
 		res.setHeader('Content-Type', 'text/html'); res.end(fixture);
@@ -43,12 +47,19 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('publishes complete source-bound box t
 			expect(tree.source_hash).toBe(createHash('sha256').update(html).digest('hex'));
 			expect(receipt.reports).not.toContain(sidecar);
 			const $ = load(html);
+			const learnedStyles = $('style[data-blocks-engine-capture-fluid-rules],style[data-blocks-engine-capture-fluid-sheet-rules]').toArray();
+			expect(learnedStyles.length).toBeGreaterThan(0);
+			for (const element of learnedStyles) {
+				expect(tree.nodes[$(element).attr(NODE_ID_ATTRIBUTE)!]).toBeDefined();
+			}
+			expect(Object.keys(tree.viewports).sort()).toEqual(['desktop', 'mobile']);
 			const ids = $('*').toArray().map(element => $(element).attr(NODE_ID_ATTRIBUTE));
 			expect(new Set(ids).size).toBe(ids.length);
 			expect(ids).not.toContain(undefined);
 			expect(Object.keys(tree.nodes).sort()).toEqual(ids.sort());
 			$('*').each((_index, element) => {
 				const node = tree.nodes[$(element).attr(NODE_ID_ATTRIBUTE)!];
+				expect(Object.keys(node.viewports).sort()).toEqual(['desktop', 'mobile']);
 				expect(node.children).toEqual($(element).children().toArray().map(child => $(child).attr(NODE_ID_ATTRIBUTE)));
 				for (const viewport of ['desktop', 'mobile']) {
 					expect(Object.keys(node.viewports[viewport].used_styles).sort()).toEqual([...BOX_TREE_STYLES].sort());

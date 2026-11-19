@@ -447,15 +447,16 @@ export function baselineSteps(
 		if (state.boxTree && laterNodes) {
 			// Learning adds inert evidence sheets after the initial snapshot. Observe
 			// those new nodes synchronously too, without replacing baseline geometry.
+			// A <style> renders no box, so its one observation holds at every
+			// recorded width without discarding the tree's phone geometry.
 			const $ = load(learned);
 			for (const element of $('style[data-blocks-engine-capture-fluid-rules],style[data-blocks-engine-capture-fluid-sheet-rules]').toArray()) {
 				const id = $(element).attr('data-blocks-engine-node-id');
 				const parent = $(element).parent().attr('data-blocks-engine-node-id');
 				if (!id || !parent || state.boxTree.nodes[id] || !laterNodes[id] || !state.boxTree.nodes[parent]) continue;
-				state.boxTree.nodes[id] = { children: [], viewports: { [viewport.id]: laterNodes[id].viewports.capture } };
+				const observed = laterNodes[id].viewports.capture;
+				state.boxTree.nodes[id] = { children: [], viewports: Object.fromEntries(Object.keys(state.boxTree.viewports).map(name => [name, observed])) };
 				state.boxTree.nodes[parent].children.push(id);
-				state.boxTree.viewports = { [viewport.id]: { width: viewport.width, height: viewport.height } };
-				for (const node of Object.values(state.boxTree.nodes)) node.viewports = { [viewport.id]: node.viewports[viewport.id] };
 			}
 		}
 		const baseUrl = await page.evaluate( () => document.baseURI );
