@@ -7,6 +7,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PNG } from 'pngjs';
 import pixelmatch from 'pixelmatch';
+import type { Page } from 'playwright';
 
 export interface PixelEvidence {
 	score: number;
@@ -52,8 +53,11 @@ export function writePixelEvidence(
 	return { score, sourcePath, liberatedPath, diffPath };
 }
 
+interface PixelTile { x: number; y: number; width: number; height: number }
+interface PixelRegion { bounds: PixelTile; tiles: PixelTile[] }
+
 /** Four-connected 48px tiles; small paint noise never becomes a blocker. */
-export function pixelRegionFailures( sourcePng: Buffer, candidatePng: Buffer ): string[] {
+function pixelRegions( sourcePng: Buffer, candidatePng: Buffer ): PixelRegion[] {
 	const source = PNG.sync.read( sourcePng ), candidate = PNG.sync.read( candidatePng );
 	const width = Math.min( source.width, candidate.width ), height = Math.min( source.height, candidate.height );
 	const size = 48, columns = Math.ceil( width / size ), rows = Math.ceil( height / size );
@@ -70,7 +74,7 @@ export function pixelRegionFailures( sourcePng: Buffer, candidatePng: Buffer ): 
 		}
 		if ( changed / total > 0.1 ) mismatched.add( ty * columns + tx );
 	}
-	const failures: string[] = [];
+	const regions: PixelRegion[] = [];
 	for ( const seed of mismatched ) {
 		const queue = [ seed ];
 		mismatched.delete( seed );
@@ -85,7 +89,60 @@ export function pixelRegionFailures( sourcePng: Buffer, candidatePng: Buffer ): 
 				if ( mismatched.delete( next ) ) queue.push( next );
 			}
 		}
-		failures.push( `pixel region ${ minX },${ minY } ${ maxX - minX }x${ maxY - minY } (${ queue.length } tiles)` );
+		regions.push( { bounds: { x: minX, y: minY, width: maxX - minX, height: maxY - minY }, tiles: queue.map( tile => {
+			const x = tile % columns * size, y = Math.floor( tile / columns ) * size;
+			return { x, y, width: Math.min( size, width - x ), height: Math.min( size, height - y ) };
+		} ) } );
 	}
-	return failures;
+	return regions;
+}
+
+function regionFailure( region: PixelRegion, descriptor = 'page' ): string {
+	const { x, y, width, height } = region.bounds;
+	return `pixel region ${ x },${ y } ${ width }x${ height } (${ region.tiles.length } tiles) in ${ descriptor }`;
+}
+
+/** Without a candidate DOM, attribution is explicitly page-level. */
+export function pixelRegionFailures( sourcePng: Buffer, candidatePng: Buffer ): string[] {
+	return pixelRegions( sourcePng, candidatePng ).map( region => regionFailure( region ) );
+}
+
+/** Attribute full-page screenshot tiles without scrolling or changing the candidate. */
+export async function attributedPixelRegionFailures( page: Page, sourcePng: Buffer, candidatePng: Buffer ): Promise<string[]> {
+	const regions = pixelRegions( sourcePng, candidatePng );
+	if ( ! regions.length ) return [];
+	const descriptors = await page.evaluate( ( { regions, screenshotWidth } ) => {
+		// Full-page evidence is normalized to the emulated screen width, which
+		// can differ from CSS pixels on pages with a source-selected viewport.
+		const scale = screenshotWidth / ( window.visualViewport?.width ?? innerWidth );
+		// DOM order visits parents before children. Retain the deepest containing
+		// element, not a viewport hit-test (most tiles can be below the fold).
+		const elements = [ ...document.querySelectorAll( 'body, body *' ) ].map( element => {
+			const rect = element.getBoundingClientRect();
+			let depth = 0;
+			for ( let parent = element.parentElement; parent; parent = parent.parentElement ) depth++;
+			return { element, depth, x: ( rect.left + scrollX ) * scale, y: ( rect.top + scrollY ) * scale, width: rect.width * scale, height: rect.height * scale };
+		} ).filter( item => item.width > 0 && item.height > 0 && getComputedStyle( item.element ).visibility !== 'hidden' );
+		return regions.map( region => {
+			let common: Element | null = null;
+			for ( const tile of region.tiles ) {
+				let owner: Element = document.body, depth = -1;
+				for ( const item of elements ) {
+					if ( item.depth > depth && item.x <= tile.x && item.y <= tile.y && item.x + item.width >= tile.x + tile.width && item.y + item.height >= tile.y + tile.height ) {
+						owner = item.element; depth = item.depth;
+					}
+				}
+				if ( ! common ) common = owner;
+				else while ( common && ! common.contains( owner ) ) common = common.parentElement;
+			}
+			if ( ! common || common === document.body || common === document.documentElement ) return 'page';
+			for ( let ancestor: Element | null = common; ancestor && ancestor !== document.body; ancestor = ancestor.parentElement ) {
+				// Layout state classes (`wp-block-group-is-layout-flex`) name a variant, not the block.
+				const block = [ ...ancestor.classList ].find( token => /^wp-block-[a-z0-9]+(?:-[a-z0-9]+)*$/.test( token ) && ! token.includes( '-is-layout-' ) );
+				if ( block ) return `core/${ block.slice( 'wp-block-'.length ) }`;
+			}
+			return common.tagName.toLowerCase();
+		} );
+	}, { regions, screenshotWidth: page.viewportSize()!.width } );
+	return regions.map( ( region, index ) => regionFailure( region, descriptors[ index ] ) );
 }

@@ -34,8 +34,8 @@ describe( 'pixel regions', () => {
 		expect( pixelRegionFailures( source, source ) ).toEqual( [] );
 		const changed = PNG.sync.write( candidate );
 		expect( pixelRegionFailures( source, changed ) ).toEqual( [
-			'pixel region 48,1008 96x48 (2 tiles)',
-			'pixel region 720,5808 48x96 (2 tiles)',
+			'pixel region 48,1008 96x48 (2 tiles) in page',
+			'pixel region 720,5808 48x96 (2 tiles) in page',
 		] );
 		const dir = mkdtempSync( join( tmpdir(), 'liberation-evidence-' ) ); dirs.push( dir );
 		const result = writePixelEvidence( dir, source, changed );

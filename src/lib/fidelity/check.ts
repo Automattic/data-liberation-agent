@@ -37,7 +37,7 @@ import { observeViewportEntrances } from '../viewport-entrances.js';
 import { validateMotionContract, verifyCandidateMotion, type MotionContract, type MotionEvidence } from './candidate-motion.js';
 import { probeDialogs } from './dialog-probe.js';
 import { checkInternalRoute, type InternalRouteOutcome } from './internal-route.js';
-import { pixelRegionFailures, writePixelEvidence } from './evidence.js';
+import { attributedPixelRegionFailures, writePixelEvidence } from './evidence.js';
 import { captureFullPageScreenshot, captureViewportScreenshot } from './viewport-screenshot.js';
 import { checkSelfConsistency, type SelfConsistencyReport } from './self-consistency.js';
 import { REFERENCE_WIDTHS, readFrozenObservation, readReferenceArtifact, type FidelityReference, type FidelityStage } from './reference.js';
@@ -1825,6 +1825,7 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 					const evidenceDir = join( directory, 'compare', stage, evidenceSlug( route ), ...( profile ? [ evidenceSlug( profile ) ] : [] ), String( viewport ), state );
 					const regionEvidence = !! frozen.fullPagePng;
 					const candidatePng = regionEvidence ? await captureFullPageScreenshot( page, excludedMotion ) : options.screenshots ? await captureViewportScreenshot( page ) : undefined;
+					const pixelFailures = candidatePng && regionEvidence ? await attributedPixelRegionFailures( page, sourcePng, candidatePng ) : [];
 					const checked = await runFidelityChecks( { ...attribution, sourceUrl: stage === 'capture' ? `frozen:${ entries[0]!.observation!.path }` : local, candidateUrl: candidate, source, candidate: liberated, evidenceDir } );
 					// The foreign document is outside scope, but authored links to the
 					// requested source route must retain their query/hash meaning in both stages.
@@ -1849,7 +1850,7 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 						const retained = await applySourceCleanup( page, receipt.cleanup.policy );
 						if ( retained.removed || retained.residual || retained.failures.length ) checked.failures.push( 'Rendered artifact retains source attribution/advertising or cleanup audit failed' );
 					}
-					if ( candidatePng && regionEvidence ) checked.failures.push( ...pixelRegionFailures( sourcePng, candidatePng ) );
+					checked.failures.push( ...pixelFailures );
 					if ( candidatePng && ( options.screenshots || checked.failures.length ) ) {
 						const pixels = writePixelEvidence( evidenceDir, sourcePng, candidatePng );
 						checked.notes.push( 'score' in pixels ? `pixel evidence → ${ pixels.diffPath }` : pixels.error );
