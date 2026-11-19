@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import * as cheerio from 'cheerio';
+import type { Element } from 'domhandler';
 import { BOX_TREE_SCHEMA, NODE_ID_ATTRIBUTE, type BoxTree } from './screenshot/box-tree.js';
 import { resolvePage } from './site-includes.js';
 import type { WebsiteInventory } from './website-inventory.js';
@@ -206,6 +207,34 @@ export function mergeMobileBoxTree(desktop: BoxTree, desktopHtml: string, mobile
 }
 
 /**
+ * A phone-only fragment grafted into the desktop document (#1994) is the phone
+ * capture's own element, renamed `mobile:<id>`; no desktop node corresponds to it,
+ * so `mergeMobileBoxTree` cannot reach it. Its evidence is the phone capture's
+ * observation of that element, at every viewport the sidecar declares: the phone
+ * width is where it renders, and at wider widths the capture's device-island gate,
+ * not its box, decides that it stays hidden. A fragment element whose phone node
+ * has another tag, or lacks a declared viewport, stays unobserved.
+ */
+export function graftPhoneFragmentObservations(tree: BoxTree, html: string, mobile: BoxTree, mobileHtml: string): BoxTree {
+	if (!html.includes(MOBILE_ONLY_FRAGMENT.slice(1))) return tree;
+	const $ = cheerio.load(html);
+	const tags = new Map([...signaturesOf(mobileHtml)].map(([id, signature]) => [id, signature.slice(0, signature.indexOf('#'))]));
+	const declared = Object.keys(tree.viewports);
+	const nodes: BoxTree['nodes'] = { ...tree.nodes };
+	$(MOBILE_ONLY_FRAGMENT).filter((_index, fragment) => $(fragment).closest(DEVICE_DOCUMENT_WRAPPERS).length === 0).each((_index, fragment) => {
+		$(fragment).find(`[${NODE_ID_ATTRIBUTE}]`).addBack(`[${NODE_ID_ATTRIBUTE}]`).each((_i, element) => {
+			const id = $(element).attr(NODE_ID_ATTRIBUTE)!;
+			const phoneId = id.slice('mobile:'.length);
+			const node = id.startsWith('mobile:') && Object.hasOwn(mobile.nodes, phoneId) ? mobile.nodes[phoneId] : undefined;
+			if (!node || Object.hasOwn(nodes, id) || tags.get(phoneId) !== (element as Element).tagName
+				|| !declared.every(viewport => Object.hasOwn(node.viewports, viewport))) return;
+			nodes[id] = { children: [], viewports: Object.fromEntries(declared.map(viewport => [viewport, node.viewports[viewport]])) };
+		});
+	});
+	return { ...tree, nodes };
+}
+
+/**
  * Called after all HTML rewrites, including shared-part extraction, inside publication.
  * Sidecars are website files (`website/box-tree/<route>.json`), not receipt reports:
  * importers recognize them by path, and listing them as reports too would deliver each
@@ -251,7 +280,9 @@ export function writeExportBoxTrees(captureRoot: string, websiteDir: string, pag
 		} else if (mobile) {
 			const desktopHtml = join(captureRoot, captured.source_path);
 			const mobileHtml = join(captureRoot, mobile.source_path);
-			captured = mergeMobileBoxTree(captured, existsSync(desktopHtml) ? readFileSync(desktopHtml, 'utf8') : '', mobile, existsSync(mobileHtml) ? readFileSync(mobileHtml, 'utf8') : '');
+			const phoneHtml = existsSync(mobileHtml) ? readFileSync(mobileHtml, 'utf8') : '';
+			captured = mergeMobileBoxTree(captured, existsSync(desktopHtml) ? readFileSync(desktopHtml, 'utf8') : '', mobile, phoneHtml);
+			captured = graftPhoneFragmentObservations(captured, resolved.html, mobile, phoneHtml);
 		}
 		const includes: Record<string, string> = {};
 		for (const part of resolved.files.filter(path => path !== resolve(file)).map(path => relative(resolve(websiteDir), path).split('\\').join('/')).sort())
