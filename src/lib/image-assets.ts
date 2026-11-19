@@ -1,14 +1,14 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { copyExclusive, createExclusive, moveExclusive } from './media-fetch/exclusive-file.js';
 import { basename, extname, join, resolve as resolvePath } from 'node:path';
-import * as cheerio from 'cheerio';
 import postcss from 'postcss';
 import { imageSize } from 'image-size';
 import { rewriteCssUrlReferences, srcsetCandidates } from './srcset.js';
 import { metadataImageReferences } from './identity-resources.js';
+import { readDocument, withParsedDocuments } from './parsed-documents.js';
 import { MAX_PORTABLE_MEDIA_BYTES, MAX_PORTABLE_MEDIA_DIMENSION, portableSrcsetRepresentative } from './portable-media-limits.js';
-import { deriveFilenameFromUrl, downloadMedia, existingMediaNames, extensionFromContentType, safeFilename, type DownloadResult } from './media-fetch/media.js';
+import { deriveFilenameFromUrl, downloadMedia, existingMediaNames, extensionFromContentType, resolveMediaPath, safeFilename, type DownloadResult } from './media-fetch/media.js';
 import { isIntegrityError } from './failure-class.js';
 import { launchChromium } from './browser-kit/index.js';
 import { MediaStubStore } from './resume-state/index.js';
@@ -177,7 +177,7 @@ export function collectAssets( documents: ImageDocuments, resolve?: ImageResolve
 		uses.push( { urls, original, size, references, kind, candidates, fallback } );
 	};
 	for ( const { html, url: documentUrl } of documents ) {
-		const $ = cheerio.load( html );
+		const $ = readDocument( html );
 		let url = documentUrl;
 		try { url = new URL( $( 'base[href]' ).first().attr( 'href' ) ?? documentUrl, documentUrl ).href; }
 		catch { /* Malformed base: retain the document URL. */ }
@@ -402,6 +402,34 @@ async function decodeImage( page: import('playwright').Page, bytes: Buffer, cont
 		maxBytes: MAX_PORTABLE_MEDIA_BYTES, maxDimension: MAX_PORTABLE_MEDIA_DIMENSION } );
 }
 
+/** Jobs acquired ahead of in-order publication; downloads share the source governor. */
+const ACQUISITION_WINDOW = 8;
+/** Concurrent decoding pages: each canvas decode holds up to ~160 MB of pixels. */
+const DECODE_PAGES = 4;
+
+interface Verified {
+	contentType: string;
+	metadata: { width?: number; height?: number; alpha?: boolean; orientation?: number };
+	encoded?: { data: string; width: number; height: number };
+	alpha?: boolean;
+	sha256: string;
+}
+
+/** One job's acquisition outcome, published later in job order. */
+interface Acquired {
+	/** URL-owned file the bytes were read from. */
+	cachedPath?: string;
+	/** Downloaded bytes in a private directory, named in media/ at publication. */
+	staged?: { path: string; filename: string };
+	verified?: Verified;
+	/** Names a failed download claimed; an in-order loop would have reserved them in media/. */
+	reservedNames?: string[];
+	/** Failed before any file was placed. */
+	failure?: { error: unknown };
+	/** Placed, then failed verification. */
+	verifyFailure?: { error: unknown };
+}
+
 /** Verify originals first, then acquire responsive alternatives before the deadline.
  * Stub aliases are a compatibility projection, never evidence of rendition bytes.
  * Alternatives use the same download/signature/decode path and remain distinct records.
@@ -411,7 +439,7 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 	// Preserve responsive hints while streaming documents through identity collection.
 	function* inventory(): ImageDocuments {
 		for ( const { html, url } of documents ) {
-			const $ = cheerio.load( html );
+			const $ = readDocument( html );
 			$( 'img,picture source' ).each( ( _index, node ) => {
 				const image = $( node ).is( 'source' ) ? $( node ).closest( 'picture' ).find( 'img' ).first() : $( node );
 				const inline = /(?:^|;)\s*width\s*:\s*([\d.]+)px/i.exec( image.attr( 'style' ) ?? '' );
@@ -430,7 +458,8 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 	const manifestPath = join( root, 'resources', 'manifest.json' );
 	const resources: CapturedResourceManifest['resources'] = existsSync( manifestPath )
 		? JSON.parse( readFileSync( manifestPath, 'utf8' ) ).resources ?? {} : {};
-	const images = collectAssets( inventory(), resolve, source => Boolean( resources[ source ] ) );
+	// The hint pass, identity collection and metadata references share one parse per document.
+	const images = withParsedDocuments( () => collectAssets( inventory(), resolve, source => Boolean( resources[ source ] ) ) );
 	for ( const record of images ) for ( const source of record.source_urls ) {
 		const parsed = new URL( source );
 		const cdnWidth = Number( parsed.searchParams.get( 'w' ) ?? parsed.searchParams.get( 'width' ) ) ||
@@ -445,9 +474,60 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 	const mediaDir = join( root, 'media' );
 	const names = existingMediaNames( mediaDir );
 	let browser: import('playwright').Browser | undefined;
+	let stagingRoot: string | undefined;
+	const inflight = new Map<number, Promise<Acquired>>();
+	// Decoding pages: one renderer each, created on first use, reused after.
+	const idlePages: import('playwright').Page[] = [];
+	const pageWaiters: Array<( page: import('playwright').Page | undefined ) => void> = [];
+	let launching: Promise<import('playwright').Browser> | undefined;
+	let pageCount = 0;
+	const withPage = async <T>( run: ( page: import('playwright').Page ) => Promise<T> ): Promise<T> => {
+		let page: import('playwright').Page | undefined;
+		while ( ! page ) {
+			page = idlePages.pop();
+			if ( page ) break;
+			if ( pageCount < DECODE_PAGES ) {
+				pageCount++;
+				try {
+					launching ??= launchChromium( { timeout: 30000 } ).then( launched => ( browser = launched ) );
+					const opened = await ( await launching ).newPage();
+					await opened.route( '**/*', route => route.abort() );
+					page = opened;
+				} catch ( error ) {
+					// A failed launch is retried by the next decode, as before.
+					pageCount--;
+					if ( ! browser ) launching = undefined;
+					pageWaiters.shift()?.( undefined );
+					throw error; // failure-class: operational
+				}
+				break;
+			}
+			page = await new Promise<import('playwright').Page | undefined>( resolve => pageWaiters.push( resolve ) );
+		}
+		try {
+			return await run( page );
+		} finally {
+			const waiter = pageWaiters.shift();
+			if ( waiter ) waiter( page );
+			else idlePages.push( page );
+		}
+	};
+	const verify = async ( record: ImageAssetRecord, source: string, bytes: Buffer ): Promise<Verified> => {
+		const contentType = record.kind === 'image' ? imageContentType( bytes ) : resourceContentType( bytes, record.kind!, source );
+		if ( ! contentType ) throw new Error( 'unverified resource bytes or placeholder' ); // failure-class: operational
+		const decoded = record.kind === 'image' ? await withPage( page => decodeImage( page, bytes, contentType ) ) : undefined;
+		const { rendition: encoded, ...metadata } = decoded ?? {};
+		if ( contentType === 'image/svg+xml' ) Object.assign( metadata, svgDeclaredSize( bytes ) );
+		// Browser decoding verifies pixels but applies EXIF rotation. The
+		// original describes the stored JPEG frame, not its display geometry.
+		if ( contentType === 'image/jpeg' ) {
+			const { width, height, orientation } = imageSize( bytes );
+			Object.assign( metadata, { width, height }, orientation === undefined ? {} : { orientation } );
+		}
+		return { contentType, metadata, encoded, alpha: decoded?.alpha, sha256: createHash( 'sha256' ).update( bytes ).digest( 'hex' ) };
+	};
 	try {
 		if ( images.length ) {
-			let page: import('playwright').Page | undefined;
 			// Captured aliases must pass the original's signature/decode/extension
 			// checks too. Uncaptured alternatives retain bounded fallback acquisition.
 			const jobs: Array<{ record: ImageAssetRecord; rendition: boolean; parent?: ImageAssetRecord; rest?: ImageAssetRecord[] }> =
@@ -464,84 +544,113 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 				}
 			}
 			const encodedRenditions: Array<{ record: ImageAssetRecord; encoded: { data: string; width: number; height: number }; alpha: boolean }> = [];
-			for ( const { record, rendition, parent, rest } of jobs ) {
+			// Acquisition (download, read, decode) is independent per job and runs
+			// in a bounded window; publication into media/ (names, moves, records,
+			// stubs, follow-up jobs) stays strictly in job order, so every name and
+			// record is the one a one-at-a-time loop assigns.
+			type Job = typeof jobs[number];
+			const cachedPathFor = ( { record, rendition }: Job ) => [ resources[ record.resolved_original ]?.path, ...( rendition ? [] : [ stubs.get( record.resolved_original )?.localPath ] ) ]
+				.filter( ( path ): path is string => Boolean( path ) )
+				.map( path => resolvePath( root, path ) )
+				.find( path => pathWithin( root, path ) && existsSync( path ) );
+			const acquire = async ( job: Job ): Promise<Acquired> => {
+				const { record } = job;
 				const source = record.resolved_original;
+				let cachedPath: string | undefined;
+				let staged: Acquired['staged'];
+				const reserved = new Map<string, number>();
 				try {
 					if ( /\/_missing-media\/|\/(?:placeholder|missing-image)\.(?:svg|png|gif|webp)(?:[?#]|$)/i.test( source ) )
 						throw new Error( 'source references a known image placeholder' ); // failure-class: operational
 					// Reuse the URL-owned file, never a filename guess or a different rendition.
-					const cachedPath = [ resources[ source ]?.path, ...( rendition ? [] : [ stubs.get( source )?.localPath ] ) ]
-						.filter( ( path ): path is string => Boolean( path ) )
-						.map( path => resolvePath( root, path ) )
-						.find( path => pathWithin( root, path ) && existsSync( path ) );
+					cachedPath = cachedPathFor( job );
 					if ( ! cachedPath && deadline !== undefined && Date.now() >= deadline )
 						throw new Error( 'resource acquisition deadline reached' ); // failure-class: operational
-					// Keep verification/extension correction in media/, without mutating captured resources.
-					let result: Pick<DownloadResult, 'localPath' | 'filename' | 'error'>;
-					if ( cachedPath && pathWithin( mediaDir, cachedPath ) ) {
-						result = { localPath: cachedPath, filename: basename( cachedPath ), error: null };
-					} else if ( cachedPath ) {
-						mkdirSync( mediaDir, { recursive: true } );
-						const rawFilename = deriveFilenameFromUrl( new URL( source ) ) || basename( cachedPath );
-						const destination = copyExclusive( cachedPath, () => join( mediaDir, safeFilename( rawFilename, names ) ) );
-						result = { localPath: destination, filename: basename( destination ), error: null };
-					} else {
-						result = await downloadMedia( source, mediaDir, names, undefined, { preserveOriginal: true, deadline } );
-					}
-					if ( ! result.localPath ) throw new Error( result.error ?? 'resource download failed' ); // failure-class: operational
-					const bytes = readFileSync( result.localPath );
-					const contentType = record.kind === 'image' ? imageContentType( bytes ) : resourceContentType( bytes, record.kind!, source );
-					if ( ! contentType ) throw new Error( 'unverified resource bytes or placeholder' ); // failure-class: operational
-					if ( record.kind === 'image' && ! page ) {
-						browser ??= await launchChromium( { timeout: 30000 } );
-						page = await browser.newPage();
-						await page.route( '**/*', route => route.abort() );
-					}
-					const decoded = record.kind === 'image' ? await decodeImage( page!, bytes, contentType ) : undefined;
-					const { rendition: encoded, ...metadata } = decoded ?? {};
-					if ( contentType === 'image/svg+xml' ) Object.assign( metadata, svgDeclaredSize( bytes ) );
-					// Browser decoding verifies pixels but applies EXIF rotation. The
-					// original describes the stored JPEG frame, not its display geometry.
-					if ( contentType === 'image/jpeg' ) {
-						const { width, height, orientation } = imageSize( bytes );
-						Object.assign( metadata, { width, height }, orientation === undefined ? {} : { orientation } );
-					}
-					// Even a lying response header's extension follows the verified bytes.
-					const extension = contentType === 'text/plain' && extname( new URL( source ).pathname ).toLowerCase() === '.csv'
-			? '.csv' : extensionFromContentType( contentType );
-					const currentExtension = extname( result.localPath );
-					let localPath = result.localPath;
-					if ( currentExtension.toLowerCase() !== extension ) {
-						const base = currentExtension ? result.filename!.slice( 0, -currentExtension.length ) : result.filename!;
-						localPath = moveExclusive( result.localPath, () => join( mediaDir, safeFilename( `${ base }${ extension }`, names ) ) );
-					}
-					record.original = { source_url: source, content_type: contentType, ...metadata, sha256: createHash( 'sha256' ).update( bytes ).digest( 'hex' ) };
-					record.local_path = localPath;
-					delete record.error;
-					if ( encoded && ! rendition ) encodedRenditions.push( { record, encoded, alpha: decoded!.alpha } );
-					if ( ! rendition ) for ( const url of record.source_urls ) stubs.markSuccess( url, localPath );
-					else ( parent!.renditions ??= [] ).push( record );
-					if ( ! rendition && record.kind === 'image' ) {
-						const widths = Object.entries( record.rendition_widths ?? {} )
-							.filter( ( [ url, width ] ) => url !== source && ! resources[ url ] && width <= MAX_PORTABLE_MEDIA_DIMENSION && width < ( record.original!.width ?? Infinity ) )
-							.sort( ( a, b ) => a[ 1 ] - b[ 1 ] || a[ 0 ].localeCompare( b[ 0 ] ) );
-						const adequate = widths.findIndex( ( [ , width ] ) => width >= ( record.rendered_width ?? 0 ) );
-						// Try the nearest adequate rendition, then smaller fallbacks. Each
-						// request remains deadline-bound and bypasses aliased stub bytes.
-						const ordered = adequate < 0 ? widths.reverse() : [ widths[ adequate ], ...widths.slice( 0, adequate ).reverse() ];
-						const children: ImageAssetRecord[] = ordered.map( ( [ url ] ) => ( {
-							kind: 'image', destination_owner: record.destination_owner,
-							source_urls: [ url ], references: record.references,
-							resolved_original: url, original: null,
-						} ) );
-						if ( children.length ) jobs.push( { record: children[ 0 ], rendition: true, parent: record, rest: children.slice( 1 ) } );
+					if ( ! cachedPath ) {
+						// Download into a private directory; publication names it in media/.
+						stagingRoot ??= mkdtempSync( join( root, '.asset-staging-' ) );
+						const result = await downloadMedia( source, mkdtempSync( join( stagingRoot, 'job-' ) ), reserved, undefined, { preserveOriginal: true, deadline } );
+						if ( ! result.localPath ) throw new Error( result.error ?? 'resource download failed' ); // failure-class: operational
+						staged = { path: result.localPath, filename: result.filename! };
 					}
 				} catch ( error ) {
-					if ( isIntegrityError( error ) ) throw error; // failure-class: integrity
-					record.error = String( error );
-					if ( ! rendition ) for ( const url of record.source_urls ) stubs.markFailure( url, record.error );
-					else if ( rest?.length ) jobs.push( { record: rest[ 0 ], rendition: true, parent, rest: rest.slice( 1 ) } );
+					return { cachedPath, failure: { error }, reservedNames: [ ...reserved.keys() ] };
 				}
+				try {
+					return { cachedPath, staged, verified: await verify( record, source, readFileSync( cachedPath ?? staged!.path ) ) };
+				} catch ( error ) {
+					return { cachedPath, staged, verifyFailure: { error } };
+				}
+			};
+			const publish = ( { record, rendition, parent }: Job, acquired: Acquired ): { error: unknown } | undefined => {
+				if ( acquired.failure ) return acquired.failure;
+				const source = record.resolved_original;
+				const { cachedPath, staged } = acquired;
+				// Keep verification/extension correction in media/, without mutating captured resources.
+				let result: Pick<DownloadResult, 'localPath' | 'filename'>;
+				if ( cachedPath && pathWithin( mediaDir, cachedPath ) ) {
+					result = { localPath: cachedPath, filename: basename( cachedPath ) };
+				} else if ( cachedPath ) {
+					mkdirSync( mediaDir, { recursive: true } );
+					const rawFilename = deriveFilenameFromUrl( new URL( source ) ) || basename( cachedPath );
+					const destination = copyExclusive( cachedPath, () => join( mediaDir, safeFilename( rawFilename, names ) ) );
+					result = { localPath: destination, filename: basename( destination ) };
+				} else {
+					mkdirSync( mediaDir, { recursive: true } );
+					const destination = moveExclusive( staged!.path, () => resolveMediaPath( safeFilename( staged!.filename, names ), mediaDir ) );
+					result = { localPath: destination, filename: basename( destination ) };
+				}
+				if ( acquired.verifyFailure ) return acquired.verifyFailure;
+				const { contentType, metadata, encoded, alpha, sha256 } = acquired.verified!;
+				// Even a lying response header's extension follows the verified bytes.
+				const extension = contentType === 'text/plain' && extname( new URL( source ).pathname ).toLowerCase() === '.csv'
+			? '.csv' : extensionFromContentType( contentType );
+				const currentExtension = extname( result.localPath! );
+				let localPath = result.localPath!;
+				if ( currentExtension.toLowerCase() !== extension ) {
+					const base = currentExtension ? result.filename!.slice( 0, -currentExtension.length ) : result.filename!;
+					localPath = moveExclusive( result.localPath!, () => join( mediaDir, safeFilename( `${ base }${ extension }`, names ) ) );
+				}
+				record.original = { source_url: source, content_type: contentType, ...metadata, sha256 };
+				record.local_path = localPath;
+				delete record.error;
+				if ( encoded && ! rendition ) encodedRenditions.push( { record, encoded, alpha: alpha! } );
+				if ( ! rendition ) for ( const url of record.source_urls ) stubs.markSuccess( url, localPath );
+				else ( parent!.renditions ??= [] ).push( record );
+				if ( ! rendition && record.kind === 'image' ) {
+					const widths = Object.entries( record.rendition_widths ?? {} )
+						.filter( ( [ url, width ] ) => url !== source && ! resources[ url ] && width <= MAX_PORTABLE_MEDIA_DIMENSION && width < ( record.original!.width ?? Infinity ) )
+						.sort( ( a, b ) => a[ 1 ] - b[ 1 ] || a[ 0 ].localeCompare( b[ 0 ] ) );
+					const adequate = widths.findIndex( ( [ , width ] ) => width >= ( record.rendered_width ?? 0 ) );
+					// Try the nearest adequate rendition, then smaller fallbacks. Each
+					// request remains deadline-bound and bypasses aliased stub bytes.
+					const ordered = adequate < 0 ? widths.reverse() : [ widths[ adequate ], ...widths.slice( 0, adequate ).reverse() ];
+					const children: ImageAssetRecord[] = ordered.map( ( [ url ] ) => ( {
+						kind: 'image', destination_owner: record.destination_owner,
+						source_urls: [ url ], references: record.references,
+						resolved_original: url, original: null,
+					} ) );
+					if ( children.length ) jobs.push( { record: children[ 0 ], rendition: true, parent: record, rest: children.slice( 1 ) } );
+				}
+				return undefined;
+			};
+			const fail = ( { record, rendition, parent, rest }: Job, error: unknown ) => {
+				if ( isIntegrityError( error ) ) throw error; // failure-class: integrity
+				record.error = String( error );
+				if ( ! rendition ) for ( const url of record.source_urls ) stubs.markFailure( url, record.error );
+				else if ( rest?.length ) jobs.push( { record: rest[ 0 ], rendition: true, parent, rest: rest.slice( 1 ) } );
+			};
+			for ( let index = 0, started = 0; index < jobs.length; index++ ) {
+				for ( ; started < jobs.length && started < index + ACQUISITION_WINDOW; started++ ) inflight.set( started, acquire( jobs[ started ] ) );
+				let acquired = await inflight.get( index )!;
+				inflight.delete( index );
+				// An earlier publication can move or create this job's URL-owned
+				// file; acquire again against what an in-order loop would see.
+				if ( acquired.cachedPath !== cachedPathFor( jobs[ index ] ) ) acquired = await acquire( jobs[ index ] );
+				for ( const name of acquired.failure ? acquired.reservedNames ?? [] : [] ) safeFilename( name, names );
+				let outcome: { error: unknown } | undefined;
+				try { outcome = publish( jobs[ index ], acquired ); } catch ( error ) { outcome = { error }; }
+				if ( outcome ) fail( jobs[ index ], outcome.error );
 			}
 			// Source renditions win. Only publish a locally encoded fallback after
 			// all independent acquisition attempts have finished.
@@ -571,7 +680,11 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 			record.error = `Resource verification unavailable: ${ String( error ) }`;
 			for ( const url of record.source_urls ) stubs.markFailure( url, record.error );
 		}
-	} finally { await browser?.close().catch( () => {} ); }
+	} finally {
+		await Promise.allSettled( inflight.values() );
+		await browser?.close().catch( () => {} );
+		if ( stagingRoot ) rmSync( stagingRoot, { recursive: true, force: true } );
+	}
 	// Query aliases collapse only after verification: query parameters can select different bytes.
 	const verified = new Map<string, ImageAssetRecord>();
 	for ( let i = 0; i < images.length; i++ ) {

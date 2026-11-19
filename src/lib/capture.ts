@@ -381,7 +381,12 @@ export async function downloadCaptureSectionMedia(
 			yield { url: document.url, html: document.css ? `<style>${ text }</style>` : text };
 		}
 	}
+	// Most of this phase is verifying every captured asset, not section downloads.
+	const verificationStartedAt = Date.now();
 	const imageAssets = await captureAssets( outputDir, imageDocuments(), deadline, resolveImageOriginal );
+	process.stderr.write(
+		`[timing] asset-verification ${ Date.now() - verificationStartedAt }ms (${ imageAssets.filter( record => record.original ).length } of ${ imageAssets.length } verified)\n`
+	);
 	const recordedImageUrls = new Set( imageAssets.flatMap( record => record.source_urls ) );
 	const stubs = MediaStubStore.load( outputDir );
 	const mediaDir = join( outputDir, 'media' );
