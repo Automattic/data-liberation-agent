@@ -89,6 +89,25 @@ describe('independent media writers', () => {
   });
 });
 
+describe('downloadMedia unread bodies', () => {
+  // An unread fetch body pauses undici's parser; a source that then closes the
+  // socket crashes Node 22 with `assert(!this.paused)` (loremipsum.io import).
+  it('cancels the body of a response it rejects before reading', async () => {
+    const dir = mkdtempSync(join(process.cwd(), '.tmp-test-media-'));
+    let cancelled = 0;
+    const errorResponse = () => new Response(
+      new ReadableStream({ pull: controller => controller.enqueue(new Uint8Array(1)), cancel: () => { cancelled++; } }),
+      { status: 404, headers: { 'content-type': 'text/html' } },
+    );
+    try {
+      vi.stubGlobal('fetch', vi.fn(async () => errorResponse()));
+      const result = await downloadMedia('https://cdn.example.com/missing.jpg', dir, new Map());
+      expect(result.error).toBe('HTTP 404');
+      expect(cancelled).toBe(1);
+    } finally { vi.unstubAllGlobals(); rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
 describe('sanitizeMediaFilename', () => {
   it('slugifies spaces and %-encoding, preserves extension', () => {
     expect(sanitizeMediaFilename('logo white_edited.png')).toBe('logo-white_edited.png');

@@ -346,6 +346,7 @@ async function downloadMediaOnce(
   seenHashes?: Map<string, string>,
   opts?: DownloadMediaOpts,
 ): Promise<DownloadResult> {
+  let response: Response | undefined;
   try {
     // assertPublicHttpUrl (inside fetchMediaResponse) is the SSRF gate; parse
     // here only to derive the filename. Reject non-http(s)/internal up front so
@@ -361,7 +362,7 @@ async function downloadMediaOnce(
     // size (e.g. Wix fill transforms), but keep the filename/key derived from the
     // ORIGINAL url so the source→local rewrite map stays consistent. No-op for
     // URLs without a known upgrade rule.
-    const response = await fetchMediaResponse(opts?.preserveOriginal ? url : upgradeMediaUrl(url), opts?.preserveOriginal, opts?.deadline);
+    response = await fetchMediaResponse(opts?.preserveOriginal ? url : upgradeMediaUrl(url), opts?.preserveOriginal, opts?.deadline);
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
@@ -511,6 +512,13 @@ async function downloadMediaOnce(
     const bytes = statSync(destPath).size;
     return { url, localPath: destPath, filename, error: null, bytes, ...svgExtras };
   } catch (err) {
+    // A response rejected before its body was read (an HTTP error status, a
+    // failed file open) still holds a paused undici parser. If the source then
+    // closes the socket, Node 22's undici fails `assert(!this.paused)` in a
+    // socket handler and the process exits, so release it here.
+    if (response && !response.bodyUsed) {
+      try { await response.body?.cancel(); } catch { /* ignore */ }
+    }
     return { url, localPath: null, filename: null, error: (err as Error).message, bytes: 0 };
   }
 }

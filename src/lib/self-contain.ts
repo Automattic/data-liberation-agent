@@ -22,8 +22,10 @@ const TRANSPARENT_IMAGE_PAYLOAD = TRANSPARENT_IMAGE.slice( TRANSPARENT_IMAGE.ind
  * `rel` values that make a `<link>` fetch something. `canonical` and
  * `alternate` are metadata: they name a URL without requesting it, so a copy
  * that still points at its origin there is not reaching out to the network.
+ * `compression-dictionary` is fetched at idle time so later responses can be
+ * dictionary-compressed (ad stacks such as Google Publisher Tag inject one).
  */
-export const ASSET_LINK_REL = /^(?:stylesheet|preload|prefetch|preconnect|dns-prefetch|prerender|modulepreload|manifest)$|(?:^|-)icon$/;
+export const ASSET_LINK_REL = /^(?:stylesheet|preload|prefetch|preconnect|dns-prefetch|prerender|modulepreload|manifest|compression-dictionary)$|(?:^|-)icon$/;
 
 // `data:` and `blob:` URIs carry their bytes inline (or reference an in-memory
 // object): there is nothing on the network to fetch, so neither is ever a

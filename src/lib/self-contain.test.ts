@@ -31,6 +31,7 @@ describe( 'self-contain', () => {
 				'<link rel="canonical" href="https://example.com/">',
 				'<link rel="preconnect" href="https://siteassets.example.com">',
 				'<link rel="dns-prefetch" href="//cdn.example">',
+				'<link rel="compression-dictionary" href="https://ads.example/pagead/managed/dict/gpt">',
 				'<link rel="preload" as="script" href="https://cdn.example/app.js">',
 				'<link rel="stylesheet" href="https://uncaptured.example/theme.css">',
 				'<link rel="stylesheet" href="/assets/css/site.css">',
@@ -45,6 +46,7 @@ describe( 'self-contain', () => {
 		expect( html ).not.toContain( 'siteassets.example.com' );
 		expect( html ).not.toContain( 'uncaptured.example' );
 		expect( html ).not.toContain( 'cdn.example' );
+		expect( html ).not.toContain( 'ads.example' );
 		expect( html ).toContain( 'href="https://example.com/"' );
 		expect( html ).toContain( 'href="https://external.example/about"' );
 		expect( html ).toContain( 'href="/assets/css/site.css"' );
