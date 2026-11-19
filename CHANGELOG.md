@@ -15,6 +15,12 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.36.18] - 2026-11-19
+
+### Changed
+- regenerate plugin bundles
+- Motion hold: hold source re-armed timers, settle transitions and read hidden slides as hidden
+
 ## [0.36.17] - 2026-11-19
 
 ### Changed
