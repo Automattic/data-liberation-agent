@@ -12,6 +12,7 @@ import {
 } from './export-total-budget.js';
 import { MediaStubStore } from './resume-state/index.js';
 import { TRANSPARENT_IMAGE_DATA_URL } from './portable-assets.js';
+import { BOX_TREE_SCHEMA } from './screenshot/box-tree.js';
 
 const SOURCE = 'https://example.com/';
 const ABOUT = 'https://example.com/about';
@@ -73,7 +74,7 @@ interface Receipt {
 	discoveryDiagnostics: Array< { code: string; url: string; reason: string; unit?: string; severity?: string; metrics?: Record< string, number > } >;
 	summary: { routesCaptured: number; routesFailed: number; complete: boolean };
 	routes: Array< { url: string; path: string } >;
-	exportBudget: { maxTotalBytes: number; maxFiles: number; totalBytes: number; files: number; withinBudget: boolean; droppedAssets: number; droppedRoutes: number; passes: number; final?: { totalBytes: number; files: number; withinBudget: boolean } };
+	exportBudget: { maxTotalBytes: number; maxFiles: number; totalBytes: number; files: number; withinBudget: boolean; droppedAssets: number; droppedBoxTrees: number; droppedRoutes: number; passes: number; final?: { totalBytes: number; files: number; withinBudget: boolean } };
 }
 
 const receiptOf = ( outputDir: string ): Receipt => JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) ) as Receipt;
@@ -111,6 +112,40 @@ describe( 'export total budget (maxTotalBytes, maxFiles)', () => {
 		expect( budgetRows( roomy.receipt ) ).toEqual( [] );
 		expect( roomy.receipt.exportBudget ).toMatchObject( { withinBudget: true, droppedAssets: 0, droppedRoutes: 0, passes: 1, totalBytes: baseline.website.totalBytes } );
 		expect( extensions( baseline.website ) ).toEqual( expect.arrayContaining( [ 'mp4', 'png', 'png', 'woff2', 'css' ] ) );
+	} );
+
+	it( 'drops box-tree evidence before unique assets or routes when content fits', () => {
+		const outputDir = fixture();
+		mkdirSync( join( outputDir, 'box-tree' ) );
+		for ( const name of [ 'homepage', 'about', 'contact' ] ) {
+			const sourcePath = `html/${ name }.html`;
+			const file = join( outputDir, sourcePath );
+			writeFileSync( file, readFileSync( file, 'utf8' ).replace( '<h1>', '<h1 data-blocks-engine-node-id="heading">' ) );
+			writeFileSync( join( outputDir, 'box-tree', `${ name }.json` ), JSON.stringify( {
+				schema: BOX_TREE_SCHEMA, source_path: sourcePath, source_hash: 'raw',
+				viewports: { desktop: { width: 1440, height: 900 } },
+				nodes: { heading: { children: [], viewports: { desktop: {
+					border_box: { x: 0, y: 0, width: 100, height: 20 },
+					used_styles: { 'font-family': 'Brand' + ' '.repeat( 30_000 ) },
+				} } } },
+			} ) );
+		}
+		const input = { outputDir, sourceUrl: SOURCE, platform: 'generic', summary, failures: [] };
+		exportWebsiteCapture( input );
+		const baseline = measureWebsite( join( outputDir, 'website' ) );
+		const sidecars = baseline.files.filter( file => file.path.startsWith( 'box-tree/' ) );
+		expect( sidecars ).toHaveLength( 3 );
+		const content = baseline.files.filter( file => ! file.path.startsWith( 'box-tree/' ) );
+		const maxTotalBytes = baseline.totalBytes - sidecars.reduce( ( sum, file ) => sum + file.bytes, 0 );
+
+		exportWebsiteCapture( { ...input, limits: { maxTotalBytes } } );
+		const website = measureWebsite( join( outputDir, 'website' ) );
+		const receipt = receiptOf( outputDir );
+		expect( website.files ).toEqual( content );
+		expect( website.totalBytes ).toBeLessThanOrEqual( maxTotalBytes );
+		expect( receipt.routes.map( route => route.url ) ).toEqual( [ SOURCE, ABOUT, CONTACT ] );
+		expect( receipt.exportBudget ).toMatchObject( { withinBudget: true, droppedAssets: 0, droppedRoutes: 0, droppedBoxTrees: 3, passes: 2 } );
+		expect( budgetRows( receipt ) ).toEqual( [] );
 	} );
 
 	it( 'drops the largest assets the entrypoint does not need first, reports them and ends under budget', () => {

@@ -30,7 +30,7 @@ import {
 	type DismissedOverlay,
 	type OverlayTarget,
 } from '../screenshot/page-helpers.js';
-import { applySourceCleanup, readSourceCleanup, validateCleanupPolicy, type CleanupPolicy, type CleanupReport } from '../source-cleanup.js';
+import { applySourceCleanup, cleanupPolicyForResponse, readSourceCleanup, validateCleanupPolicy, type CleanupPolicy, type CleanupReport } from '../source-cleanup.js';
 import { runFidelityChecks } from './checks.js';
 import { readPortableMotion } from '../portable-motion.js';
 import { observeViewportEntrances } from '../viewport-entrances.js';
@@ -361,6 +361,8 @@ export async function observePage(
 			await page.addInitScript( observeViewportEntrances );
 			const response = await page.goto( url, { waitUntil: 'domcontentloaded', timeout: 60_000 } );
 			if ( response && ! response.ok() ) throw new Error( `Observation HTTP ${ response.status() }: ${ url }` );
+			// Residue of the host serving this response, as capture removed it.
+			if ( cleanup && ! localOrigin ) cleanup = cleanupPolicyForResponse( cleanup, response, await Promise.resolve().then( () => response?.text() ).catch( () => undefined ) ?? '' );
 		}
 		await waitForStable( page );
 		// settleMs bounds readiness rather than fixing a sleep: a document whose

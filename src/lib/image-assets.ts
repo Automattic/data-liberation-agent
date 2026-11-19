@@ -353,25 +353,39 @@ async function decodeImage( page: import('playwright').Page, bytes: Buffer, cont
 		await Promise.race( [ image.decode(), new Promise<never>( ( _resolve, reject ) => {
 			setTimeout( () => reject( new Error( 'image decode timeout' ) ), 10000 ); // failure-class: operational
 		} ) ] );
-		if ( ! image.width || ! image.height || image.width * image.height > 40_000_000 )
+		if ( ! image.width || ! image.height ) throw new Error( 'image dimensions outside decode bound' ); // failure-class: operational
+		const scale = maxDimension / Math.max( image.width, image.height );
+		const renditionWidth = Math.max( 1, Math.floor( image.width * scale ) );
+		const renditionHeight = Math.max( 1, Math.floor( image.height * scale ) );
+		// The decode bound limits the full-size canvas only. A wanted rendition of an
+		// over-bound original is decoded directly at rendition size instead.
+		const overBound = image.width * image.height > 40_000_000;
+		if ( overBound && ! ( downscale && scale < 1 ) )
 			throw new Error( 'image dimensions outside decode bound' ); // failure-class: operational
+		let source: CanvasImageSource = image;
+		if ( overBound ) {
+			const binary = atob( data.slice( data.indexOf( ',' ) + 1 ) );
+			const buffer = new Uint8Array( binary.length );
+			for ( let i = 0; i < binary.length; i++ ) buffer[ i ] = binary.charCodeAt( i );
+			source = await createImageBitmap( new Blob( [ buffer ], { type: data.slice( 5, data.indexOf( ';' ) ) } ),
+				{ resizeWidth: renditionWidth, resizeHeight: renditionHeight, resizeQuality: 'high' } );
+		}
 		const canvas = document.createElement( 'canvas' );
-		canvas.width = image.width;
-		canvas.height = image.height;
+		canvas.width = overBound ? renditionWidth : image.width;
+		canvas.height = overBound ? renditionHeight : image.height;
 		const ctx = canvas.getContext( '2d' )!;
-		ctx.drawImage( image, 0, 0 );
-		const pixels = ctx.getImageData( 0, 0, image.width, image.height ).data;
+		ctx.drawImage( source, 0, 0 );
+		const pixels = ctx.getImageData( 0, 0, canvas.width, canvas.height ).data;
 		let alpha = false;
 		for ( let i = 3; i < pixels.length; i += 4 ) if ( pixels[ i ] < 255 ) { alpha = true; break; }
 		let rendition: { data: string; width: number; height: number } | undefined;
-		if ( downscale && Math.max( image.width, image.height ) > maxDimension ) {
-			const scale = maxDimension / Math.max( image.width, image.height );
-			canvas.width = Math.max( 1, Math.floor( image.width * scale ) );
-			canvas.height = Math.max( 1, Math.floor( image.height * scale ) );
+		if ( downscale && scale < 1 ) {
+			canvas.width = renditionWidth;
+			canvas.height = renditionHeight;
 			// Reduce geometry as well as quality if necessary: even noisy alpha
 			// images must fit the per-file cap without losing transparency.
 			for ( ;; ) {
-				ctx.drawImage( image, 0, 0, canvas.width, canvas.height );
+				ctx.drawImage( source, 0, 0, canvas.width, canvas.height );
 				const encoded = canvas.toDataURL( alpha ? 'image/webp' : 'image/jpeg', 0.85 );
 				if ( atob( encoded.split( ',' )[ 1 ] ).length <= maxBytes ) {
 					rendition = { data: encoded, width: canvas.width, height: canvas.height };
@@ -381,6 +395,7 @@ async function decodeImage( page: import('playwright').Page, bytes: Buffer, cont
 				canvas.height = Math.max( 1, Math.floor( canvas.height * 0.75 ) );
 			}
 		}
+		if ( source !== image ) ( source as ImageBitmap ).close();
 		return { width: image.width, height: image.height, alpha, rendition };
 	}, { data: `data:${ contentType };base64,${ bytes.toString( 'base64' ) }`,
 		downscale: contentType !== 'image/svg+xml' && bytes.length > MAX_PORTABLE_MEDIA_BYTES,

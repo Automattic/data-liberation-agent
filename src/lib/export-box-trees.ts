@@ -154,7 +154,7 @@ export function mergeMobileBoxTree(desktop: BoxTree, desktopHtml: string, mobile
  * (`website/about/index.html`), the virtual root importers address artifact files by.
  * Returns the capture-root paths written.
  */
-export function writeExportBoxTrees(captureRoot: string, websiteDir: string, pages: Array<{ sourcePath: string; mobileSourcePath?: string; path: string }>, inventory: WebsiteInventory): string[] {
+export function writeExportBoxTrees(captureRoot: string, websiteDir: string, pages: Array<{ sourcePath: string; mobileSourcePath?: string; path: string }>, inventory: WebsiteInventory, excludedBoxTrees: ReadonlyMap<string, number> = new Map()): string[] {
 	const directory = join(captureRoot, 'box-tree');
 	if (!existsSync(directory)) return [];
 	const sources = new Map<string, string>();
@@ -165,6 +165,8 @@ export function writeExportBoxTrees(captureRoot: string, websiteDir: string, pag
 	}
 	const written: string[] = [];
 	for (const page of pages) {
+		const path = `box-tree/${page.path.replace(/\.html$/, '.json')}`;
+		if (excludedBoxTrees.has(path)) continue;
 		const source = sources.get(page.sourcePath);
 		if (!source) continue;
 		const bytes = readFileSync(join(websiteDir, page.path));
@@ -196,7 +198,6 @@ export function writeExportBoxTrees(captureRoot: string, websiteDir: string, pag
 		for (const part of resolved.files.filter(path => path !== resolve(file)).map(path => relative(resolve(websiteDir), path).split('\\').join('/')).sort())
 			includes[`website/${part}`] = sha256(readFileSync(join(websiteDir, part)));
 		const tree = projectExportBoxTree(resolved.html, captured, `website/${page.path}`, bytes, includes);
-		const path = `box-tree/${page.path.replace(/\.html$/, '.json')}`;
 		// A captured resource must never be overwritten by generated evidence.
 		if (existsSync(join(websiteDir, path))) continue;
 		mkdirSync(dirname(join(websiteDir, path)), { recursive: true });

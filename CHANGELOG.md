@@ -15,6 +15,61 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.36.9] - 2026-11-18
+
+### Changed
+- regenerate plugin bundles
+- Bolt host: remove the "Made in Bolt" badge from captures
+
+## [0.36.8] - 2026-11-18
+
+### Changed
+- regenerate plugin bundles
+- Export a route whose path segment encodes a slash
+- Accept a collected promise as a settled renderer-crash rejection
+
+## [0.36.7] - 2026-11-18
+
+### Changed
+- regenerate plugin bundles
+- Portable media: exempt vector SVGs from the raster pixel-dimension limit
+
+### Fixed
+- attribute runtime widgets past page wrappers of DOM APIs
+
+## [0.36.6] - 2026-11-18
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- freeze the reference on the moment capture serialized so autoplaying carousels agree
+- drop box-tree evidence before assets and routes
+
+## [0.36.5] - 2026-11-18
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- decode over-bound originals directly at rendition size
+
+## [0.36.4] - 2026-11-18
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- resolve stylesheet url() references against the owning stylesheet
+
+## [0.36.3] - 2026-11-18
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- restore declared sources for images serialized on their blurred placeholder
+
 ## [0.36.2] - 2026-11-18
 
 ### Changed

@@ -130,18 +130,50 @@ export async function normalizeWixImageSources( page: Page ): Promise< number > 
 		} ), WIX_IMAGE_HOST );
 	const sources = infos.map( ( { info, image, src } ) => {
 		if ( !info || !image || ( src !== null && !WIX_BLUR_PLACEHOLDER.test( src ) ) ) return null;
-		try {
-			const value = JSON.parse( info ) as { imageData?: { uri?: unknown }; targetWidth?: unknown; targetHeight?: unknown };
-			const uri = value.imageData?.uri;
-			if ( typeof uri !== 'string' || !uri ) return null;
-			const width = value.targetWidth;
-			const height = value.targetHeight;
-			const sized = typeof width === 'number' && width > 0 && typeof height === 'number' && height > 0;
-			const size = sized ? { width: width as number, height: height as number } : undefined;
-			return { info, replaces: src, src: wixStaticMediaUrl( uri, size ), ...( size ? { width: size.width, height: size.height } : {} ) };
-		} catch { return null; }
+		const declared = wixDeclaredImageSource( info );
+		return declared ? { info, replaces: src, ...declared } : null;
 	} );
 	return page.evaluate( applyWixImageSources, { selector: WIX_IMAGE_HOST, sources } );
+}
+
+/**
+ * The real source a `data-image-info` declaration names, sized to its declared
+ * target when it has one, or null when it names no image.
+ */
+export function wixDeclaredImageSource( imageInfo: string ): { src: string; width?: number; height?: number } | null {
+	try {
+		const value = JSON.parse( imageInfo ) as { imageData?: { uri?: unknown }; targetWidth?: unknown; targetHeight?: unknown };
+		const uri = value?.imageData?.uri;
+		if ( typeof uri !== 'string' || !uri ) return null;
+		const width = value.targetWidth;
+		const height = value.targetHeight;
+		const sized = typeof width === 'number' && width > 0 && typeof height === 'number' && height > 0;
+		const size = sized ? { width: width as number, height: height as number } : undefined;
+		return { src: wixStaticMediaUrl( uri, size ), ...( size ? { width: size.width, height: size.height } : {} ) };
+	} catch { return null; }
+}
+
+const WIX_SERIALIZED_IMAGE = /(<wow-image\b[^>]*?\sdata-image-info="([^"]*)"[^>]*>\s*<img\b[^>]*?\ssrc=")([^"]*)(")/g;
+const decodeAttribute = ( value: string ) => value.replace( /&(quot|amp|lt|gt|#39|apos);/g, ( _entity, name: string ) =>
+	( { quot: '"', amp: '&', lt: '<', gt: '>', '#39': "'", apos: "'" } as Record< string, string > )[ name ] );
+
+/**
+ * Serialized-document counterpart of `normalizeWixImageSources`.
+ *
+ * A Wix widget can unmount and remount after the live normalization ran (its
+ * runtime re-renders on resize, and the capture's own width probes resize the
+ * page), and a remounted `<wow-image>` starts again from its blurred
+ * placeholder. Whatever the timing, a declared image still on that
+ * placeholder in the stored document is pointed at its declared source.
+ */
+export function restoreWixBlurredImageSources( html: string ): string {
+	if ( !html.includes( 'blur_' ) ) return html;
+	return html.replace( WIX_SERIALIZED_IMAGE, ( match, head: string, info: string, src: string, tail: string ) => {
+		const current = decodeAttribute( src );
+		if ( !WIX_BLUR_PLACEHOLDER.test( current ) ) return match;
+		const declared = wixDeclaredImageSource( decodeAttribute( info ) );
+		return declared ? `${ head }${ declared.src.replace( /&/g, '&amp;' ).replace( /"/g, '&quot;' ) }${ tail }` : match;
+	} );
 }
 
 /** Normalize every declared Wix image on the page; returns how many were rewritten. */

@@ -33,7 +33,11 @@ function routeOutputPath( url: string, sourceUrl: string, entrypointUrl: string,
 	const source = new URL( sourceUrl );
 	// Artifact paths must retain URL percent-encoding. Decoding turns a valid
 	// route such as `%26` into a different filesystem path and breaks route maps.
-	let pathname = route.pathname;
+	// An encoded slash or backslash names one segment, such as a product
+	// `Filet_4%2F3.html`; as a file name it would read as a directory to any
+	// host that decodes it. Name the file with a hyphen; links follow the route
+	// map to it, and a path it now shares is suffixed like any collision.
+	let pathname = route.pathname.replace( /%(?:2F|5C)/gi, '-' );
 	for ( const segment of pathname.split( '/' ) ) {
 		let decoded = segment;
 		try {
