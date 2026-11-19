@@ -28,7 +28,7 @@ import { omitDegenerateReplacements, preparePortableReplacements } from './porta
 import { materializePortableResources } from './portable-resources.js';
 import { assetExceedsFileLimit, DEFAULT_MAX_FILE_BYTES, validateMaxFileBytes } from './export-file-limit.js';
 import { assetExceedsTotalBudget, emptyExportBudgetExclusions, planExportBudget, redundantRenditionDropped, resolveExportTotalBudget, type DroppableAsset, type ExportBudgetExclusions, type ExportTotalBudget } from './export-total-budget.js';
-import { collectAssetEvidenceReferences, buildSemanticEvidenceArtifacts, writeCaptureEvidence, type SemanticEvidencePage } from './capture-export-evidence.js';
+import { collectAssetEvidenceReferences, writeCaptureEvidence, writeSemanticEvidence, type SemanticEvidencePage } from './capture-export-evidence.js';
 export { CAPTURE_RECEIPT_SCHEMA, SOURCE_PROFILE_SCHEMA, ASSET_EVIDENCE_SCHEMA, CAPTURED_INTERACTIONS_SCHEMA, CAPTURED_SCROLL_STATES_SCHEMA, INDEXED_SEMANTIC_EVIDENCE_SCHEMA } from './capture-export-evidence.js';
 import { loadHttpExportInput, type HttpExportInput } from './http-export-input.js';
 import { loadEmbeddedDocuments, projectEmbeddedRegions } from './embedded-documents.js';
@@ -118,6 +118,27 @@ function semanticSectionEvidence(
 		delete evidence.styledHtml;
 		return evidence;
 	} );
+}
+
+/** One route's section evidence at a time, read from its section specs as it is written. */
+function* semanticEvidencePages( outputDir: string, entries: ReadonlyArray< { url: string } >, routePathOf: ( url: string ) => string ): Generator< SemanticEvidencePage > {
+	const desktopSections = SectionSpecsStore.load( outputDir );
+	const mobileSections = SectionSpecsStore.loadMobile( outputDir );
+	for ( const entry of entries ) {
+		const desktop = desktopSections.get( entry.url );
+		if ( ! isUsableSectionEvidence( desktop ) ) continue;
+		const mobile = mobileSections.get( entry.url );
+		yield {
+			path: `website/${ routePathOf( entry.url ) }`,
+			url: entry.url,
+			viewports: {
+				desktop: semanticSectionEvidence( desktop ),
+				...( isUsableSectionEvidence( mobile )
+					? { mobile: semanticSectionEvidence( mobile ) }
+					: {} ),
+			},
+		};
+	}
 }
 
 const MAX_PORTABLE_MEDIA_TOTAL_BYTES = 160 * 1024 * 1024;
@@ -242,9 +263,11 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		throw new Error( `Screenshot manifest not found: ${ screenshotManifestPath }` );
 	}
 
-	const capture: ScreenshotManifest = httpInput ? { version: 1, entries: httpInput.entries } : JSON.parse(
-		readFileSync( screenshotManifestPath, 'utf8' )
-	) as ScreenshotManifest;
+	// Build mutates manifest entries in place; a rebuild reloads them from the source.
+	const loadCapture = (): ScreenshotManifest => httpInput
+		? { version: 1, entries: loadHttpExportInput( outputDir, options.sourceUrl, options.input! ).entries }
+		: JSON.parse( readFileSync( screenshotManifestPath, 'utf8' ) ) as ScreenshotManifest;
+	const capture: ScreenshotManifest = httpInput ? { version: 1, entries: httpInput.entries } : loadCapture();
 	if ( capture.version !== 1 || ! capture.entries || typeof capture.entries !== 'object' ) {
 		throw new Error( `Invalid screenshot manifest: ${ screenshotManifestPath }` );
 	}
@@ -253,14 +276,12 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	// inherit desktop stylesheet boundaries, even when their geometry is fluid.
 	const phoneSwitchWidth = httpInput ? undefined : fallbackResponsiveSwitchWidth( outputDir, COARSE_SWEEP_WIDTHS[ 2 ] );
 	const budget = resolveExportTotalBudget( options.limits );
-	// Build mutates manifest entries in place; a rebuild starts from the source.
-	const pristineEntries = JSON.stringify( capture.entries );
 	const receiptPath = publishExportGeneration( outputDir, ( stageDir ) => {
 		let exclusions = emptyExportBudgetExclusions();
 		for ( let pass = 1; ; pass++ ) {
 			if ( pass > 1 ) {
 				for ( const name of readdirSync( stageDir ) ) rmSync( join( stageDir, name ), { recursive: true, force: true } );
-				capture.entries = JSON.parse( pristineEntries ) as ScreenshotManifest[ 'entries' ];
+				capture.entries = loadCapture().entries;
 				if ( httpInput ) httpInput.entries = capture.entries as typeof httpInput.entries;
 			}
 			const built = withParsedDocuments( () => buildExportCapture( options, outputDir, capture, httpInput, embedded, embeddedSources, siteSwitchWidth, phoneSwitchWidth, stageDir, budget, exclusions ) );
@@ -353,25 +374,7 @@ function buildExportCapture(
 		writeFileSync( claimed.htmlPath, appendSourceData( readFileSync( claimed.htmlPath, 'utf8' ), sourceData ) );
 	}
 	routeCaptureDiagnostics.push( ...missingRedirectTargets );
-	const desktopSections = httpInput ? new Map() : SectionSpecsStore.load( outputDir );
-	const mobileSections = httpInput ? new Map() : SectionSpecsStore.loadMobile( outputDir );
-	const semanticPages: SemanticEvidencePage[] = retainedEntries.flatMap( ( entry ) => {
-		const desktop = desktopSections.get( entry.url );
-		if ( ! isUsableSectionEvidence( desktop ) ) return [];
-		const mobile = mobileSections.get( entry.url );
-		return [ {
-			path: `website/${ routePathOf( entry.url ) }`,
-			url: entry.url,
-			viewports: {
-				desktop: semanticSectionEvidence( desktop ),
-				...( isUsableSectionEvidence( mobile )
-					? { mobile: semanticSectionEvidence( mobile ) }
-					: {} ),
-			},
-		} ];
-	} );
-	const semanticEvidence =
-		semanticPages.length > 0 ? buildSemanticEvidenceArtifacts( semanticPages ) : undefined;
+	if ( ! httpInput ) writeSemanticEvidence( stageDir, semanticEvidencePages( outputDir, retainedEntries, routePathOf ) );
 	const mediaStubs = MediaStubStore.load( outputDir );
 	const assetReferenceLocations = collectAssetEvidenceReferences(
 		retainedEntries,
@@ -481,7 +484,6 @@ function buildExportCapture(
 			references: assetReferenceLocations, stubs: mediaStubs, manifest: resourceManifest,
 			portablePaths: portablePathsBySource, files: assets, media: portableMedia,
 		},
-		semantic: semanticEvidence,
 		diagnostics: {
 			capture: routeCaptureDiagnostics, dependencies: unresolvedDependencies,
 			media: unresolvedMedia, anchors: unresolvedAnchors, rejectedKeys: rejectedReplacementKeys,
