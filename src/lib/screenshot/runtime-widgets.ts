@@ -154,8 +154,10 @@ function observeRuntimeWidgets(): void {
 				if (!root.isConnected) { inFlow.delete(root); continue; }
 				if (originOf(source) === pageOrigin) continue;
 				if (!(root.matches('form') || root.querySelector('form,input,select,textarea'))) continue;
-				// A page-level runtime that owns landmarks is the page, not an embed.
-				if (root.matches('main,header,nav,footer') || root.querySelector('main,header,nav,footer')) continue;
+				// Main content or navigation chrome belongs to a page runtime.
+				// An embed's own header/footer (for titles/actions) does not.
+				const pageLandmarks = 'main,nav,[role="navigation"]';
+				if (root.matches(pageLandmarks) || root.querySelector(pageLandmarks)) continue;
 				if (root.parentElement?.closest('[data-blocks-engine-capture-runtime-owner-script]')) continue;
 				const script = embedScript(root, source, pageOrigin);
 				if (!script) continue;
