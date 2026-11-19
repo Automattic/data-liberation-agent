@@ -201,6 +201,32 @@ it('namespaces grafted phone-only fragments so desktop nodes keep evidence at bo
 	expect(tree.nodes.n2.children).toEqual(['n3']);
 });
 
+it('observes grafted phone-only fragments with the phone capture\'s evidence of the same element', () => {
+	// The phone capture observed its document at both widths. The grafted fragment is
+	// that document's cart; desktop has no counterpart, so only the phone capture knows it.
+	const desktopHtml = '<html data-blocks-engine-node-id="n0"><body data-blocks-engine-node-id="n1"><header data-blocks-engine-node-id="n2"><div data-blocks-engine-node-id="n3"><a data-blocks-engine-node-id="n4">Cart</a></div></header></body></html>';
+	const mobileHtml = '<html data-blocks-engine-node-id="n0"><body data-blocks-engine-node-id="n1"><header data-blocks-engine-node-id="n2"><span data-blocks-engine-node-id="n3">Menu</span><div data-blocks-engine-node-id="n4"><a data-blocks-engine-node-id="n5">Cart</a></div></header></body></html>';
+	// The fragment's root keeps its phone tag; its link is retagged, so it has no proven counterpart.
+	const assembled = namespaceExportBoxTreeIds(desktopHtml.replace('</header>', '<div class="data-blocks-engine-capture-mobile-only" data-blocks-engine-node-id="n4"><b data-blocks-engine-node-id="n5">Cart</b></div></header>'));
+	const fixture = exportFixture();
+	const root = fixture.build();
+	fixture.file('html/home.html', desktopHtml);
+	fixture.file('html-mobile/home.html', mobileHtml);
+	fixture.file('website/index.html', assembled);
+	fixture.json('box-tree/home.json', captured('html/home.html', 'desktop', { width: 1440, height: 900 }, { n0: ['n1'], n1: ['n2'], n2: ['n3'], n3: ['n4'], n4: [] }, 100));
+	const mobile = captured('html-mobile/home.html', 'mobile', { width: 390, height: 844 }, { n0: ['n1'], n1: ['n2'], n2: ['n3', 'n4'], n3: [], n4: ['n5'], n5: [] }, 40);
+	mobile.viewports.desktop = { width: 1440, height: 900 };
+	for (const node of Object.values(mobile.nodes)) node.viewports.desktop = observation(30);
+	fixture.json('box-tree/home.mobile.json', mobile);
+	writeExportBoxTrees(root, join(root, 'website'), [{ sourcePath: 'html/home.html', path: 'index.html' }], new WebsiteInventory(join(root, 'website')));
+	const tree = readSidecar(join(root, 'website/box-tree/index.json'));
+	expect(tree.nodes['mobile:n4'].viewports).toEqual({ desktop: observation(30), mobile: observation(40) });
+	expect(tree.nodes.n2.children).toEqual(['n3', 'mobile:n4']);
+	expect(tree.nodes).not.toHaveProperty(['mobile:n5']);
+	// Desktop nodes with the fragment's phone numbers keep their own evidence.
+	expect(tree.nodes.n4.viewports.desktop).toEqual(observation(100));
+});
+
 it('uses nearest observed descendants through new wrappers without inventing observations', () => {
 	const html = '<html data-blocks-engine-node-id="root"><body><section><p data-blocks-engine-node-id="text">Hello</p></section></body></html>';
 	const result = projectExportBoxTree(html, source, 'about/index.html', Buffer.from(html));
