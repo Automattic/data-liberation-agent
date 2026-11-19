@@ -283,7 +283,9 @@ export function cleanPortableScaffolding(source: Document, snapshot: HTMLElement
     if (id) unwrappedIds.push(id);
     if (appRoots.has(node)) report('app_root_unwrapped', node, 'no box, selector, inherited style or geometry contribution');
   }
-  findings.push({
+  // Reported only when the page had wrappers to consider, so a page without
+  // any keeps a clean profile.
+  if (candidates.length || protectedCount) findings.push({
     code: 'inert_wrappers_unwrapped',
     reason: `${elementsBefore} elements, ${candidates.length} candidates, ${accepted.length} unwrapped, ${rejected} kept by proof, ${protectedCount} kept for capture evidence, ${unproven} unproven; max depth ${depthBefore} -> ${depthOf(snapshot)}`,
   });
