@@ -53,18 +53,20 @@ export const MAX_BOX_TREE_FILE_BYTES = 10 * 1024 * 1024;
 export type ExportBoxTree = BoxTree & { includes?: Record<string, string> };
 
 /**
- * Compact box-tree schema: v2 with each distinct `used_styles` object stored once in a
- * top-level `styles` list, and every node and pseudo observation's `used_styles`
- * replaced by its index there. Readers expand it back to v2; one that predates it
- * rejects the sidecar with a warning and converts without evidence.
+ * Schema of every exported sidecar: the captured v2 tree with each distinct `used_styles`
+ * object stored once in a top-level `styles` list, and every node and pseudo observation's
+ * `used_styles` replaced by its index there. Long pages repeat few distinct style sets, so
+ * this keeps their evidence well under the importer's per-file limit. Readers expand it
+ * back to v2; one that predates it rejects the sidecar with a warning and converts without
+ * evidence. Capture's own `box-tree/` sidecars stay v2.
  */
-export const BOX_TREE_COMPACT_SCHEMA = 'blocks-engine/box-tree/v3';
+export const EXPORT_BOX_TREE_SCHEMA = 'blocks-engine/box-tree/v3';
 
 type BoxObservation = BoxTree['nodes'][string]['viewports'][string];
 type CompactBox = Omit<BoxObservation, 'used_styles' | 'pseudo'> & { used_styles: number };
 type CompactObservation = CompactBox & { pseudo?: { before?: CompactBox & { content: string }; after?: CompactBox & { content: string } } };
 export type CompactExportBoxTree = Omit<ExportBoxTree, 'schema' | 'nodes'> & {
-	schema: typeof BOX_TREE_COMPACT_SCHEMA;
+	schema: typeof EXPORT_BOX_TREE_SCHEMA;
 	styles: Array<Record<string, string>>;
 	nodes: Record<string, { children: string[]; viewports: Record<string, CompactObservation> }>;
 };
@@ -98,7 +100,7 @@ export function compactBoxTree(tree: ExportBoxTree): CompactExportBoxTree {
 		}
 		nodes[id] = { ...node, viewports };
 	}
-	return { ...tree, schema: BOX_TREE_COMPACT_SCHEMA, styles, nodes };
+	return { ...tree, schema: EXPORT_BOX_TREE_SCHEMA, styles, nodes };
 }
 
 const sha256 = (bytes: Buffer | string): string => createHash('sha256').update(bytes).digest('hex');
@@ -257,18 +259,12 @@ export function writeExportBoxTrees(captureRoot: string, websiteDir: string, pag
 		const tree = projectExportBoxTree(resolved.html, captured, `website/${page.path}`, bytes, includes);
 		// A captured resource must never be overwritten by generated evidence.
 		if (existsSync(join(websiteDir, path))) continue;
-		let content = JSON.stringify(tree) + '\n';
-		// v2 stays the default; only a sidecar too large for the importer is written compact.
-		if (Buffer.byteLength(content) > maxFileBytes) {
-			const full = Buffer.byteLength(content);
-			content = JSON.stringify(compactBoxTree(tree)) + '\n';
-			const compactBytes = Buffer.byteLength(content);
-			// Optional evidence: the page imports without it, but not with a file the importer refuses.
-			if (compactBytes > maxFileBytes) {
-				process.stderr.write(`[budget] box-tree sidecar website/${path} is ${compactBytes} bytes even compacted (${full} as v2), over the ${maxFileBytes}-byte per-file limit; not written\n`);
-				continue;
-			}
-			process.stderr.write(`[budget] box-tree sidecar website/${path} written as ${BOX_TREE_COMPACT_SCHEMA}: ${full} bytes as v2, ${compactBytes} compacted\n`);
+		const content = JSON.stringify(compactBoxTree(tree)) + '\n';
+		const contentBytes = Buffer.byteLength(content);
+		// Optional evidence: the page imports without it, but not with a file the importer refuses.
+		if (contentBytes > maxFileBytes) {
+			process.stderr.write(`[budget] box-tree sidecar website/${path} is ${contentBytes} bytes, over the ${maxFileBytes}-byte per-file limit; not written\n`);
+			continue;
 		}
 		mkdirSync(dirname(join(websiteDir, path)), { recursive: true });
 		writeFileSync(join(websiteDir, path), content);
