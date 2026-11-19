@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import * as cheerio from 'cheerio';
 import { ownDocument } from './parsed-documents.js';
 import { MAX_SOURCE_EVIDENCE_SCRIPTS, renderSourceData, sourceEvidenceScript, type SourceDataScript } from './source-data.js';
@@ -33,6 +34,28 @@ const VISUAL_IFRAME_ATTRIBUTES = new Set( [
 	'title',
 	'width',
 ] );
+
+/** Stable, inert marker on an in-flow region a cross-origin embed script rendered (#2038). */
+export const RUNTIME_OWNER_ATTRIBUTE = 'data-blocks-engine-capture-runtime-owner';
+/** Capture-time stamps the marker and its evidence are projected from. */
+const RUNTIME_OWNER_SCRIPT_ATTRIBUTE = 'data-blocks-engine-capture-runtime-owner-script';
+const RUNTIME_OWNER_DATA_ATTRIBUTE = 'data-blocks-engine-capture-runtime-owner-data';
+export const RUNTIME_OWNED_REGIONS_SCHEMA = 'blocks-engine-capture/runtime-owned-regions/v1';
+export const RUNTIME_OWNED_REGIONS_EVIDENCE_KEY = 'runtime-owned-regions';
+export const THIRD_PARTY_RUNTIME_REGION_MARKED = 'third_party_runtime_region_marked';
+const MAX_RUNTIME_OWNED_REGIONS = 32;
+const MAX_RUNTIME_OWNER_DATA_ATTRIBUTES = 32;
+const MAX_RUNTIME_OWNER_DATA_VALUE = 1024;
+
+export interface RuntimeOwnedRegion {
+	/** Marker value; `selector` matches every copy (desktop, phone, middle documents). */
+	id: string;
+	selector: string;
+	script: { origin: string; path: string; data: Record< string, string > };
+	/** Rendered root elements carrying the marker, in document order. */
+	/** `nodeId` is the capture-time node id; export namespaces phone and middle copies (`mobile:`, `middle:`). */
+	roots: Array< { tag: string; nodeId?: string; controls: number } >;
+}
 
 const HUBSPOT_FORM_HOSTS = new Map( [
 	[ 'na1', 'js.hsforms.net' ],
@@ -194,6 +217,7 @@ export function safeCapturedPageHtml( html: string, embeddedSources: ReadonlySet
 	const diagnostics: Array<{ code: string; reason: string }> = [];
 	let sourceEvidenceScriptCount = 0;
 	let jsonLdScriptCount = 0;
+	const runtimeOwned = projectRuntimeOwnedRegions( $ );
 	let jsonLdSourceBytes = 0;
 	// Preserve rendered structure and author CSS, but never ship executable provider runtime.
 	$( 'script,noscript,object,embed,base' ).each( ( _index, element ) => {
@@ -227,6 +251,15 @@ export function safeCapturedPageHtml( html: string, embeddedSources: ReadonlySet
 		}
 		node.remove();
 	} );
+	if ( runtimeOwned.regions.length > 0 ) {
+		const evidence = sourceEvidenceScript(
+			JSON.stringify( { schema: RUNTIME_OWNED_REGIONS_SCHEMA, regions: runtimeOwned.regions } ),
+			RUNTIME_OWNED_REGIONS_EVIDENCE_KEY
+		);
+		if ( evidence ) sourceData.push( evidence );
+		else diagnostics.push( { code: 'source_evidence_unproven', reason: 'Runtime-owned region evidence exceeded its bounded retention contract.' } );
+	}
+	diagnostics.push( ...runtimeOwned.diagnostics );
 	if ( sourceData.length > 0 ) {
 		$( 'head' ).append( renderSourceData( sourceData ) );
 	}
@@ -317,6 +350,68 @@ export function safeCapturedPageHtml( html: string, embeddedSources: ReadonlySet
 	} );
 	diagnostics.push( ...formActionDiagnostics.values() );
 	return { html: normalizedDeclarativeFormEmbeds( $.html() ), sourceData, diagnostics };
+}
+
+/**
+ * Project capture's runtime-owner stamps onto one stable marker per region and
+ * inert evidence. The rendered DOM stays as visual reference; the embed script
+ * itself is removed with every other script, so provenance is data only.
+ * Malformed stamps are dropped without a marker.
+ */
+function projectRuntimeOwnedRegions( $: cheerio.CheerioAPI ): { regions: RuntimeOwnedRegion[]; diagnostics: Array< { code: string; reason: string } > } {
+	const regions = new Map< string, RuntimeOwnedRegion >();
+	$( `[${ RUNTIME_OWNER_SCRIPT_ATTRIBUTE }]` ).each( ( _index, element ) => {
+		const node = $( element );
+		const script = runtimeOwnerScript( node.attr( RUNTIME_OWNER_SCRIPT_ATTRIBUTE ) ?? '' );
+		const data = runtimeOwnerData( node.attr( RUNTIME_OWNER_DATA_ATTRIBUTE ) ?? '' );
+		node.removeAttr( RUNTIME_OWNER_SCRIPT_ATTRIBUTE ).removeAttr( RUNTIME_OWNER_DATA_ATTRIBUTE );
+		if ( ! script || ! data ) return;
+		const id = `runtime-${ createHash( 'sha256' ).update( JSON.stringify( [ script.origin, script.path, data ] ) ).digest( 'hex' ).slice( 0, 16 ) }`;
+		let region = regions.get( id );
+		if ( ! region ) {
+			if ( regions.size >= MAX_RUNTIME_OWNED_REGIONS ) return;
+			region = { id, selector: `[${ RUNTIME_OWNER_ATTRIBUTE }="${ id }"]`, script: { ...script, data }, roots: [] };
+			regions.set( id, region );
+		}
+		node.attr( RUNTIME_OWNER_ATTRIBUTE, id );
+		const nodeId = node.attr( 'data-blocks-engine-node-id' );
+		region.roots.push( {
+			tag: 'name' in element ? element.name : 'unknown',
+			...( nodeId ? { nodeId } : {} ),
+			controls: node.find( 'input,select,textarea,button' ).addBack( 'input,select,textarea,button' ).length,
+		} );
+	} );
+	const diagnostics = [ ...regions.values() ].map( ( region ) => ( {
+		code: THIRD_PARTY_RUNTIME_REGION_MARKED,
+		reason: `${ region.roots.map( ( root ) => root.tag ).join( ', ' ) } rendered by runtime script ${ region.script.origin }${ region.script.path }` +
+			`${ Object.keys( region.script.data ).length ? ` (${ Object.keys( region.script.data ).join( ', ' ) })` : '' }` +
+			` kept as visual reference and marked ${ region.selector }; the script is not shipped`,
+	} ) );
+	return { regions: [ ...regions.values() ], diagnostics };
+}
+
+function runtimeOwnerScript( value: string ): { origin: string; path: string } | undefined {
+	try {
+		const url = new URL( value );
+		if ( ( url.protocol !== 'https:' && url.protocol !== 'http:' ) || url.username || url.password ) return undefined;
+		return { origin: url.origin, path: url.pathname };
+	} catch {
+		return undefined;
+	}
+}
+
+function runtimeOwnerData( value: string ): Record< string, string > | undefined {
+	try {
+		const parsed: unknown = JSON.parse( value );
+		if ( parsed === null || typeof parsed !== 'object' || Array.isArray( parsed ) ) return undefined;
+		const entries = Object.entries( parsed as Record< string, unknown > )
+			.filter( ( entry ): entry is [ string, string ] => /^data-[a-z0-9_.:-]{1,64}$/.test( entry[ 0 ] ) && ! entry[ 0 ].startsWith( 'data-blocks-engine-' ) && typeof entry[ 1 ] === 'string' )
+			.slice( 0, MAX_RUNTIME_OWNER_DATA_ATTRIBUTES )
+			.map( ( [ name, raw ] ) => [ name, raw.slice( 0, MAX_RUNTIME_OWNER_DATA_VALUE ) ] as const );
+		return Object.fromEntries( entries );
+	} catch {
+		return undefined;
+	}
 }
 
 /** `action` on a form and `formaction` on a submitter; elsewhere they are inert, like a widget's `action="like"`. */
