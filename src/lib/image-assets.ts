@@ -268,7 +268,16 @@ export function collectAssets( documents: ImageDocuments, resolve?: ImageResolve
 					if ( ! /^(?:background(?:-image)?|(?:-webkit-)?mask(?:-image)?|border-image(?:-source)?|list-style(?:-image)?|content)$/i.test( declaration.prop ) ) return;
 					const location = `declaration:${ declarationIndex++ }:${ declaration.prop }`;
 					rewriteCssUrlReferences( declaration.value, source => {
-						add( [ source ], source, url, reference( source, 'CSS', location ) );
+						// A local-document URL does not identify an image, even in a captured sheet.
+						const value = source.trim();
+						if ( ! value || value.startsWith( '#' ) ) return source;
+						const refs = reference( value, 'CSS', location ).filter( ref => {
+							const target = new URL( ref.source_url );
+							const document = new URL( documentUrl );
+							target.hash = document.hash = '';
+							return target.href !== document.href;
+						} );
+						if ( refs.length ) add( [ value ], value, url, refs );
 						return source;
 					} );
 				} );

@@ -145,8 +145,9 @@ export function materializePortableResources( options: PortableResourceOptions )
 		}
 	};
 	const copyResource = ( dependency: PortableDependency, sourceUrl: string ): boolean => {
-		if ( options.imageUrls?.has( dependency.url ) ) return false;
 		const resource = resourceManifest.resources[ dependency.url ];
+		const isStylesheet = dependency.stylesheet || /^text\/css(?:;|$)/i.test( resource?.contentType ?? '' );
+		if ( options.imageUrls?.has( dependency.url ) && ! isStylesheet ) return false;
 		if ( ! resource ) {
 			unresolvedDependencies.push( {
 				url: dependency.url,
@@ -185,11 +186,12 @@ export function materializePortableResources( options: PortableResourceOptions )
 		// Servers can label binary bytes with a text MIME (AVIF as text/plain,
 		// query-based WOFF2 as text/html). Recognized bytes are copied exactly and
 		// named by their format, so no later HTML/CSS pass reads them as text.
-		const transportIsText = /^(?:application\/(?:json|manifest\+json)|text\/)/i.test( resource.contentType );
+		const contentType = isStylesheet ? 'text/css' : resource.contentType;
+		const transportIsText = /^(?:application\/(?:json|manifest\+json)|text\/)/i.test( contentType );
 		const sniffedType = transportIsText ? recognizedBinaryContentType( source ) : undefined;
 		const requestedPath =
 			( sniffedType && portableResourcePath( resource.path, sniffedType ) ) ??
-			portableResourcePath( resource.path, resource.contentType );
+			portableResourcePath( resource.path, contentType );
 		if ( ! requestedPath ) {
 			unresolvedDependencies.push( {
 				url: dependency.url,
@@ -244,7 +246,6 @@ export function materializePortableResources( options: PortableResourceOptions )
 					content = JSON.stringify( manifest );
 				} catch { /* Preserve invalid optional metadata for diagnostics. */ }
 			}
-			const isStylesheet = /text\/css/i.test( resource.contentType );
 			if ( isStylesheet ) {
 				if ( options.excludedRenditions?.size )
 					content = stripImageSetCandidates( content, isExcludedRendition( options.excludedRenditions, dependency.url ) );
@@ -317,6 +318,11 @@ export function materializePortableResources( options: PortableResourceOptions )
 			// a fallback for another rendition of the same picture.
 			if ( dependency.kind === 'media' && ! portablePathsBySource.has( dependency.url ) && resourceManifest.resources[ dependency.url ] && copyResource( dependency, entry.url ) ) {
 				mediaReplacements.set( dependency.reference, resourceReplacements.get( dependency.url )! );
+				continue;
+			}
+			// Stylesheet evidence outranks a stale media-stage classification or fallback.
+			if ( ( dependency.stylesheet || /^text\/css(?:;|$)/i.test( resourceManifest.resources[ dependency.url ]?.contentType ?? '' ) ) && copyResource( dependency, entry.url ) ) {
+				promoteCapturedMediaReplacement( dependency.url, entry.url );
 				continue;
 			}
 			const mediaReplacement = mediaReplacements.get( dependency.reference ) ?? mediaReplacements.get( dependency.url );

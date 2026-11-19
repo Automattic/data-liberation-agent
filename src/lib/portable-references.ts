@@ -10,6 +10,8 @@ export interface PortableDependency {
 	reference: string;
 	url: string;
 	kind: 'resource' | 'media' | 'css';
+	/** Authored stylesheet relationship, independent of media classification. */
+	stylesheet?: true;
 }
 
 
@@ -213,6 +215,7 @@ export function dependencyReferences(
 
 	const mediaReferences = new Set< string >();
 	const cssReferences = new Set< string >();
+	const stylesheetReferences = new Set< string >();
 	for ( const match of searchableHtml.matchAll(
 		/<(img|source|video|audio)\b[^>]*\ssrc\s*=\s*(["'])([\s\S]*?)\2[^>]*>/gi
 	) ) {
@@ -246,7 +249,10 @@ export function dependencyReferences(
 			relations.some( ( value ) => value === 'manifest' || value === 'stylesheet' || /(?:^|-)icon$/.test( value ) ) ||
 			( relations.includes( 'preload' ) && [ 'style', 'font', 'image', 'media' ].includes( as ) )
 		) {
-			add( /\bhref\s*=\s*(["'])([\s\S]*?)\1/i.exec( tag )?.[ 2 ] );
+			const href = /\bhref\s*=\s*(["'])([\s\S]*?)\1/i.exec( tag )?.[ 2 ];
+			add( href );
+			if ( href && ( relations.includes( 'stylesheet' ) || ( relations.includes( 'preload' ) && as === 'style' ) ) )
+				stylesheetReferences.add( href.replace( /&amp;/g, '&' ) );
 		}
 	}
 	for ( const match of searchableHtml.matchAll(
@@ -264,6 +270,7 @@ export function dependencyReferences(
 	for ( const match of cssContent.matchAll( /@import\s*(?:url\(\s*)?(["'])([\s\S]*?)\1/gi ) ) {
 		const reference = match[ 2 ];
 		cssReferences.add( reference.replace( /&amp;/g, '&' ) );
+		stylesheetReferences.add( reference.replace( /&amp;/g, '&' ) );
 		add( reference );
 	}
 
@@ -274,6 +281,7 @@ export function dependencyReferences(
 				{
 					reference,
 					url: url.href,
+					...( stylesheetReferences.has( reference ) ? { stylesheet: true as const } : {} ),
 					kind: mediaReferences.has( reference )
 						? 'media'
 						: cssReferences.has( reference )
