@@ -118,7 +118,7 @@ export const CAPTURE_EVIDENCE_FAMILIES = {
 } as const;
 
 /** Producer-neutral schemas shared with Blocks Engine. */
-export const SHARED_CAPTURE_SCHEMAS = [ 'blocks-engine/box-tree/v2', 'blocks-engine/layout-geometry-proof/v1' ] as const;
+export const SHARED_CAPTURE_SCHEMAS = [ 'blocks-engine/box-tree/v2', 'blocks-engine/box-tree/v3', 'blocks-engine/layout-geometry-proof/v1' ] as const;
 
 /** Sidecar schemas, under `CAPTURE_SCHEMA_NAMESPACE`. */
 export const CAPTURE_SCHEMAS = [

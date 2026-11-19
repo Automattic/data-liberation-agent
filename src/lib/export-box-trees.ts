@@ -41,8 +41,67 @@ const hasDeviceDocuments = (html: string): boolean =>
 	(html.includes('data-blocks-engine-capture-mobile-document') || html.includes('data-blocks-engine-capture-middle-document'))
 	&& cheerio.load(html)(DEVICE_DOCUMENT_WRAPPERS).length > 0;
 
+/**
+ * Largest box-tree sidecar export writes, including JSON encoding and newline.
+ * Coupled to Static Site Importer's compiler `max_file_bytes` (10 MiB): it refuses
+ * the whole request bundle when any source file is over it, so an oversized sidecar
+ * would turn optional geometry evidence into a failed import. Change both together.
+ */
+export const MAX_BOX_TREE_FILE_BYTES = 10 * 1024 * 1024;
+
 /** Box-tree sidecar bound to a final page plus the shared parts it includes. */
 export type ExportBoxTree = BoxTree & { includes?: Record<string, string> };
+
+/**
+ * Schema of every exported sidecar: the captured v2 tree with each distinct `used_styles`
+ * object stored once in a top-level `styles` list, and every node and pseudo observation's
+ * `used_styles` replaced by its index there. Long pages repeat few distinct style sets, so
+ * this keeps their evidence well under the importer's per-file limit. Readers expand it
+ * back to v2; one that predates it rejects the sidecar with a warning and converts without
+ * evidence. Capture's own `box-tree/` sidecars stay v2.
+ */
+export const EXPORT_BOX_TREE_SCHEMA = 'blocks-engine/box-tree/v3';
+
+type BoxObservation = BoxTree['nodes'][string]['viewports'][string];
+type CompactBox = Omit<BoxObservation, 'used_styles' | 'pseudo'> & { used_styles: number };
+type CompactObservation = CompactBox & { pseudo?: { before?: CompactBox & { content: string }; after?: CompactBox & { content: string } } };
+export type CompactExportBoxTree = Omit<ExportBoxTree, 'schema' | 'nodes'> & {
+	schema: typeof EXPORT_BOX_TREE_SCHEMA;
+	styles: Array<Record<string, string>>;
+	nodes: Record<string, { children: string[]; viewports: Record<string, CompactObservation> }>;
+};
+
+/** Lossless: the same tree with each distinct `used_styles` object stored once. */
+export function compactBoxTree(tree: ExportBoxTree): CompactExportBoxTree {
+	const styles: Array<Record<string, string>> = [];
+	const indexes = new Map<string, number>();
+	const intern = (used: Record<string, string>): number => {
+		const key = JSON.stringify(used);
+		let index = indexes.get(key);
+		if (index === undefined) {
+			index = styles.push(used) - 1;
+			indexes.set(key, index);
+		}
+		return index;
+	};
+	const nodes: CompactExportBoxTree['nodes'] = {};
+	for (const [id, node] of Object.entries(tree.nodes)) {
+		const viewports: Record<string, CompactObservation> = {};
+		for (const [name, { pseudo, ...observation }] of Object.entries(node.viewports)) {
+			const compact: CompactObservation = { ...observation, used_styles: intern(observation.used_styles) };
+			if (pseudo) {
+				compact.pseudo = {};
+				for (const side of ['before', 'after'] as const) {
+					const value = pseudo[side];
+					if (value) compact.pseudo[side] = { ...value, used_styles: intern(value.used_styles) };
+				}
+			}
+			viewports[name] = compact;
+		}
+		nodes[id] = { ...node, viewports };
+	}
+	return { ...tree, schema: EXPORT_BOX_TREE_SCHEMA, styles, nodes };
+}
 
 const sha256 = (bytes: Buffer | string): string => createHash('sha256').update(bytes).digest('hex');
 
@@ -154,7 +213,7 @@ export function mergeMobileBoxTree(desktop: BoxTree, desktopHtml: string, mobile
  * (`website/about/index.html`), the virtual root importers address artifact files by.
  * Returns the capture-root paths written.
  */
-export function writeExportBoxTrees(captureRoot: string, websiteDir: string, pages: Array<{ sourcePath: string; mobileSourcePath?: string; path: string }>, inventory: WebsiteInventory, excludedBoxTrees: ReadonlyMap<string, number> = new Map()): string[] {
+export function writeExportBoxTrees(captureRoot: string, websiteDir: string, pages: Array<{ sourcePath: string; mobileSourcePath?: string; path: string }>, inventory: WebsiteInventory, excludedBoxTrees: ReadonlyMap<string, number> = new Map(), maxFileBytes = MAX_BOX_TREE_FILE_BYTES): string[] {
 	const directory = join(captureRoot, 'box-tree');
 	if (!existsSync(directory)) return [];
 	const sources = new Map<string, string>();
@@ -200,8 +259,15 @@ export function writeExportBoxTrees(captureRoot: string, websiteDir: string, pag
 		const tree = projectExportBoxTree(resolved.html, captured, `website/${page.path}`, bytes, includes);
 		// A captured resource must never be overwritten by generated evidence.
 		if (existsSync(join(websiteDir, path))) continue;
+		const content = JSON.stringify(compactBoxTree(tree)) + '\n';
+		const contentBytes = Buffer.byteLength(content);
+		// Optional evidence: the page imports without it, but not with a file the importer refuses.
+		if (contentBytes > maxFileBytes) {
+			process.stderr.write(`[budget] box-tree sidecar website/${path} is ${contentBytes} bytes, over the ${maxFileBytes}-byte per-file limit; not written\n`);
+			continue;
+		}
 		mkdirSync(dirname(join(websiteDir, path)), { recursive: true });
-		writeFileSync(join(websiteDir, path), JSON.stringify(tree) + '\n');
+		writeFileSync(join(websiteDir, path), content);
 		inventory.add(path);
 		written.push(`website/${path}`);
 	}

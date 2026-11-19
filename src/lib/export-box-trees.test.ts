@@ -1,12 +1,12 @@
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 // @ts-ignore TS6059: test fixture lives outside production rootDir.
 import { exportFixture } from '../../test/export-fixture.js';
 import { exportWebsiteCapture } from './capture-export.js';
 import { BOX_TREE_SCHEMA, type BoxTree } from './screenshot/box-tree.js';
-import { namespaceExportBoxTreeIds, projectExportBoxTree, writeExportBoxTrees } from './export-box-trees.js';
+import { compactBoxTree, namespaceExportBoxTreeIds, projectExportBoxTree, writeExportBoxTrees, type CompactExportBoxTree, type ExportBoxTree } from './export-box-trees.js';
 import { WebsiteInventory } from './website-inventory.js';
 
 const source: BoxTree = {
@@ -18,6 +18,12 @@ const source: BoxTree = {
 	} ])),
 };
 
+const expand = (tree: CompactExportBoxTree) => ({ ...tree, schema: BOX_TREE_SCHEMA, styles: undefined, nodes: Object.fromEntries(Object.entries(tree.nodes).map(([id, node]) => [id, { ...node,
+	viewports: Object.fromEntries(Object.entries(node.viewports).map(([name, { pseudo, ...observation }]) => [name, { ...observation, used_styles: tree.styles[observation.used_styles],
+		...(pseudo ? { pseudo: Object.fromEntries(Object.entries(pseudo).map(([side, value]) => [side, { ...value!, used_styles: tree.styles[value!.used_styles] }])) } : {}) }])) }])) });
+/** Exported sidecars are v3; read one back in the captured v2 shape. */
+const readSidecar = (path: string) => expand(JSON.parse(readFileSync(path, 'utf8')) as CompactExportBoxTree);
+
 it('exports hash-bound evidence after script removal and export wrapping', () => {
 	const fixture = exportFixture();
 	const outputDir = fixture.build();
@@ -26,11 +32,11 @@ it('exports hash-bound evidence after script removal and export wrapping', () =>
 	fixture.manifest({ version: 1, entries: { 'https://example.com/': { html: 'html/home.html' } } });
 	const receipt = JSON.parse(readFileSync(exportWebsiteCapture({ outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] }), 'utf8'));
 	const bytes = readFileSync(join(outputDir, 'website/index.html'));
-	const tree = JSON.parse(readFileSync(join(outputDir, 'website/box-tree/index.json'), 'utf8'));
+	const tree = readSidecar(join(outputDir, 'website/box-tree/index.json'));
 	expect(bytes.toString()).not.toContain('window.foo');
 	expect(tree.source_path).toBe('website/index.html');
 	expect(tree.source_hash).toBe(createHash('sha256').update(bytes).digest('hex'));
-	expect(tree.schema).toBe(source.schema);
+	expect(JSON.parse(readFileSync(join(outputDir, 'website/box-tree/index.json'), 'utf8')).schema).toBe('blocks-engine/box-tree/v3');
 	expect(tree.viewports).toEqual(source.viewports);
 	expect(Object.keys(tree.nodes).sort()).toEqual(['body', 'main', 'root', 'text']);
 	expect(tree.nodes.main.children).toEqual(['text']);
@@ -71,7 +77,7 @@ it('merges phone observations into the one document served at every width and dr
 	fixture.json('box-tree/home.json', desktop);
 	fixture.json('box-tree/home.mobile.json', mobile);
 	writeExportBoxTrees(root, join(root, 'website'), [{ sourcePath: 'html/home.html', path: 'index.html' }], new WebsiteInventory(join(root, 'website')));
-	const result = JSON.parse(readFileSync(join(root, 'website/box-tree/index.json'), 'utf8'));
+	const result = readSidecar(join(root, 'website/box-tree/index.json'));
 	expect(result.viewports).toEqual({ desktop: { width: 1440, height: 900 }, mobile: { width: 402, height: 681 } });
 	expect(Object.keys(result.nodes).sort()).toEqual(['n0', 'n1', 'n2', 'n3', 'n4', 'n6']);
 	for (const node of Object.values(result.nodes) as BoxTree['nodes'][string][]) expect(Object.keys(node.viewports).sort()).toEqual(['desktop', 'mobile']);
@@ -88,9 +94,71 @@ it('keeps desktop only when the route has no phone capture', () => {
 	fixture.file('website/index.html', '<html data-blocks-engine-node-id="n0"><body data-blocks-engine-node-id="n1"></body></html>');
 	fixture.json('box-tree/home.json', captured('html/home.html', 'desktop', { width: 1440, height: 900 }, { n0: ['n1'], n1: [] }, 100));
 	writeExportBoxTrees(root, join(root, 'website'), [{ sourcePath: 'html/home.html', path: 'index.html' }], new WebsiteInventory(join(root, 'website')));
-	const result = JSON.parse(readFileSync(join(root, 'website/box-tree/index.json'), 'utf8'));
+	const result = readSidecar(join(root, 'website/box-tree/index.json'));
 	expect(result.viewports).toEqual({ desktop: { width: 1440, height: 900 } });
 	expect(Object.keys(result.nodes)).toEqual(['n0', 'n1']);
+});
+
+it('leaves out a sidecar over the per-file limit instead of writing a file the importer refuses', () => {
+	const fixture = exportFixture();
+	const root = fixture.build();
+	// A long listing: one observed node per row, enough to exceed a small limit.
+	const rows = Array.from({ length: 200 }, (_, i) => `r${i}`);
+	fixture.file('website/index.html', `<html data-blocks-engine-node-id="n0"><body data-blocks-engine-node-id="n1">${rows.map(id => `<p data-blocks-engine-node-id="${id}">row</p>`).join('')}</body></html>`);
+	fixture.file('website/about.html', '<html data-blocks-engine-node-id="n0"><body data-blocks-engine-node-id="n1"></body></html>');
+	fixture.json('box-tree/home.json', captured('html/home.html', 'desktop', { width: 1440, height: 900 }, { n0: ['n1'], n1: rows, ...Object.fromEntries(rows.map(id => [id, []])) }, 100));
+	fixture.json('box-tree/about.json', captured('html/about.html', 'desktop', { width: 1440, height: 900 }, { n0: ['n1'], n1: [] }, 100));
+	const pages = [{ sourcePath: 'html/home.html', path: 'index.html' }, { sourcePath: 'html/about.html', path: 'about.html' }];
+	const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+	try {
+		expect(writeExportBoxTrees(root, join(root, 'website'), pages, new WebsiteInventory(join(root, 'website')), new Map(), 4096)).toEqual(['website/box-tree/about.json']);
+		expect(existsSync(join(root, 'website/box-tree/index.json'))).toBe(false);
+		expect(stderr.mock.calls.map(([line]) => String(line)).join('')).toMatch(/box-tree sidecar website\/box-tree\/index\.json is \d+ bytes, over the 4096-byte per-file limit; not written/);
+	} finally {
+		stderr.mockRestore();
+	}
+});
+
+it('compacts losslessly, storing each distinct used_styles once', () => {
+	const styles = (display: string) => ({ display, color: 'rgb(0, 0, 0)' });
+	const box = { x: 0, y: 0, width: 10, height: 10 };
+	const tree: ExportBoxTree = {
+		schema: BOX_TREE_SCHEMA, source_path: 'website/index.html', source_hash: 'h', includes: { 'website/parts/header-x.html': 'p' },
+		viewports: { desktop: { width: 1440, height: 900 }, mobile: { width: 390, height: 844 } },
+		nodes: {
+			a: { children: ['b'], viewports: { desktop: { border_box: box, used_styles: styles('block') }, mobile: { border_box: box, used_styles: styles('block') } } },
+			b: { children: [], viewports: {
+				desktop: { border_box: box, used_styles: styles('flex'), pseudo: { before: { content: '"“"', border_box: box, used_styles: styles('inline') } } },
+				mobile: { border_box: box, used_styles: styles('block') },
+			} },
+		},
+	};
+	const compact = compactBoxTree(tree);
+	expect(compact.schema).toBe('blocks-engine/box-tree/v3');
+	expect(compact.styles).toEqual([styles('block'), styles('flex'), styles('inline')]);
+	expect(compact.nodes.b.viewports.desktop.pseudo?.before?.used_styles).toBe(2);
+	expect(JSON.parse(JSON.stringify(expand(compact)))).toEqual(tree);
+});
+
+it('writes v3, so a long page that repeats few style sets fits the per-file limit', () => {
+	const fixture = exportFixture();
+	const root = fixture.build();
+	const rows = Array.from({ length: 50 }, (_, i) => `r${i}`);
+	fixture.file('website/index.html', `<html data-blocks-engine-node-id="n0"><body data-blocks-engine-node-id="n1">${rows.map(id => `<p data-blocks-engine-node-id="${id}">row</p>`).join('')}</body></html>`);
+	// Every row repeats the same full computed style set, as long listings do.
+	const used = Object.fromEntries(Array.from({ length: 90 }, (_, i) => [`property-${i}`, 'initial-value']));
+	const tree = captured('html/home.html', 'desktop', { width: 1440, height: 900 }, { n0: ['n1'], n1: rows, ...Object.fromEntries(rows.map(id => [id, []])) }, 100);
+	for (const node of Object.values(tree.nodes)) node.viewports.desktop.used_styles = used;
+	fixture.json('box-tree/home.json', tree);
+	const limit = 32 * 1024;
+	expect(Buffer.byteLength(JSON.stringify(tree))).toBeGreaterThan(limit);
+	expect(writeExportBoxTrees(root, join(root, 'website'), [{ sourcePath: 'html/home.html', path: 'index.html' }], new WebsiteInventory(join(root, 'website')), new Map(), limit)).toEqual(['website/box-tree/index.json']);
+	const written = readFileSync(join(root, 'website/box-tree/index.json'), 'utf8');
+	expect(Buffer.byteLength(written)).toBeLessThanOrEqual(limit);
+	const compact = JSON.parse(written) as CompactExportBoxTree;
+	expect(compact.styles).toEqual([used]);
+	expect(Object.keys(compact.nodes)).toEqual(['n0', 'n1', ...rows]);
+	expect(Object.values(expand(compact).nodes).every(node => node.viewports.desktop.used_styles === undefined || JSON.stringify(node.viewports.desktop.used_styles) === JSON.stringify(used))).toBe(true);
 });
 
 it('keeps phone identities distinct in assembled documents, leaving width-selected wrappers unobserved', () => {
@@ -106,7 +174,7 @@ it('keeps phone identities distinct in assembled documents, leaving width-select
 	fixture.json('box-tree/home.mobile.json', captured('html-mobile/home.html', 'mobile', { width: 390, height: 844 }, { body: ['text'], text: [] }, 42));
 	const inventory = new WebsiteInventory(join(fixture.build(), 'website'));
 	writeExportBoxTrees(fixture.build(), join(fixture.build(), 'website'), [{ sourcePath: source.source_path, path: 'index.html' }], inventory);
-	const tree = JSON.parse(readFileSync(join(fixture.build(), 'website/box-tree/index.json'), 'utf8'));
+	const tree = readSidecar(join(fixture.build(), 'website/box-tree/index.json'));
 	expect(Object.keys(tree.viewports).sort()).toEqual(['desktop', 'mobile']);
 	expect(tree.nodes).toEqual({});
 });
@@ -127,7 +195,7 @@ it('namespaces grafted phone-only fragments so desktop nodes keep evidence at bo
 	fixture.json('box-tree/home.json', captured('html/home.html', 'desktop', { width: 1440, height: 900 }, { n0: ['n1'], n1: ['n2'], n2: ['n3'], n3: ['n4'], n4: [] }, 100));
 	fixture.json('box-tree/home.mobile.json', captured('html-mobile/home.html', 'mobile', { width: 390, height: 844 }, { n0: ['n1'], n1: ['n2'], n2: ['n3', 'n5'], n3: ['n4'], n4: [], n5: ['n6'], n6: [] }, 40));
 	writeExportBoxTrees(root, join(root, 'website'), [{ sourcePath: 'html/home.html', path: 'index.html' }], new WebsiteInventory(join(root, 'website')));
-	const tree = JSON.parse(readFileSync(join(root, 'website/box-tree/index.json'), 'utf8'));
+	const tree = readSidecar(join(root, 'website/box-tree/index.json'));
 	expect(Object.keys(tree.nodes).sort()).toEqual(['n0', 'n1', 'n2', 'n3', 'n4']);
 	for (const id of ['n3', 'n4']) expect(Object.keys(tree.nodes[id].viewports).sort()).toEqual(['desktop', 'mobile']);
 	expect(tree.nodes.n2.children).toEqual(['n3']);
@@ -163,7 +231,7 @@ it('binds included shared parts and leaves duplicated identities unobserved', ()
 	const include = /<!--#include virtual="\/(parts\/[^"]+\.html)" -->/.exec(page);
 	expect(include).not.toBeNull();
 	const part = include![1];
-	const home = JSON.parse(readFileSync(join(outputDir, 'website/box-tree/index.json'), 'utf8'));
+	const home = readSidecar(join(outputDir, 'website/box-tree/index.json'));
 	expect(home.source_hash).toBe(createHash('sha256').update(page).digest('hex'));
 	expect(home.source_path).toBe('website/index.html');
 	expect(home.includes).toEqual({ [`website/${part}`]: createHash('sha256').update(readFileSync(join(outputDir, 'website', part))).digest('hex') });
@@ -171,7 +239,7 @@ it('binds included shared parts and leaves duplicated identities unobserved', ()
 	expect(home.nodes.main.children).toEqual(['home']);
 	expect(home.nodes.header.children).toEqual(['nav']);
 	expect(home.nodes.body.children).toEqual(['header', 'main']);
-	const about = JSON.parse(readFileSync(join(outputDir, 'website/box-tree/about/index.json'), 'utf8'));
+	const about = readSidecar(join(outputDir, 'website/box-tree/about/index.json'));
 	expect(about.source_path).toBe('website/about/index.html');
 	expect(about.includes).toEqual(home.includes);
 	expect(about.nodes.list.children).toEqual(navIds);
