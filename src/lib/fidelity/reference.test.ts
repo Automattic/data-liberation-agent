@@ -14,8 +14,34 @@ import { matchRenderedImages } from './score.js';
 import { checkImageGeometry } from './rendered-contract-checks.js';
 import { waitForFonts } from '../screenshot/page-helpers.js';
 import { squareFont } from './font-fixture.js';
+import { attributedPixelRegionFailures } from './evidence.js';
 
 describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )( 'capture-session reference replay', () => {
+
+	// One page, no capture pipeline (~1s): tile ownership and stable descriptors.
+	it( 'attributes tiles to block ancestors, shared blocks, tags and the page', async ({ newContext }) => {
+		const context = await newContext( { viewport: { width: 384, height: 384 } } );
+		try {
+			const page = await context.newPage();
+			await page.setContent( `<style>body{margin:0;min-height:768px}section{position:absolute;left:48px;width:96px;height:48px}i{display:block;float:left;width:48px;height:48px}</style>
+				<section class="wp-block-cover" style="top:48px"><i style="width:96px"></i></section>
+				<section class="wp-block-group" style="top:144px"><i class="wp-block-image"></i><i class="wp-block-cover"></i></section>
+				<section style="top:240px"><svg width="96" height="48"></svg></section>` );
+			const source = await page.screenshot( { fullPage: true } );
+			await page.addStyleTag( { content: 'i,svg{background:black}body{background:linear-gradient(black,black) 240px 336px/48px 48px no-repeat}' } );
+			const candidate = await page.screenshot( { fullPage: true } );
+			const expected = [
+				'pixel region 48,48 96x48 (2 tiles) in core/cover',
+				'pixel region 48,144 96x48 (2 tiles) in core/group',
+				'pixel region 48,240 96x48 (2 tiles) in svg',
+				'pixel region 240,336 48x48 (1 tiles) in page',
+			];
+			expect( await attributedPixelRegionFailures( page, source, candidate ) ).toEqual( expected );
+			await page.evaluate( () => { document.querySelectorAll( 'section' ).forEach( element => { element.id = 'unstable'; element.classList.add( 'unrelated' ); } ); scrollTo( 0, 100 ); } );
+			expect( await page.evaluate( () => scrollY ) ).toBe( 100 );
+			expect( await attributedPixelRegionFailures( page, source, candidate ) ).toEqual( expected );
+		} finally { await context.close(); }
+	} );
 
 	// One reference cell, two offline comparisons (~20s).
 	it( 'gates below-fold pixel regions against cleaned frozen full-page evidence', async ({ serve, newContext }) => {
@@ -23,7 +49,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		const directory = mkdtempSync( join( process.cwd(), '.tmp-test/pixel-regions-' ) );
 		const html = `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
 			<style>body{margin:0}.icon{position:absolute;left:96px;width:96px;height:96px;background:black}.one{top:1200px}.two{top:2400px}</style>
-			<main style="height:3000px"><div class="icon one"></div><div class="icon two"></div></main><aside id="badge" style="position:fixed;bottom:0;background:black;width:300px;height:100px"></aside>`;
+			<main style="height:3000px"><div class="wp-block-cover icon one"></div><div class="icon two"></div></main><aside id="badge" style="position:fixed;bottom:0;background:black;width:300px;height:100px"></aside>`;
 		const { server } = await serve( ( _request, response ) => { response.setHeader( 'content-type', 'text/html' ); response.end( html ); } );
 		const url = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }/`;
 		const context = await newContext();
@@ -43,7 +69,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			const report = await checkFidelity( { directory, settleMs: 0 } );
 			expect( report.pending ).toEqual( [] );
 			expect( report.pass ).toBe( false );
-			expect( report.scores[ 0 ]!.failures ).toEqual( [ 'pixel region 96,1200 96x96 (4 tiles)', 'pixel region 96,2400 96x96 (4 tiles)' ] );
+			expect( report.scores[ 0 ]!.failures ).toEqual( [ 'pixel region 96,1200 96x96 (4 tiles) in core/cover', 'pixel region 96,2400 96x96 (4 tiles) in div' ] );
 			const evidence = join( directory, 'compare/capture/index/desktop/1440/baseline' );
 			for ( const name of [ 'source.png', 'liberated.png', 'diff.png' ] ) expect( PNG.sync.read( readFileSync( join( evidence, name ) ) ).height ).toBe( 3000 );
 		} finally { await context.close(); rmSync( directory, { recursive: true, force: true } ); }
