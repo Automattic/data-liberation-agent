@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { load } from 'cheerio';
 import { expect, it, vi } from 'vitest';
 
 // Chromium's local-network permission blocks cross-host loopback scripts under
@@ -14,6 +15,7 @@ vi.mock('../browser-kit/browser-kit.js', async importOriginal => {
 	} };
 });
 import { captureScreenshots } from './screenshotter.js';
+import { exportWebsiteCapture } from '../capture-export.js';
 
 // One two-profile Chromium capture, approximately 15s. Different loopback
 // hostnames and ports exercise differing runtime script origins; no vendor signatures.
@@ -102,6 +104,83 @@ it('removes cross-origin runtime islands but preserves authored and same-origin 
 	} finally {
 		await new Promise<void>(resolve => server.close(() => resolve()));
 		await new Promise<void>(resolve => sibling.close(() => resolve()));
+		rmSync(outputDir, { recursive: true, force: true });
+	}
+}, 90_000);
+
+// One capture plus export, approximately 15s. A cross-origin embed script in an
+// authored container renders an in-flow form after load (#2038).
+it('marks a cross-origin in-flow embed form with inert provenance, not same-origin or HubSpot forms', async () => {
+	const renderForm = (id: string) => `(() => { const script = document.currentScript; addEventListener('load', () => {
+		const root = document.createElement('div'); root.className = '${id}-root';
+		const form = document.createElement('form'); form.id = '${id}';
+		for (let index = 0; index < 4; index++) { const input = document.createElement('input'); input.type = 'text'; form.appendChild(input); }
+		const select = document.createElement('select'); select.appendChild(document.createElement('option')); form.appendChild(select);
+		form.appendChild(document.createElement('textarea'));
+		const submit = document.createElement('button'); submit.type = 'button'; submit.textContent = 'Submit'; form.appendChild(submit);
+		root.appendChild(form);
+		script.parentNode.insertBefore(root, script);
+	}); })();`;
+	const server = createServer((request, response) => {
+		if (request.url === '/f/embed.js' || request.url === '/own-form.js') {
+			response.setHeader('Content-Type', 'application/javascript');
+			response.end(renderForm(request.url === '/own-form.js' ? 'own-form' : 'vendor-form'));
+			return;
+		}
+		const port = (server.address() as { port: number }).port;
+		response.setHeader('Content-Type', 'text/html');
+		response.end(`<!doctype html><html><head><title>Embeds</title></head><body><main><h1>Contact</h1>
+			<div class="wcustomhtml"><script src="http://127.0.0.1:${port}/f/embed.js" data-key="SITE_FORM_KEY" data-form="1"></script></div>
+			<div class="own-embed"><script src="/own-form.js"></script></div>
+			<div class="hs-form-frame" data-portal-id="145288931" data-form-id="d320b12e-97d4-4fc0-91be-27d99192f4e9" data-region="eu1"></div>
+			<p>Enough authored prose to keep this the primary document.</p></main></body></html>`);
+	});
+	await new Promise<void>(resolve => server.listen(0, resolve));
+	mkdirSync('.tmp-test', { recursive: true });
+	const outputDir = mkdtempSync(join(process.cwd(), '.tmp-test', 'runtime-embeds-'));
+	try {
+		const port = (server.address() as { port: number }).port;
+		const url = `http://localhost:${port}/`;
+		const result = await captureScreenshots({ urls: [url], primaryUrl: url, outputDir, concurrency: 1, settleMs: 0, learnFluid: false });
+		expect(result.failed).toBe(0);
+		exportWebsiteCapture({ outputDir, sourceUrl: url, platform: 'default', summary: {
+			routesDiscovered: 1, routesCaptured: result.captured, routesSkipped: result.skipped,
+			routesFailed: result.failed, durationMs: result.durationMs,
+		}, failures: [] });
+		const html = readFileSync(join(outputDir, 'website/index.html'), 'utf8');
+		const $ = load(html);
+		// Rendered DOM stays as visual reference; no executable script ships.
+		expect($('#vendor-form').length).toBeGreaterThan(0);
+		// Only export's own inert data and runtime remain; nothing loads the embed.
+		expect($('script[src]').length).toBe(0);
+		expect($('script').toArray().some(script => !$(script).attr('data-blocks-engine-capture-source-evidence') && $(script).text().includes('127.0.0.1'))).toBe(false);
+		expect(html).not.toContain('embed.js"></script>');
+		expect($('[data-blocks-engine-capture-runtime-owner-script], [data-blocks-engine-capture-runtime-owner-data]').length).toBe(0);
+		const marked = $('[data-blocks-engine-capture-runtime-owner]');
+		expect(marked.length).toBeGreaterThan(0);
+		expect(marked.toArray().every(root => $(root).hasClass('vendor-form-root'))).toBe(true);
+		const id = marked.first().attr('data-blocks-engine-capture-runtime-owner')!;
+		expect(id).toMatch(/^runtime-[0-9a-f]{16}$/);
+		const evidence = JSON.parse($('script[data-blocks-engine-capture-source-evidence="runtime-owned-regions"]').text());
+		expect(evidence).toEqual({
+			schema: 'blocks-engine-capture/runtime-owned-regions/v1',
+			regions: [{
+				id, selector: `[data-blocks-engine-capture-runtime-owner="${id}"]`,
+				script: { origin: `http://127.0.0.1:${port}`, path: '/f/embed.js', data: { 'data-key': 'SITE_FORM_KEY', 'data-form': '1' } },
+				roots: Array.from({ length: marked.length }, () => expect.objectContaining({ tag: 'div', controls: 7 })),
+			}],
+		});
+		// A same-origin script's form is not marked.
+		expect($('#own-form').length).toBeGreaterThan(0);
+		expect($('#own-form').closest('[data-blocks-engine-capture-runtime-owner]').length).toBe(0);
+		// HubSpot's declarative restore is unchanged.
+		expect($('.hs-form-frame iframe').first().attr('src')).toBe('https://js-eu1.hsforms.net/forms/embed/v2/?portalId=145288931&formId=d320b12e-97d4-4fc0-91be-27d99192f4e9&region=eu1');
+		expect($('.hs-form-frame').closest('[data-blocks-engine-capture-runtime-owner]').length).toBe(0);
+		const findings = readdirSync(outputDir).filter(name => name.endsWith('.json')).map(name => readFileSync(join(outputDir, name), 'utf8')).join('\n');
+		expect(findings).toContain('third_party_runtime_region_marked');
+		expect(findings).toContain(`marked [data-blocks-engine-capture-runtime-owner=\\"${id}\\"]`);
+	} finally {
+		await new Promise<void>(resolve => server.close(() => resolve()));
 		rmSync(outputDir, { recursive: true, force: true });
 	}
 }, 90_000);

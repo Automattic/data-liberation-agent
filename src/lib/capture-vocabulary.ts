@@ -90,6 +90,7 @@ export const CAPTURE_EVIDENCE_NAMES = {
 		'access-gate': 'a', 'member-login': 'a', 'engagement-stats': 'a', 'source-evidence': 'a', 'reclaimed-space': 'a', 'cleanup-hidden': 'a', 'constructed-stylesheet': 'a',
 		'ported-embed': 'a', 'unported-embed': 'a', 'squarespace-header-style': 'a', 'squarespace-fill-style': 'a', 'squarespace-fill': 'a', 'squarespace-header-visible': 'i', 'check-route-tab': 'a',
 		'google-map-marker': 'a', 'google-map-embed': 'c',
+		'runtime-owner': 'a', 'runtime-owner-script': 'a', 'runtime-owner-data': 'a',
 	},
 } as const;
 
@@ -126,7 +127,7 @@ export const CAPTURE_SCHEMAS = [
 	'collection-status/v1', 'compare-overlays/v1', 'embedded-documents/v1', 'engagement-stats/v1', 'export-publication-lock/v1', 'fidelity-reference/v1',
 	'finite-bootstrap/v1', 'http-acquisition/v1', 'interaction-states/v1', 'interaction-states/v2', 'layout-geometry-capture/v1',
 	'learned-motion/v1', 'native-view-timelines/v1', 'portable-motion/v1', 'runtime-observations/v1',
-	'runtime-regions/v1', 'scroll-states/v1', 'shopify-http-proof/v4', 'source-behavior/v1', 'source-behavior-report/v1',
+	'runtime-owned-regions/v1', 'runtime-regions/v1', 'scroll-states/v1', 'shopify-http-proof/v4', 'source-behavior/v1', 'source-behavior-report/v1',
 	'source-capability-vocabulary/v2', 'source-cleanup/v9', 'source-interactivity/v1', 'source-outcome/v1', 'source-profile/v1',
 ] as const;
 
