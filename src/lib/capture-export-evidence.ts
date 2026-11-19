@@ -3,7 +3,7 @@ import { mergeConsentLayouts } from './consent-banner-layout.js';
 import { normalizedUrl } from './url/route-key.js';
 import { ROUTE_OMITTED_BY_BUDGET } from './route-budget.js';
 import { scopedRouteKey, routeInScope } from './url/route-scope.js';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import type { MediaStubStore } from './resume-state/index.js';
 import type { CapturedResourceManifest } from './screenshot/resource-capture.js';
 import type { ManifestEntry } from './screenshot/manifest-queue.js';
@@ -98,7 +98,6 @@ export interface CaptureEvidenceInput {
 			reserved_bytes: number;
 		};
 	};
-	semantic?: SemanticEvidenceArtifacts;
 	diagnostics: {
 		capture: ReadonlyArray< RouteDiagnostic >;
 		dependencies: ReadonlyArray< { url: string; sourceUrl: string; error: string } >;
@@ -134,49 +133,50 @@ export type SemanticEvidencePage = {
 	viewports: Record< string, Record< string, unknown >[] >;
 };
 
-export interface SemanticEvidenceArtifacts {
-	index: { path: string; content: string };
-	shards: Array< { path: string; content: string; pageCount: number }>;
-}
-
-export function buildSemanticEvidenceArtifacts( pages: SemanticEvidencePage[] ): SemanticEvidenceArtifacts {
-	const shards: SemanticEvidenceArtifacts[ 'shards' ] = [];
-	let shardPages: SemanticEvidencePage[] = [];
-	const shardContent = ( candidates: SemanticEvidencePage[] ) =>
-		`${ JSON.stringify( { schema: INDEXED_SEMANTIC_EVIDENCE_SCHEMA, pages: candidates } ) }\n`;
-	for ( const page of pages ) {
-		const single = shardContent( [ page ] );
-		if ( Buffer.byteLength( single ) > MAX_SEMANTIC_EVIDENCE_FILE_BYTES )
-			throw new Error(
-				`Semantic evidence page "${ page.path }" exceeds sidecar file limit: ${ Buffer.byteLength( single ) } bytes.`
-			);
-		const candidate = shardContent( [ ...shardPages, page ] );
-		if ( shardPages.length > 0 && Buffer.byteLength( candidate ) > MAX_SEMANTIC_EVIDENCE_FILE_BYTES ) {
-			shards.push( {
-				path: `semantic-evidence/shard-${ String( shards.length + 1 ).padStart( 4, '0' ) }.json`,
-				content: shardContent( shardPages ),
-				pageCount: shardPages.length,
-			} );
-			shardPages = [ page ];
-		} else shardPages.push( page );
-	}
-	if ( shardPages.length > 0 )
-		shards.push( {
-			path: `semantic-evidence/shard-${ String( shards.length + 1 ).padStart( 4, '0' ) }.json`,
-			content: shardContent( shardPages ),
-			pageCount: shardPages.length,
-		} );
-	const index = {
-		path: 'semantic-evidence.index.json',
-		content: `${ JSON.stringify( {
-			schema: INDEXED_SEMANTIC_EVIDENCE_SCHEMA,
-			page_count: pages.length,
-			shards: shards.map( ( shard ) => ( { path: shard.path, page_count: shard.pageCount } ) ),
-		} ) }\n`,
+/**
+ * Write indexed semantic evidence as pages arrive. Shards are packed exactly as
+ * one `JSON.stringify` of their pages would be, but only the open shard's page
+ * serializations are held, so memory is bounded by one shard, not the site.
+ */
+export function writeSemanticEvidence( stageDir: string, pages: Iterable< SemanticEvidencePage > ): void {
+	const prefix = `{"schema":${ JSON.stringify( INDEXED_SEMANTIC_EVIDENCE_SCHEMA ) },"pages":[`;
+	const suffix = ']}\n';
+	const envelopeBytes = Buffer.byteLength( prefix ) + Buffer.byteLength( suffix );
+	const shards: Array< { path: string; page_count: number } > = [];
+	let shardPages: string[] = [];
+	let shardBytes = 0;
+	let pageCount = 0;
+	const flush = () => {
+		const path = `semantic-evidence/shard-${ String( shards.length + 1 ).padStart( 4, '0' ) }.json`;
+		mkdirSync( join( stageDir, 'semantic-evidence' ), { recursive: true } );
+		writeFileSync( join( stageDir, path ), `${ prefix }${ shardPages.join( ',' ) }${ suffix }` );
+		shards.push( { path, page_count: shardPages.length } );
+		shardPages = [];
+		shardBytes = 0;
 	};
-	if ( Buffer.byteLength( index.content ) > MAX_SEMANTIC_EVIDENCE_FILE_BYTES )
-		throw new Error( `Semantic evidence index exceeds sidecar file limit: ${ Buffer.byteLength( index.content ) } bytes.` );
-	return { index, shards };
+	for ( const page of pages ) {
+		const serialized = JSON.stringify( page );
+		const bytes = Buffer.byteLength( serialized );
+		if ( envelopeBytes + bytes > MAX_SEMANTIC_EVIDENCE_FILE_BYTES )
+			throw new Error(
+				`Semantic evidence page "${ page.path }" exceeds sidecar file limit: ${ envelopeBytes + bytes } bytes.`
+			);
+		// Joined pages are separated by one comma each.
+		if ( shardPages.length > 0 && envelopeBytes + shardBytes + shardPages.length + bytes > MAX_SEMANTIC_EVIDENCE_FILE_BYTES ) flush();
+		shardPages.push( serialized );
+		shardBytes += bytes;
+		pageCount++;
+	}
+	if ( pageCount === 0 ) return;
+	flush();
+	const index = `${ JSON.stringify( {
+		schema: INDEXED_SEMANTIC_EVIDENCE_SCHEMA,
+		page_count: pageCount,
+		shards,
+	} ) }\n`;
+	if ( Buffer.byteLength( index ) > MAX_SEMANTIC_EVIDENCE_FILE_BYTES )
+		throw new Error( `Semantic evidence index exceeds sidecar file limit: ${ Buffer.byteLength( index ) } bytes.` );
+	writeFileSync( join( stageDir, 'semantic-evidence.index.json' ), index );
 }
 
 interface AssetEvidenceReference {
@@ -279,7 +279,10 @@ export function collectAssetEvidenceReferences(
 			assetCount++;
 		}
 		indexed.count++;
-		if ( indexed.references.length < MAX_ASSET_EVIDENCE_REFERENCES ) indexed.references.push( location );
+		// A reference is a slice of its whole route document: copy the ones the
+		// index keeps, so it does not hold every captured page until export ends.
+		if ( indexed.references.length < MAX_ASSET_EVIDENCE_REFERENCES )
+			indexed.references.push( { ...location, reference: structuredClone( location.reference ) } );
 	};
 	for ( const entry of entries ) {
 		const path = `website/${ routePathOf( entry.url ) }`;
@@ -412,13 +415,17 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 	const capturedInteractivity = input.capture.interactivity;
 	const retainedEntries = input.pages;
 	const routes = input.routes.retained;
-	const routeHtml = routes.map( route => {
-		const path = join( stageDir, route.path );
-		return existsSync( path ) ? readFileSync( path, 'utf8' ) : '';
-	} );
+	// Read one page at a time: holding every rendered page scales with the site.
+	const routeHtml = ( route: { path: string } | undefined ) => {
+		const path = route && join( stageDir, route.path );
+		return path && existsSync( path ) ? readFileSync( path, 'utf8' ) : '';
+	};
 	// The entrypoint's own declaration of its name outranks a discovered title.
-	const entrypointHtml = routeHtml[ routes.findIndex( route => route.path === 'website/index.html' ) ] ?? '';
-	const siteTitle = declaredSiteName( entrypointHtml ) ?? siteNameFromRouteTitles( options.title, routeHtml.map( html => html ? extractTitle( html ) : '' ) );
+	const entrypointHtml = routeHtml( routes.find( route => route.path === 'website/index.html' ) );
+	const siteTitle = declaredSiteName( entrypointHtml ) ?? siteNameFromRouteTitles( options.title, routes.map( route => {
+		const html = routeHtml( route );
+		return html ? extractTitle( html ) : '';
+	} ) );
 	const excludedRoutes = input.routes.excluded;
 	const duplicateRoutes = input.routes.duplicates;
 	const interactionPages = input.states.interactions;
@@ -430,7 +437,6 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 	const portablePathsBySource = input.assets.portablePaths;
 	const assets = input.assets.files;
 	const portableMedia = input.assets.media;
-	const semanticEvidence = input.semantic;
 	const routeCaptureDiagnostics = input.diagnostics.capture;
 	const unresolvedDependencies = input.diagnostics.dependencies;
 	const unresolvedMedia = input.diagnostics.media;
@@ -529,14 +535,6 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 		join( stageDir, sourceInteractivity.path ),
 		`${ JSON.stringify( { schema: SOURCE_INTERACTIVITY_SCHEMA, pages: unreproducedMotion }, null, 2 ) }\n`
 	);
-	if ( semanticEvidence ) {
-		writeFileSync( join( stageDir, semanticEvidence.index.path ), semanticEvidence.index.content );
-		for ( const shard of semanticEvidence.shards ) {
-			const path = join( stageDir, shard.path );
-			mkdirSync( dirname( path ), { recursive: true } );
-			writeFileSync( path, shard.content );
-		}
-	}
 	if ( interactionPages.length > 0 ) {
 		writeFileSync(
 			join( stageDir, 'interaction-states.json' ),

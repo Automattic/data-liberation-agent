@@ -2582,16 +2582,21 @@ describe( 'exportWebsiteCapture', () => {
 	it( 'exports many large responsive routes within a constrained heap', () => {
 		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
 		const outputDir = capture.build();
-		const routeCount = 16;
+		// Every route also carries section evidence and an asset reference.
+		// Export must release each route's documents and evidence once written:
+		// held together, these routes exceed the heap below (#2040).
+		const routeCount = 32;
 		const content = 'x'.repeat( 256 * 1024 );
+		const sections = SectionSpecsStore.load( outputDir );
 		const entries: Record< string, { html: string } > = {};
 		for ( let index = 0; index < routeCount; index++ ) {
 			const name = index === 0 ? 'homepage' : `page-${ index }`;
 			const route = index === 0 ? 'https://example.com/' : `https://example.com/page-${ index }`;
 			const next = index + 1 < routeCount ? `<a href="/page-${ index + 1 }">Next</a>` : '';
-			capture.file( join( 'html', `${ name }.html` ), `<main><h1>Desktop ${ index }</h1>${ next }<p>${ content }</p></main>` );
-			capture.file( join( 'html-mobile', `${ name }.html` ), `<main><h1>Mobile ${ index }</h1>${ next }<p>${ content }</p></main>` );
+			capture.file( join( 'html', `${ name }.html` ), `<main><h1>Desktop ${ index }</h1>${ next }<img src="/shared.png"><p>${ content }</p></main>` );
+			capture.file( join( 'html-mobile', `${ name }.html` ), `<main><h1>Mobile ${ index }</h1>${ next }<img src="/shared.png"><p>${ content }</p></main>` );
 			entries[ route ] = { html: `html/${ name }.html` };
+			sections.set( route, [ { selector: 'main', text: `Section ${ index } `.repeat( 160 * 1024 ) } as never ], [] );
 		}
 		capture.manifest( { version: 1, entries } );
 		const runnerPath = join( outputDir, 'export-under-limit.ts' );
@@ -2611,6 +2616,8 @@ const receiptPath = exportWebsiteCapture( {
 } );
 const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
 if ( receipt.routes.length !== ${ routeCount } ) throw new Error( 'route count mismatch' );
+const semantic = JSON.parse( readFileSync( ${ JSON.stringify( join( outputDir, 'semantic-evidence.index.json' ) ) }, 'utf8' ) );
+if ( semantic.page_count !== ${ routeCount } ) throw new Error( 'semantic evidence page count mismatch' );
 if ( !existsSync( ${ JSON.stringify( join( outputDir, 'website', 'index.html' ) ) } ) )
 	throw new Error( 'website was not completed' );
 if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) } ) )
@@ -2619,7 +2626,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		);
 		const result = spawnSync(
 			process.execPath,
-			[ '--max-old-space-size=128', '--max-semi-space-size=1', '--import', 'tsx', runnerPath ],
+			[ '--max-old-space-size=144', '--max-semi-space-size=1', '--import', 'tsx', runnerPath ],
 			{ cwd: process.cwd(), encoding: 'utf8', timeout: 60_000 }
 		);
 		expect( result.error ).toBeUndefined();
