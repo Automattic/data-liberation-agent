@@ -6,7 +6,7 @@ import { expect, it, vi } from 'vitest';
 import { exportFixture } from '../../test/export-fixture.js';
 import { exportWebsiteCapture } from './capture-export.js';
 import { BOX_TREE_SCHEMA, type BoxTree } from './screenshot/box-tree.js';
-import { namespaceExportBoxTreeIds, projectExportBoxTree, writeExportBoxTrees } from './export-box-trees.js';
+import { compactBoxTree, namespaceExportBoxTreeIds, projectExportBoxTree, writeExportBoxTrees, type CompactExportBoxTree, type ExportBoxTree } from './export-box-trees.js';
 import { WebsiteInventory } from './website-inventory.js';
 
 const source: BoxTree = {
@@ -93,7 +93,7 @@ it('keeps desktop only when the route has no phone capture', () => {
 	expect(Object.keys(result.nodes)).toEqual(['n0', 'n1']);
 });
 
-it('leaves out a sidecar over the per-file limit instead of writing a file the importer refuses', () => {
+it('leaves out a sidecar over the per-file limit even compacted instead of writing a file the importer refuses', () => {
 	const fixture = exportFixture();
 	const root = fixture.build();
 	// A long listing: one observed node per row, enough to exceed a small limit.
@@ -107,10 +107,62 @@ it('leaves out a sidecar over the per-file limit instead of writing a file the i
 	try {
 		expect(writeExportBoxTrees(root, join(root, 'website'), pages, new WebsiteInventory(join(root, 'website')), new Map(), 4096)).toEqual(['website/box-tree/about.json']);
 		expect(existsSync(join(root, 'website/box-tree/index.json'))).toBe(false);
-		expect(stderr.mock.calls.map(([line]) => String(line)).join('')).toMatch(/box-tree sidecar website\/box-tree\/index\.json is \d+ bytes, over the 4096-byte per-file limit; not written/);
+		expect(stderr.mock.calls.map(([line]) => String(line)).join('')).toMatch(/box-tree sidecar website\/box-tree\/index\.json is \d+ bytes even compacted \(\d+ as v2\), over the 4096-byte per-file limit; not written/);
 	} finally {
 		stderr.mockRestore();
 	}
+});
+
+const expand = (tree: CompactExportBoxTree) => ({ ...tree, schema: BOX_TREE_SCHEMA, styles: undefined, nodes: Object.fromEntries(Object.entries(tree.nodes).map(([id, node]) => [id, { ...node,
+	viewports: Object.fromEntries(Object.entries(node.viewports).map(([name, { pseudo, ...observation }]) => [name, { ...observation, used_styles: tree.styles[observation.used_styles],
+		...(pseudo ? { pseudo: Object.fromEntries(Object.entries(pseudo).map(([side, value]) => [side, { ...value!, used_styles: tree.styles[value!.used_styles] }])) } : {}) }])) }])) });
+
+it('compacts losslessly, storing each distinct used_styles once', () => {
+	const styles = (display: string) => ({ display, color: 'rgb(0, 0, 0)' });
+	const box = { x: 0, y: 0, width: 10, height: 10 };
+	const tree: ExportBoxTree = {
+		schema: BOX_TREE_SCHEMA, source_path: 'website/index.html', source_hash: 'h', includes: { 'website/parts/header-x.html': 'p' },
+		viewports: { desktop: { width: 1440, height: 900 }, mobile: { width: 390, height: 844 } },
+		nodes: {
+			a: { children: ['b'], viewports: { desktop: { border_box: box, used_styles: styles('block') }, mobile: { border_box: box, used_styles: styles('block') } } },
+			b: { children: [], viewports: {
+				desktop: { border_box: box, used_styles: styles('flex'), pseudo: { before: { content: '"“"', border_box: box, used_styles: styles('inline') } } },
+				mobile: { border_box: box, used_styles: styles('block') },
+			} },
+		},
+	};
+	const compact = compactBoxTree(tree);
+	expect(compact.schema).toBe('blocks-engine/box-tree/v3');
+	expect(compact.styles).toEqual([styles('block'), styles('flex'), styles('inline')]);
+	expect(compact.nodes.b.viewports.desktop.pseudo?.before?.used_styles).toBe(2);
+	expect(JSON.parse(JSON.stringify(expand(compact)))).toEqual(tree);
+});
+
+it('writes an oversized sidecar compacted when that fits the per-file limit', () => {
+	const fixture = exportFixture();
+	const root = fixture.build();
+	const rows = Array.from({ length: 50 }, (_, i) => `r${i}`);
+	fixture.file('website/index.html', `<html data-blocks-engine-node-id="n0"><body data-blocks-engine-node-id="n1">${rows.map(id => `<p data-blocks-engine-node-id="${id}">row</p>`).join('')}</body></html>`);
+	// Every row repeats the same full computed style set, as long listings do.
+	const used = Object.fromEntries(Array.from({ length: 90 }, (_, i) => [`property-${i}`, 'initial-value']));
+	const tree = captured('html/home.html', 'desktop', { width: 1440, height: 900 }, { n0: ['n1'], n1: rows, ...Object.fromEntries(rows.map(id => [id, []])) }, 100);
+	for (const node of Object.values(tree.nodes)) node.viewports.desktop.used_styles = used;
+	fixture.json('box-tree/home.json', tree);
+	const limit = 32 * 1024;
+	expect(Buffer.byteLength(JSON.stringify(tree))).toBeGreaterThan(limit);
+	const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+	try {
+		expect(writeExportBoxTrees(root, join(root, 'website'), [{ sourcePath: 'html/home.html', path: 'index.html' }], new WebsiteInventory(join(root, 'website')), new Map(), limit)).toEqual(['website/box-tree/index.json']);
+		expect(stderr.mock.calls.map(([line]) => String(line)).join('')).toMatch(/written as blocks-engine\/box-tree\/v3/);
+	} finally {
+		stderr.mockRestore();
+	}
+	const written = readFileSync(join(root, 'website/box-tree/index.json'), 'utf8');
+	expect(Buffer.byteLength(written)).toBeLessThanOrEqual(limit);
+	const compact = JSON.parse(written) as CompactExportBoxTree;
+	expect(compact.styles).toEqual([used]);
+	expect(Object.keys(compact.nodes)).toEqual(['n0', 'n1', ...rows]);
+	expect(Object.values(expand(compact).nodes).every(node => node.viewports.desktop.used_styles === undefined || JSON.stringify(node.viewports.desktop.used_styles) === JSON.stringify(used))).toBe(true);
 });
 
 it('keeps phone identities distinct in assembled documents, leaving width-selected wrappers unobserved', () => {

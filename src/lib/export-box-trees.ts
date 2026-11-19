@@ -52,6 +52,55 @@ export const MAX_BOX_TREE_FILE_BYTES = 10 * 1024 * 1024;
 /** Box-tree sidecar bound to a final page plus the shared parts it includes. */
 export type ExportBoxTree = BoxTree & { includes?: Record<string, string> };
 
+/**
+ * Compact box-tree schema: v2 with each distinct `used_styles` object stored once in a
+ * top-level `styles` list, and every node and pseudo observation's `used_styles`
+ * replaced by its index there. Readers expand it back to v2; one that predates it
+ * rejects the sidecar with a warning and converts without evidence.
+ */
+export const BOX_TREE_COMPACT_SCHEMA = 'blocks-engine/box-tree/v3';
+
+type BoxObservation = BoxTree['nodes'][string]['viewports'][string];
+type CompactBox = Omit<BoxObservation, 'used_styles' | 'pseudo'> & { used_styles: number };
+type CompactObservation = CompactBox & { pseudo?: { before?: CompactBox & { content: string }; after?: CompactBox & { content: string } } };
+export type CompactExportBoxTree = Omit<ExportBoxTree, 'schema' | 'nodes'> & {
+	schema: typeof BOX_TREE_COMPACT_SCHEMA;
+	styles: Array<Record<string, string>>;
+	nodes: Record<string, { children: string[]; viewports: Record<string, CompactObservation> }>;
+};
+
+/** Lossless: the same tree with each distinct `used_styles` object stored once. */
+export function compactBoxTree(tree: ExportBoxTree): CompactExportBoxTree {
+	const styles: Array<Record<string, string>> = [];
+	const indexes = new Map<string, number>();
+	const intern = (used: Record<string, string>): number => {
+		const key = JSON.stringify(used);
+		let index = indexes.get(key);
+		if (index === undefined) {
+			index = styles.push(used) - 1;
+			indexes.set(key, index);
+		}
+		return index;
+	};
+	const nodes: CompactExportBoxTree['nodes'] = {};
+	for (const [id, node] of Object.entries(tree.nodes)) {
+		const viewports: Record<string, CompactObservation> = {};
+		for (const [name, { pseudo, ...observation }] of Object.entries(node.viewports)) {
+			const compact: CompactObservation = { ...observation, used_styles: intern(observation.used_styles) };
+			if (pseudo) {
+				compact.pseudo = {};
+				for (const side of ['before', 'after'] as const) {
+					const value = pseudo[side];
+					if (value) compact.pseudo[side] = { ...value, used_styles: intern(value.used_styles) };
+				}
+			}
+			viewports[name] = compact;
+		}
+		nodes[id] = { ...node, viewports };
+	}
+	return { ...tree, schema: BOX_TREE_COMPACT_SCHEMA, styles, nodes };
+}
+
 const sha256 = (bytes: Buffer | string): string => createHash('sha256').update(bytes).digest('hex');
 
 /**
@@ -208,12 +257,18 @@ export function writeExportBoxTrees(captureRoot: string, websiteDir: string, pag
 		const tree = projectExportBoxTree(resolved.html, captured, `website/${page.path}`, bytes, includes);
 		// A captured resource must never be overwritten by generated evidence.
 		if (existsSync(join(websiteDir, path))) continue;
-		const content = JSON.stringify(tree) + '\n';
-		const contentBytes = Buffer.byteLength(content);
-		// Optional evidence: the page imports without it, but not with a file the importer refuses.
-		if (contentBytes > maxFileBytes) {
-			process.stderr.write(`[budget] box-tree sidecar website/${path} is ${contentBytes} bytes, over the ${maxFileBytes}-byte per-file limit; not written\n`);
-			continue;
+		let content = JSON.stringify(tree) + '\n';
+		// v2 stays the default; only a sidecar too large for the importer is written compact.
+		if (Buffer.byteLength(content) > maxFileBytes) {
+			const full = Buffer.byteLength(content);
+			content = JSON.stringify(compactBoxTree(tree)) + '\n';
+			const compactBytes = Buffer.byteLength(content);
+			// Optional evidence: the page imports without it, but not with a file the importer refuses.
+			if (compactBytes > maxFileBytes) {
+				process.stderr.write(`[budget] box-tree sidecar website/${path} is ${compactBytes} bytes even compacted (${full} as v2), over the ${maxFileBytes}-byte per-file limit; not written\n`);
+				continue;
+			}
+			process.stderr.write(`[budget] box-tree sidecar website/${path} written as ${BOX_TREE_COMPACT_SCHEMA}: ${full} bytes as v2, ${compactBytes} compacted\n`);
 		}
 		mkdirSync(dirname(join(websiteDir, path)), { recursive: true });
 		writeFileSync(join(websiteDir, path), content);
