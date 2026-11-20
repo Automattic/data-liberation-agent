@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { downloadMedia, existingMediaNames } from './media-fetch/media.js';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect } from 'vitest';
 import { it } from '../../test/browser.js';
@@ -446,6 +446,40 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
     SectionSpecsStore.load(root).set(url, [{ sectionIndex: 0, images: [{ url: `${url}large/photo.svg` }], cells: [] } as never], []);
     expect(await downloadCaptureSectionMedia(root, [url])).toBe(1);
     expect(readFileSync(record.local_path!, 'utf8')).toBe(svg(20));
+   });
+  } finally {
+
+   rmSync(root, { recursive: true, force: true });
+  }
+ });
+
+ it('acquires originals concurrently but names and records them in document order (~1s)', async ({ serve }) => {
+  const svg = (width: number) => `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="10"><rect width="${width}" height="10"/></svg>`;
+  const widths: Record<string, number> = { a: 10, b: 20, c: 30, d: 40 };
+  let inFlight = 0, most = 0;
+  // Earlier documents answer slower, so completion order is the reverse of document order.
+  const { server } = await serve((request, response) => {
+   most = Math.max(most, ++inFlight);
+   const folder = request.url!.split('/')[1];
+   setTimeout(() => { inFlight--; response.writeHead(200, { 'content-type': 'image/svg+xml' }); response.end(svg(widths[folder])); }, 100 * (5 - widths[folder] / 10));
+  });
+
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
+  mkdirSync('.tmp-test', { recursive: true });
+  const root = mkdtempSync(join(process.cwd(), '.tmp-test', 'ordered-acquisition-'));
+  try {
+   await runWithTrustedOrigins([url], async () => {
+    const records = await captureAssets(root, [{ url, html: Object.keys(widths).map(folder => `<img src="/${folder}/photo.svg">`).join('') }]);
+    expect(most).toBeGreaterThan(1);
+    expect(records.map(record => [record.resolved_original, record.local_path!.split('/').pop(), record.original?.width])).toEqual([
+     [`${url}a/photo.svg`, 'photo.svg', 10],
+     [`${url}b/photo.svg`, 'photo-2.svg', 20],
+     [`${url}c/photo.svg`, 'photo-3.svg', 30],
+     [`${url}d/photo.svg`, 'photo-4.svg', 40],
+    ]);
+    for (const record of records) expect(readFileSync(record.local_path!, 'utf8')).toBe(svg(record.original!.width!));
+    // Downloads are staged privately; nothing but published media is left behind.
+    expect(readdirSync(root).filter(name => name.startsWith('.asset-staging'))).toEqual([]);
    });
   } finally {
 
