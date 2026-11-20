@@ -53,6 +53,6 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		const html = await page.content();
 		await holdVideoFrames( page );
 		expect( await page.content() ).toBe( html );
-		expect( await page.locator( 'video' ).evaluateAll( videos => videos.map( video => ( { paused: ( video as HTMLVideoElement ).paused, time: ( video as HTMLVideoElement ).currentTime } ) ) ) ).toEqual( [ { paused: true, time: 0 }, { paused: true, time: 0 } ] );
+		expect( await page.locator( 'video' ).evaluateAll( ( videos: HTMLVideoElement[] ) => videos.map( video => ( { paused: video.paused, time: video.currentTime } ) ) ) ).toEqual( [ { paused: true, time: 0 }, { paused: true, time: 0 } ] );
 	}, 10_000 );
 } );

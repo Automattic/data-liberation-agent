@@ -277,3 +277,38 @@ it('omits includes for pages without parts and drops IDs foreign to the route', 
 	expect(result).not.toHaveProperty('includes');
 	expect(Object.keys(result.nodes)).toEqual(['root', 'text']);
 });
+
+it('rewrites used-style url() values to the website-local media the page uses, including byte-identical aliases (#2150)', () => {
+	const fixture = exportFixture();
+	const outputDir = fixture.build();
+	// The page names the photo by an alias whose bytes match another exported file.
+	fixture.page('/', '<html data-blocks-engine-node-id="root"><head></head><body data-blocks-engine-node-id="body"><img src="https://cdn.example/photo.jpeg"><div data-blocks-engine-node-id="hero" style="background-image:url(&quot;https://cdn.example/a~mv2.jpeg&quot;)"><ul data-blocks-engine-node-id="list" style="list-style-image:url(/images/bullet.png)"><li>Item</li></ul></div></body></html>');
+	fixture.media('https://cdn.example/photo.jpeg', 'media/photo.jpeg', 'same-bytes');
+	fixture.media('https://cdn.example/a~mv2.jpeg', 'media/a.jpeg', 'same-bytes');
+	fixture.media('https://example.com/images/bullet.png', 'media/bullet.png', 'bullet');
+	const hero = { 'background-image': 'url("https://cdn.example/a~mv2.jpeg")', 'mask-image': 'url("https://cdn.example/a~mv2.jpeg"), url("https://cdn.example/unknown.png")' };
+	const list = { 'list-style-image': 'url("https://example.com/images/bullet.png")' };
+	const box = { x: 0, y: 0, width: 10, height: 10 };
+	fixture.json('box-tree/page-0.json', {
+		schema: BOX_TREE_SCHEMA, source_path: 'html/page-0.html', source_hash: 'raw', viewports: { desktop: { width: 1440, height: 900 } },
+		nodes: {
+			root: { children: ['body'], viewports: { desktop: { border_box: box, used_styles: { display: 'block' } } } },
+			body: { children: ['hero'], viewports: { desktop: { border_box: box, used_styles: { display: 'block' } } } },
+			hero: { children: ['list'], viewports: { desktop: { border_box: box, used_styles: hero, pseudo: { before: { content: 'url("https://cdn.example/a~mv2.jpeg")', border_box: box, used_styles: hero } } } } },
+			list: { children: [], viewports: { desktop: { border_box: box, used_styles: list } } },
+		},
+	} satisfies BoxTree);
+	exportWebsiteCapture({ outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] });
+	const page = readFileSync(join(outputDir, 'website/index.html'), 'utf8');
+	const photo = /<img src="(\/media\/[^"]+)"/.exec(page)![1];
+	const bullet = /list-style-image:url\((\/media\/[^)]+)\)/.exec(page)![1];
+	// The website collapses the alias onto the one file with those bytes.
+	expect(page).toContain(`background-image:url(&quot;${photo}&quot;)`);
+	const written = readFileSync(join(outputDir, 'website/box-tree/index.json'), 'utf8');
+	const tree = readSidecar(join(outputDir, 'website/box-tree/index.json'));
+	expect(tree.nodes.hero.viewports.desktop.used_styles).toEqual({ 'background-image': `url("${photo}")`, 'mask-image': `url("${photo}"), url("https://cdn.example/unknown.png")` });
+	expect(tree.nodes.hero.viewports.desktop.pseudo?.before?.content).toBe(`url("${photo}")`);
+	expect(tree.nodes.list.viewports.desktop.used_styles).toEqual({ 'list-style-image': `url("${bullet}")` });
+	expect(written).not.toContain('a~mv2');
+	expect(written).not.toContain('https://example.com');
+});

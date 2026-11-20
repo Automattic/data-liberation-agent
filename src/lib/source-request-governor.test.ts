@@ -35,7 +35,7 @@ describe( 'parseRetryAfter', () => {
 } );
 
 describe( 'SourceRequestGovernor', () => {
-	it('backs off on transport resets across browser and HTTP callers, then recovers uncapped browser fan-out', async () => {
+	it('backs off on transport resets across browser and HTTP callers, then recovers browser fan-out without forgetting the rate ceiling', async () => {
 		vi.useFakeTimers();
 		const governor = new SourceRequestGovernor('https://source.example', { concurrency: 2, recoveryStep: 1 });
 		for (const message of ['ECONNRESET', 'ECONNREFUSED', 'net::ERR_CONNECTION_RESET', 'net::ERR_CONNECTION_REFUSED', 'UND_ERR_RES_CONTENT_LENGTH_MISMATCH', 'body length mismatch', 'route.fetch: socket hang up']) {
@@ -55,17 +55,22 @@ describe( 'SourceRequestGovernor', () => {
 		expect(task).toHaveBeenCalledTimes(1);
 		expect(http).not.toHaveBeenCalled();
 		await vi.advanceTimersByTimeAsync(1);
+		await vi.runAllTimersAsync();
 		await Promise.all([pending, other]);
 		expect(governor.concurrency).toBe(2);
 		let active = 0;
 		let peak = 0;
-		await Promise.all(Array.from({ length: 20 }, () => governor.run(async () => {
+		const fanout = Promise.all(Array.from({ length: 20 }, () => governor.run(async () => {
 			peak = Math.max(peak, ++active);
 			await Promise.resolve();
 			active--;
 			return ok();
 		}, { browser: true })));
-		expect(peak).toBe(20);
+		await vi.runAllTimersAsync();
+		await fanout;
+		expect(peak).toBe(1);
+		expect(governor.isBrowserThrottled).toBe(false);
+		expect(governor.stats().learnedRateCeiling).toBe(0.5);
 	});
 	it( 'bounds requests in flight, drops to one after a throttle and recovers on successes', async () => {
 		const governor = new SourceRequestGovernor( 'https://source.example', { concurrency: 4, recoveryStep: 2 } );
@@ -93,7 +98,7 @@ describe( 'SourceRequestGovernor', () => {
 		expect( governor.concurrency ).toBe( 4 );
 		peak = 0;
 		await Promise.all( Array.from( { length: 8 }, () => request( ok ) ) );
-		expect( peak ).toBe( 4 );
+		expect( peak ).toBe( 1 );
 	} );
 
 	it( 'retries a throttled request itself after its Retry-After', async () => {
@@ -109,7 +114,7 @@ describe( 'SourceRequestGovernor', () => {
 		await vi.advanceTimersByTimeAsync( 1 );
 		expect( task ).toHaveBeenCalledTimes( 2 );
 		// No Retry-After on the 503: the fallback wait.
-		await vi.advanceTimersByTimeAsync( SOURCE_REQUEST_GOVERNOR_DEFAULTS.fallbackRetryAfterMs );
+		await vi.advanceTimersByTimeAsync( 2000 );
 		expect( task ).toHaveBeenCalledTimes( 3 );
 		expect( settled ).toMatchObject( { response: { status: 200 }, attempts: 3, throttles: 2 } );
 		expect( governor.throttleEvents ).toBe( 2 );
@@ -123,7 +128,7 @@ describe( 'SourceRequestGovernor', () => {
 		void governor.run( other );
 		await vi.advanceTimersByTimeAsync( 999 );
 		expect( other ).not.toHaveBeenCalled();
-		await vi.advanceTimersByTimeAsync( 1 );
+		await vi.advanceTimersByTimeAsync( 1001 );
 		expect( other ).toHaveBeenCalledTimes( 1 );
 	} );
 

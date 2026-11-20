@@ -15,6 +15,87 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.40.4] - 2026-11-20
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- Shopify catalog images starve: responsive variants exhaust the byte budget and CDN host aliases defeat reuse
+- don't count links to non-document resources as uncaptured routes
+
+## [0.40.3] - 2026-11-20
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- capture consent policy link color
+
+## [0.40.2] - 2026-11-20
+
+### Changed
+- regenerate plugin bundles
+- Template clusters: derived members keep the representative's site-chrome dropdowns
+
+## [0.40.1] - 2026-11-20
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- map single-variant products as simple and keep Unicode handles
+
+## [0.40.0] - 2026-11-20
+
+### Added
+- defer compare reference capture to a resumable reference stage
+
+### Changed
+- regenerate plugin bundles
+- Remove Blogger account widgets and platform credit during capture
+
+### Fixed
+- resolve responsive cross-width swaps without the confirm wait
+
+## [0.39.15] - 2026-11-20
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- localize url() values in exported box-tree used styles
+
+## [0.39.14] - 2026-11-20
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- pace native source loads by time instead of admission slots
+
+## [0.39.13] - 2026-11-20
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- persist source rate ceilings and stop admitting blocked routes
+
+## [0.39.12] - 2026-11-20
+
+### Changed
+- regenerate plugin bundles
+- Capture cleanup: remove rendered 1×1 SDK frames
+
+## [0.39.11] - 2026-11-20
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- retry routes with failed browser stylesheet loads
+
 ## [0.39.10] - 2026-11-20
 
 ### Changed

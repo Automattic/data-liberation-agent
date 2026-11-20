@@ -7,7 +7,7 @@ import { HELP, version, parseCliOptions } from './options.js';
 import { loadExternalPlatforms } from './platform/load-external.js';
 
 const args = process.argv.slice(2);
-const SUBCOMMANDS = ['inspect', 'compare', 'publish', 'media', 'mcp'];
+const SUBCOMMANDS = ['inspect', 'compare', 'publish', 'media', 'reference', 'mcp'];
 function isParseableUrl(candidate: string): boolean {
   try { new URL(candidate); return true; } catch { return false; }
 }
@@ -57,6 +57,11 @@ if (args.includes('--help')) {
     console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);
   }
+} else if (args[0] === 'reference') {
+  const directory = args[1];
+  if (!directory || args.length > 2) throw new Error('directory required. Usage: data-liberation reference <dir>');
+  const { runReferenceStage } = await import('./lib/fidelity/reference-stage.js');
+  console.log(JSON.stringify(await runReferenceStage(directory), null, 2));
 } else if (args[0] === 'media') {
   const directory = args[1];
   if (!directory || args.length > 2) throw new Error('directory required. Usage: data-liberation media <dir>');

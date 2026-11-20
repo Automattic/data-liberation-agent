@@ -126,7 +126,7 @@ export const CAPTURE_SCHEMAS = [
 	'captured-interactions/v3', 'captured-scroll-states/v1', 'captured-semantic-evidence/v2',
 	'collection-status/v1', 'compare-overlays/v1', 'embedded-documents/v1', 'engagement-stats/v1', 'export-publication-lock/v1', 'fidelity-reference/v1',
 	'finite-bootstrap/v1', 'http-acquisition/v1', 'interaction-states/v1', 'interaction-states/v2', 'layout-geometry-capture/v1',
-	'learned-motion/v1', 'native-view-timelines/v1', 'portable-motion/v1', 'runtime-observations/v1',
+	'learned-motion/v1', 'native-view-timelines/v1', 'portable-motion/v1', 'reference-stage/v1', 'runtime-observations/v1',
 	'runtime-owned-regions/v1', 'runtime-regions/v1', 'scroll-states/v1', 'shopify-http-proof/v4', 'source-behavior/v1', 'source-behavior-report/v1',
 	'source-capability-vocabulary/v2', 'source-cleanup/v10', 'source-interactivity/v1', 'source-outcome/v1', 'source-profile/v1',
 ] as const;

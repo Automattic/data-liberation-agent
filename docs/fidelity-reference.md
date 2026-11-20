@@ -6,6 +6,24 @@ fluid geometry rewriting/HTML serialization. Each captured route is observed at
 390 (mobile context), 768 and 1440 CSS pixels, height 900, in `baseline` state.
 Reference PNGs are always recorded, even without optional full-page screenshots.
 
+## Deferred reference stage
+
+`--defer-reference` (`deferReference: true`) keeps reference cells off the capture
+critical path. Capture still declares the cells, records each sampled route's
+source motion (painted, latent and rotating tokens), browser profile, external
+boundary and runtime errors, the cleanup policy, route scope, sample and trusted
+origins, and extracts entrypoint navigation landmarks. It writes them to
+`reference-stage.json` (`blocks-engine-capture/reference-stage/v1`), exports `website/`,
+and reports `reference: { status: 'pending' }` in the result and receipt. Memory
+admission reserves no reference contexts. No `fidelity-reference.json` is written.
+
+`data-liberation reference <dir>` (`runReferenceStage`) observes exactly those cells,
+aligned to the recorded motion, then writes the same `fidelity-reference.json`
+compare accepts and marks the receipt `complete`. It checkpoints after each route;
+a re-run keeps ready cells and retries the rest. It never rediscovers routes or
+picks a new moment. Unlike in-capture cells, a deferred cell cannot feed
+viewport-entrance startup poses back into the already-serialized capture page.
+
 ## Public API
 
 ```ts

@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { catalogImageSources } from './product-row.js';
 import { dirname, join, resolve } from 'node:path';
 import { pathWithin } from './portable-assets.js';
 import { findAdapter } from '../adapters/index.js';
@@ -19,6 +20,7 @@ import { normalizeDiscoveredRoutes } from './extraction/sitemap.js';
 import { routeInScope, scopedRouteKey, validateRouteScope } from './url/route-scope.js';
 import { githubPagesRouteScope } from '../hosts/github-pages.js';
 import { actionUrlExclusion, platformRuntimeExclusion, ROUTE_EXCLUDED_ACTION_URL } from './url/action-url.js';
+import { NON_DOCUMENT_URL } from './screenshot/linked-frontier.js';
 import { galleryFrameMediaUrls } from './screenshot/gallery-capture.js';
 import type { ManifestEntry } from './screenshot/manifest-queue.js';
 import { budgetOmittedRoutes, hasUncapturedProfiles, missingRoutes, withExportDroppedRoutes, type MissingRoute } from './capture-usability.js';
@@ -127,6 +129,8 @@ export interface CaptureOptions {
 	 * (full-route parity).
 	 */
 	referenceSample?: number | 'all';
+	/** Export now; freeze capture-declared reference cells with the reference command later. */
+	deferReference?: boolean;
 	/**
 	 * Capture time budget in milliseconds, measured from the start of this call
 	 * until export must begin (browser acquisition only). Route admission
@@ -240,6 +244,7 @@ export interface UnresolvedAnchor {
 }
 
 export interface CaptureResult {
+	reference?: { status: 'pending' | 'complete' };
 	/** True only when export was deferred; resume into the same output directory. */
 	checkpoint?: boolean;
 	resumable?: boolean;
@@ -580,8 +585,8 @@ async function runCaptureWebsite(
 		for ( const href of await renderedEntryNavigation( sourceUrl, sourceGovernors, adapter.sourceTelemetry ) ) navigationTargets.add( normalizedUrl( href ) );
 	}
 	const entryNavigationRoutes = prunedInventoryUrls.filter( url => navigationTargets.has( normalizedUrl( url ) ) );
-	// Cluster seeds unlock whole collections before navigation spends the window.
-	// Without clusters, preserve navigation-first selection and inventory spread.
+	// Navigation targets come first, then cluster seeds that unlock whole
+	// collections. Without clusters, navigation then representatives and spread.
 	const preferred = templateClusters
 		? rankTemplateClusterRoutes( prunedInventoryUrls, sourceUrl, clusterRankingGroups, navigationTargets, contentSource?.termName.bind( contentSource ) )
 		: [ ...entryNavigationRoutes, ...( templateGrouping?.representatives ?? [] ) ];
@@ -619,6 +624,9 @@ async function runCaptureWebsite(
 		await adapter.liberation?.initScript?.(page);
 	} : undefined;
 	const reference = createReferenceCollector( outputDir, sourceUrl, urls, {
+		defer: options.deferReference,
+		adapterId: adapter.id,
+		trustedOrigins: options.trustedOrigins,
 		routeScope,
 		publicUrlsOnly: true,
 		cleanupPolicy: ( await import( './source-cleanup.js' ) ).cleanupPolicy( adapter.liberation?.cleanupRules ),
@@ -733,7 +741,7 @@ async function runCaptureWebsite(
 		} : {} ),
 		// Memory admission reserves for what a route opens: bounded samples
 		// leave most routes without fresh reference pages.
-		...( reference.sampledSourceUrls ? { referenceSampleUrls: reference.sampledSourceUrls } : {} ),
+		...( options.deferReference ? { referenceSampleUrls: [] } : reference.sampledSourceUrls ? { referenceSampleUrls: reference.sampledSourceUrls } : {} ),
 		onRouteAlias: reference.alias,
 		withdrawSourceProfile: reference.withdraw,
 		...( adapter.liberation?.canonicalizeHtml
@@ -758,7 +766,7 @@ async function runCaptureWebsite(
 	);
 	progress( { phase: 'media', current: screenshotResult.captured, total: screenshotResult.urls.length } );
 	const mediaStartedAt = Date.now();
-	const downloadedSectionMedia = sourceGovernors.forOrigin( sourceUrl ).blockedClient ? 0 : await downloadCaptureSectionMedia( outputDir, screenshotResult.urls, timeBudget?.abandonAt, adapter.resolveImageOriginal?.bind( adapter ), contentEntries.flatMap(entry => entry.product?.images?.map(image => image.src) ?? []) );
+	const downloadedSectionMedia = sourceGovernors.forOrigin( sourceUrl ).blockedClient ? 0 : await downloadCaptureSectionMedia( outputDir, screenshotResult.urls, timeBudget?.abandonAt, adapter.resolveImageOriginal?.bind( adapter ), catalogImageSources( contentEntries.map( entry => entry.product ) ).sources );
 	process.stderr.write(
 		`[timing] section-media ${ Date.now() - mediaStartedAt }ms (${ downloadedSectionMedia } downloaded)\n`
 	);
@@ -888,6 +896,9 @@ async function runCaptureWebsite(
 		routesDiscovered: screenshotResult.urls.length - ( screenshotResult.routeDiagnostics ?? [] ).filter( row => row.code === ROUTE_OMITTED_BY_BUDGET ).length,
 		routesCaptured: screenshotResult.captured + ( derivedTemplateClusters?.summary.derived ?? 0 ) + ( derivedTemplateClusters?.summary.httpAcquired ?? 0 ) + budgetHttp.acquired.length,
 		routesSkipped: screenshotResult.skipped,
+		routesPending: captureDiagnostics.filter(row => row.code === 'route_capture_pending').length,
+		sourceRequests: sourceGovernors.stats(),
+		...(blockedClient ? { resumable: true, stopReason: blockedClient.code } : {}),
 		routesFailed: screenshotResult.failed,
 		routesOmitted: budgetOmittedRoutes( captureDiagnostics ).length,
 		...( derivedTemplateClusters ? { routesDerived: derivedTemplateClusters.summary.derived } : {} ),
@@ -962,6 +973,7 @@ async function runCaptureWebsite(
 	const receipt = JSON.parse( readFileSync( captureReceiptPath, 'utf8' ) );
 	receipt.source.detection = detection;
 	receipt.preview = preview;
+	receipt.reference = { status: options.deferReference ? 'pending' : 'complete' };
 	receipt.templateClustersDecision = templateClustersDecision;
 	if ( templateGroups ) receipt.templateGroups = templateGroups;
 	if ( derivedTemplateClusters ) {
@@ -1001,14 +1013,16 @@ async function runCaptureWebsite(
 		finalSummary.routesFailed === 0 &&
 		! hasUncapturedProfiles( receipt.discoveryDiagnostics ) &&
 		! ( receipt.sourceProfile?.documentSelection?.routes ?? [] ).some( ( route: { missing?: string[] } ) => ( route.missing?.length ?? 0 ) > 0 ) &&
-		// Budget omission is the caller's scope choice and an action URL is not a
-		// page (see `budgetOmittedRoutes`, `actionUrlExclusion`); links to either
-		// carry their own reason.
-		! linkedDiagnostics.some( row => row.code !== ROUTE_OMITTED_BY_BUDGET && row.code !== ROUTE_EXCLUDED_ACTION_URL ) &&
+		// Budget omission is the caller's scope choice, and neither an action URL
+		// nor a non-document resource is a page (see `budgetOmittedRoutes`,
+		// `actionUrlExclusion`, `NON_DOCUMENT_URL`); links to them carry their own reason.
+		! linkedDiagnostics.some( row => row.code !== ROUTE_OMITTED_BY_BUDGET && row.code !== ROUTE_EXCLUDED_ACTION_URL && row.code !== NON_DOCUMENT_URL ) &&
 		unresolvedAnchors.every( ( anchor ) => anchor.reason !== 'target route was not captured' );
 	const result: CaptureResult = {
 		captureReceiptPath,
+		reference: { status: options.deferReference ? 'pending' : 'complete' },
 		outputDir,
+		...(blockedClient ? { resumable: true } : {}),
 		summary: { ...finalSummary, complete, entrypointCaptured: true },
 		complete,
 		entrypointCaptured: true,
@@ -1261,6 +1275,7 @@ export async function deriveTemplateClusterMembers( input: {
 	const { deriveMemberDocument, compareDerivedWithCapture, TEMPLATE_CLUSTER_LIMITS, writeTemplateClusters, TEMPLATE_CLUSTERS_FILE } =
 		await import( './template-clusters.js' );
 	const { templateClusterUnits } = await import( './template-groups.js' );
+	const { chromeInteractionStates } = await import( './static-dialogs.js' );
 	const memberShape = structuredMemberShape( input.contentSource, input.contentEntries );
 	// Derivation documents go through the run's source governors, as grouping
 	// does: throttles wait out Retry-After and retry (#1685). A failed or non-2xx
@@ -1620,6 +1635,9 @@ export async function deriveTemplateClusterMembers( input: {
 					const slug = await queue.claimSlug( memberFeed?.slug ?? slugify( url ) );
 					const capturedAtNow = new Date().toISOString();
 					const repProfile = repEntry.profiles?.desktop;
+					// Site chrome identical to the representative's keeps its
+					// observed dropdowns and menus, as on captured routes.
+					const chromeStates = chromeInteractionStates( repProcessedHtml, derivation.html, repEntry.interactions );
 					const repMobileProfile = memberMobilePath ? repEntry.profiles?.mobile : undefined;
 					await queue.updateEntry( url, {
 						slug,
@@ -1630,6 +1648,7 @@ export async function deriveTemplateClusterMembers( input: {
 						...( memberMobilePath && repEntry.deviceMode ? { deviceMode: repEntry.deviceMode } : {} ),
 						...( memberMobilePath && repEntry.fluidMobile ? { fluidMobile: repEntry.fluidMobile } : {} ),
 						...( repEntry.fluid ? { fluid: repEntry.fluid } : {} ),
+						...( chromeStates ? { interactions: chromeStates } : {} ),
 					} as import('./screenshot/manifest-queue.js').ManifestEntry );
 					lap( 'manifest' );
 					diagnostics.push( {

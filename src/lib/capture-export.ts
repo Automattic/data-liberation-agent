@@ -16,6 +16,7 @@ import { renderSourceData, type SourceDataScript } from './source-data.js';
 import { routeInScope, validateRouteScope } from './url/route-scope.js';
 import type { SiteRouteScope } from '../platform/types.js';
 import { planPortableMediaFamilies } from './portable-media-plan.js';
+import { catalogImageSources } from './product-row.js';
 import { SectionSpecsStore } from './replicate/section-specs-store.js';
 import { MediaStubStore } from './resume-state/index.js';
 import { COARSE_SWEEP_WIDTHS } from './screenshot/fluid-capture.js';
@@ -24,7 +25,8 @@ import {
 } from './screenshot/resource-capture.js';
 import { galleryFrameMediaUrls } from './screenshot/gallery-capture.js';
 import { materializePortableMedia } from './portable-media.js';
-import { omitDegenerateReplacements, preparePortableReplacements } from './portable-references.js';
+import { omitDegenerateReplacements, preparePortableReplacements, preparePortableUrlResolver } from './portable-references.js';
+import { portableAssetUrl } from './portable-assets.js';
 import { materializePortableResources } from './portable-resources.js';
 import { assetExceedsFileLimit, DEFAULT_MAX_FILE_BYTES, validateMaxFileBytes } from './export-file-limit.js';
 import { assetExceedsTotalBudget, emptyExportBudgetExclusions, planExportBudget, redundantRenditionDropped, resolveExportTotalBudget, type DroppableAsset, type ExportBudgetExclusions, type ExportTotalBudget } from './export-total-budget.js';
@@ -394,11 +396,14 @@ function buildExportCapture(
 	// pair. Release every private pair, including unretained route aliases,
 	// before rendering and building the portable/identity geometry indexes.
 	for ( const entry of capturedEntries ) entry.evidenceDocuments.length = 0;
-	const { mediaFamilies, failedMedia, mixedSrcsetReferences, interactionMediaReferences, retainedMediaFamilies, referencedImageAssets, imageByUrl, diagnostics: mediaCandidateDiagnostics } = collectMediaCandidates( { retainedEntries, outputDir, sourceUrl: options.sourceUrl, mediaStubs, exclusions, maxFileBytes, catalogImages: options.structuredContent?.entries.flatMap(entry => entry.product?.images?.map(image => image.src) ?? []) } );
+	const catalogImages = catalogImageSources( options.structuredContent?.entries.map( entry => entry.product ) ?? [] );
+	const { mediaFamilies, failedMedia, mixedSrcsetReferences, interactionMediaReferences, retainedMediaFamilies, referencedImageAssets, imageByUrl, diagnostics: mediaCandidateDiagnostics } = collectMediaCandidates( { retainedEntries, outputDir, sourceUrl: options.sourceUrl, mediaStubs, exclusions, maxFileBytes, catalogImages: catalogImages.sources } );
 	routeCaptureDiagnostics.push( ...mediaCandidateDiagnostics );
 	const portableMediaBudget = portableMediaTotalBytesLimit;
 	const portableMediaPlan = planPortableMediaFamilies(
-		[ ...mediaFamilies ].map( ( [ family, candidates ] ) => ( { family, candidates } ) ),
+		// Each catalog row's primary image is reserved before any other family.
+		[ ...mediaFamilies ].map( ( [ family, candidates ] ) => ( { family, candidates, ...( candidates.some( candidate =>
+			catalogImages.primary.has( candidate.sourceUrl ) || candidate.imageAsset?.source_urls.some( url => catalogImages.primary.has( url ) ) ) ? { reserved: true } : {} ) } ) ),
 		portableMediaBudget,
 		entrypointEntry.htmlPath,
 	);
@@ -456,7 +461,7 @@ function buildExportCapture(
 	const replaceResources = preparePortableReplacements( resourceReplacements, rejectedReplacementKeys );
 	const portableMediaReplacements = omitDegenerateReplacements( mediaReplacements, rejectedReplacementKeys );
 
-	const { routes, sourceRouteLinks, portableServedPaths, unresolvedAnchors, boundaryRoutes, capturedRouteKeys, absentRoutes, absentRouteKeys, omittedRouteKeys, resourceInputKeys, verifiedRouteObservations } = collectRouteLinks( { retainedEntries, routePathOf, structuredContent: options.structuredContent, sourceUrl: options.sourceUrl, canonicalRouteAliases, mediaReplacements, resourceReplacements, stylesheetServedPaths: stylesheetStage.servedPaths, entries: capture.entries, routeCaptureDiagnostics, outputDir, discoveryDiagnostics: options.discoveryDiagnostics, unresolvedDependencies } );
+	const { routes, sourceRouteLinks, portableServedPaths, unresolvedAnchors, boundaryRoutes, capturedRouteKeys, absentRoutes, absentRouteKeys, omittedRouteKeys, resourceInputKeys, verifiedRouteObservations } = collectRouteLinks( { retainedEntries, routePathOf, structuredContent: options.structuredContent, sourceUrl: options.sourceUrl, canonicalRouteAliases, mediaReplacements, resourceReplacements, downloadedMedia: mediaStubs.list().flatMap( ( [ url, stub ] ) => stub.status === 'success' ? [ url ] : [] ), stylesheetServedPaths: stylesheetStage.servedPaths, entries: capture.entries, routeCaptureDiagnostics, outputDir, discoveryDiagnostics: options.discoveryDiagnostics, unresolvedDependencies } );
 	const rendered = renderRoutePages( { canonicalizeHtml: options.canonicalizeHtml, retainedEntries, websiteDir, resourceReplacements, portableUrlByFamily, mixedSrcsetReferences, portableMediaReplacements, replaceResources, replaceMedia, mediaMetadataPathsBySource: mediaStage.metadataPathsBySource, portablePathsBySource, routePathOf, capturedRouteKeys, absentRouteKeys, omittedRouteKeys, resourceInputKeys, routeScope: options.routeScope, boundaryRoutes, verifiedRouteObservations, sourceRouteLinks, portableServedPaths } );
 	unresolvedAnchors.push( ...rendered.unresolvedAnchors );
 	routeCaptureDiagnostics.push( ...rendered.diagnostics );
@@ -494,10 +499,22 @@ function buildExportCapture(
 	extractSharedChrome( websiteDir, routes.map( route => route.path.replace( /^website\//, '' ) ), inventory );
 	// Box-tree evidence binds the final page bytes and the shared parts they include.
 	// The sidecars are website files only; they are deliberately not receipt reports.
+	// Their computed `url(...)` values resolve through the same media and resource
+	// maps as the pages, then the source-URL map that carries hash-alias collapse.
+	const resolveMediaUrl = preparePortableUrlResolver( mediaReplacements );
+	const resolveResourceUrl = preparePortableUrlResolver( resourceReplacements );
+	const localizeBoxTreeUrl = ( url: string, documentUrl: string ): string => {
+		const local = resolveMediaUrl( url, documentUrl ) ?? resolveResourceUrl( url, documentUrl );
+		if ( local !== undefined ) return local;
+		let absolute: string;
+		try { absolute = new URL( url, documentUrl ).href; } catch { return url; }
+		const path = portablePathsBySource.get( absolute );
+		return path?.startsWith( 'website/' ) ? portableAssetUrl( path.slice( 'website/'.length ) ) : url;
+	};
 	writeExportBoxTrees( outputDir, websiteDir, retainedEntries.flatMap( entry => {
 		const sourcePath = capture.entries[ entry.url ]?.html;
-		return sourcePath ? [ { sourcePath, mobileSourcePath: capture.entries[ entry.url ]?.mobileHtml, path: routePathOf( entry.url ) } ] : [];
-	} ), inventory, exclusions.boxTrees );
+		return sourcePath ? [ { sourcePath, mobileSourcePath: capture.entries[ entry.url ]?.mobileHtml, path: routePathOf( entry.url ), url: entry.url } ] : [];
+	} ), inventory, exclusions.boxTrees, undefined, localizeBoxTreeUrl );
 	// Media and page resources are the assets export can leave out; generated
 	// stylesheets only shrink with the routes that need them.
 	const droppable = new Map< string, string[] >();

@@ -174,6 +174,30 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		expect( activeSlides( await page.content() ) ).toEqual( [ 1 ] );
 	}, 30_000 );
 
+	// Sub-second: one page with a CSS-only responsive menu, no motion.
+	it( 'resolves a stable cross-width responsive menu without waiting for rotation', async ( { newPage } ) => {
+		const page = await newPage();
+		await page.setViewportSize( { width: 1440, height: 900 } );
+		await page.setContent( `<style>
+			.toggle{display:none}@media(max-width:800px){nav{display:none}.toggle{display:block}}
+			</style><header><nav>About <a>Approach</a> <a>Collections</a></nav><button class="toggle">☰</button></header>` );
+		await page.evaluate( observeMotionHold );
+		const captured = { ...await readPaintState( page ), rotating: [] };
+		await page.setViewportSize( { width: 390, height: 900 } );
+		const cell = await readPaintState( page );
+		expect( swapCandidates( captured, cell ).length ).toBeGreaterThan( 0 );
+		const started = Date.now();
+		const motion = await alignSourceMotion( page, captured, [ cell.painted ] );
+		const elapsed = Date.now() - started;
+		try {
+			expect( motion.held ).toBe( true );
+			expect( motion.disagreement ).toEqual( [] );
+			expect( await readPaintState( page ) ).toEqual( cell );
+			expect( page.viewportSize() ).toEqual( { width: 390, height: 900 } );
+			expect( elapsed, `responsive alignment took ${ elapsed }ms` ).toBeLessThan( 750 );
+		} finally { await motion.release(); }
+	}, 20_000 );
+
 	// Sub-second: painted tokens exclude hidden and clipped slides.
 	it( 'reads painted text, excluding hidden, transparent and clipped content', async ( { newPage } ) => {
 		const page = await newPage();

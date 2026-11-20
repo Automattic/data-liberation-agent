@@ -9,6 +9,7 @@ import type {
 	CapturedDialogInteraction,
 	CapturedInitialDialog,
 	CapturedRouteNavigation,
+	InteractionStatesReport,
 } from './screenshot/interaction-capture.js';
 
 // Base summary styling must lose to every author rule on the summary or
@@ -822,4 +823,41 @@ function cssEscape( value: string ): string {
 
 function normalizedText( value: string ): string {
 	return value.replace( /\s+/g, ' ' ).trim();
+}
+
+/** Site chrome: a landmark whose markup is the same on every route of a template. */
+const CHROME_LANDMARK = 'header,nav,footer,[role="banner"],[role="navigation"],[role="contentinfo"]';
+
+/**
+ * The representative's captured dialog states that hold for a document derived
+ * from it. A state carries over when every trigger and panel it resolves in the
+ * derived document sits in a site-chrome landmark whose markup is identical in
+ * the representative's document, so the observed behaviour is the same control.
+ * Content regions take the member's own markup and never inherit behaviour.
+ */
+export function chromeInteractionStates( repHtml: string, derivedHtml: string, report: InteractionStatesReport | undefined ): InteractionStatesReport | undefined {
+	if ( ! report?.states.length ) return undefined;
+	const rep = cheerio.load( repHtml );
+	const derived = cheerio.load( derivedHtml );
+	const chrome = ( $: cheerio.CheerioAPI, element: AnyNode ): string | undefined => {
+		const landmark = $( element ).parents( CHROME_LANDMARK ).last();
+		const root = landmark.length ? landmark : $( element ).filter( CHROME_LANDMARK );
+		return root.length ? $.html( root ) : undefined;
+	};
+	const unchanged = ( repNodes: cheerio.Cheerio< AnyNode >, derivedNodes: cheerio.Cheerio< AnyNode > ): boolean => {
+		if ( ! derivedNodes.length || repNodes.length !== derivedNodes.length ) return false;
+		return derivedNodes.toArray().every( ( node, index ) => {
+			const markup = chrome( derived, node );
+			return markup !== undefined && markup === chrome( rep, repNodes.get( index )! );
+		} );
+	};
+	const states = report.states.filter( state => {
+		if ( state.status !== 'captured' || ! unchanged( findTriggers( rep, state.trigger ), findTriggers( derived, state.trigger ) ) ) return false;
+		const panel = state.dialog?.selector;
+		if ( ! panel ) return true;
+		const repPanels = selectByCapturedSelector( rep, panel, state.dialog?.tag );
+		const derivedPanels = selectByCapturedSelector( derived, panel, state.dialog?.tag );
+		return ! derivedPanels.length && ! repPanels.length || unchanged( repPanels, derivedPanels );
+	} );
+	return states.length ? { schema: report.schema, sourceUrl: report.sourceUrl, viewport: report.viewport, capturedAt: report.capturedAt, states } : undefined;
 }

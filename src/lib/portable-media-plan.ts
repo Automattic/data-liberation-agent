@@ -39,6 +39,8 @@ export interface PortableMediaReferenceIndex {
 export interface PortableMediaFamilyInput {
 	family: string;
 	candidates: PortableMediaCandidate[];
+	/** Reserved before homepage and other families (a catalog row's primary image). */
+	reserved?: boolean;
 }
 
 export type PortableMediaFamilyOutcome = 'limit-excluded' | 'budget-excluded' | 'selected';
@@ -250,10 +252,12 @@ export function planPortableMediaFamilies(
 			// first can resurrect an oversized original that materialization omits.
 			preferred: selectMediaCandidates( eligible.filter( candidate => ! candidate.budgetFallback ) ),
 			homepagePriority: homepagePriority[ index ],
+			reserved: family.reserved === true,
 		};
 	} );
 	const admissionOrder = [ ...ranked ].sort(
 		( left, right ) =>
+			Number( right.reserved ) - Number( left.reserved ) ||
 			Number( right.homepagePriority ) - Number( left.homepagePriority ) ||
 			( left.eligible[ 0 ]?.bytes ?? 0 ) - ( right.eligible[ 0 ]?.bytes ?? 0 ) ||
 			( left.eligible[ 0 ]?.sourceUrl ?? '' ).localeCompare( right.eligible[ 0 ]?.sourceUrl ?? '' )

@@ -25,6 +25,7 @@ import { INTERACTION_STATES_SCHEMA, LEGACY_INTERACTION_STATES_SCHEMA, type Inter
 import { SCROLL_STATES_SCHEMA, type ScrollStatesReport } from './screenshot/scroll-state-capture.js';
 import type { CapturedResourceManifest } from './screenshot/resource-capture.js';
 import { galleryFrameMediaUrls } from './screenshot/gallery-capture.js';
+import { NON_DOCUMENT_URL } from './screenshot/linked-frontier.js';
 import { srcsetReferences } from './srcset.js';
 import { resolveDocumentReferences } from './document-resource-base.js';
 import { pathWithin } from './portable-assets.js';
@@ -792,9 +793,11 @@ export function collectMediaCandidates( { retainedEntries, outputDir, sourceUrl:
 	return { mediaFamilies, failedMedia, mixedSrcsetReferences, interactionMediaFamilies, interactionMediaReferences, probeReferences, retainedMediaFamilies, imageAssets, referencedImageAssets, imageByUrl, diagnostics: routeCaptureDiagnostics };
 }
 
-export function collectRouteLinks( { retainedEntries, routePathOf, structuredContent, sourceUrl, canonicalRouteAliases, mediaReplacements, resourceReplacements, stylesheetServedPaths, entries, routeCaptureDiagnostics, outputDir, discoveryDiagnostics, unresolvedDependencies }: {
+export function collectRouteLinks( { retainedEntries, routePathOf, structuredContent, sourceUrl, canonicalRouteAliases, mediaReplacements, resourceReplacements, downloadedMedia = [], stylesheetServedPaths, entries, routeCaptureDiagnostics, outputDir, discoveryDiagnostics, unresolvedDependencies }: {
  retainedEntries: CaptureEntry[]; routePathOf: ( url: string ) => string; structuredContent?: { source: StructuredContentSource; entries: StructuredContentEntry[] }; sourceUrl: string; canonicalRouteAliases: ReadonlyMap<string, string>;
- mediaReplacements: ReadonlyMap<string, string>; resourceReplacements: ReadonlyMap<string, string>; stylesheetServedPaths: readonly string[]; entries: ScreenshotManifest['entries']; routeCaptureDiagnostics: readonly RouteDiagnostic[];
+ mediaReplacements: ReadonlyMap<string, string>; resourceReplacements: ReadonlyMap<string, string>;
+ /** Source URLs the capture downloaded as media, whether or not export shipped them. */
+ downloadedMedia?: readonly string[]; stylesheetServedPaths: readonly string[]; entries: ScreenshotManifest['entries']; routeCaptureDiagnostics: readonly RouteDiagnostic[];
  outputDir: string; discoveryDiagnostics?: Array<{ code: string; url: string; reason: string }>; unresolvedDependencies: ReadonlyArray<{ url: string }>;
 } ): RouteLinks {
 	const routes: Array< { url: string; path: string; accessGate?: AccessGateEvidence } > = [];
@@ -880,9 +883,13 @@ export function collectRouteLinks( { retainedEntries, routePathOf, structuredCon
 		? ( JSON.parse( readFileSync( linkedCoveragePath, 'utf8' ) ) as { diagnostics?: Array< { code?: unknown; url?: unknown } > } ).diagnostics ?? []
 		: [];
 	const omittedRouteKeys = new Set( budgetOmittedRoutes( [ ...( discoveryDiagnostics ?? [] ), ...linkedCoverageDiagnostics ] ).map( documentRequestUrl ) );
+	// A link to a non-document resource is not a missing page: the capture
+	// downloaded it as media, or discovery already classified it as a resource.
+	const nonDocumentUrls = [ ...( discoveryDiagnostics ?? [] ), ...linkedCoverageDiagnostics ]
+		.flatMap( row => row.code === NON_DOCUMENT_URL && typeof row.url === 'string' ? [ row.url ] : [] );
 	const resourceInputKeys = new Set([
 		...resourceReplacements.keys(), ...mediaReplacements.keys(),
-		...unresolvedDependencies.map(row => row.url),
+		...unresolvedDependencies.map(row => row.url), ...downloadedMedia, ...nonDocumentUrls,
 	].flatMap(url => {
 		try { return [documentRequestUrl(url)]; }
 		catch { return []; } // Raw replacement strings can be relative references.

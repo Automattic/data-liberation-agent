@@ -27,7 +27,7 @@ export interface ConsentBanner {
   reject_label?: string;
   policy_link?: { label: string; href: string };
   position?: 'top' | 'bottom' | 'center';
-  colors?: { background: string; text: string; button_background: string; button_text: string };
+  colors?: { background: string; text: string; button_background: string; button_text: string; link?: string };
   presentation?: {
     span: 'full' | 'inset';
     edge_offset?: string;

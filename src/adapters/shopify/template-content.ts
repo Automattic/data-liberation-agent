@@ -2,6 +2,7 @@ import * as cheerio from 'cheerio';
 import { shopifyProductRow } from './product-row.js';
 import type { StructuredContentEntry, StructuredContentSource } from '../../platform/types.js';
 import { safeFetch } from '../../lib/media-fetch/safe-fetch.js';
+import { shopifyStoreFileUrl } from './media-identity.js';
 
 // Descendant .rte selectors also match collapsible rows in common themes.
 // Keep one narrow selector shared by equivalence, substitution and template keying.
@@ -30,7 +31,10 @@ export async function enumerateShopifyProducts(sourceUrl: string, options: Param
 			if (!Array.isArray(data.products)) throw new Error('Missing products array');
 			if (!data.products.length) break;
 			let fresh = 0;
-			for (const product of data.products) {
+			for (const listed of data.products) {
+				// Catalog images name the theme's alias of each file, so page media is reused.
+				const product = listed && Array.isArray(listed.images) ? { ...listed, images: listed.images.map((image: { src?: unknown } | null) =>
+					typeof image?.src === 'string' ? { ...image, src: shopifyStoreFileUrl(image.src, origin) } : image) } : listed;
 				if (!product || typeof product.handle !== 'string' || !/^[a-z0-9][a-z0-9-]*$/i.test(product.handle) ||
 					typeof product.title !== 'string' || !product.title.trim() || typeof product.body_html !== 'string' ||
 					typeof product.vendor !== 'string' || ![product.published_at, product.updated_at].every(date => typeof date === 'string' && Number.isFinite(Date.parse(date))) ||
