@@ -33,6 +33,13 @@ export const godaddyWmAdapter: PlatformAdapter = {
   id: 'godaddy-wm',
   detection,
   discover,
+  // Membership sites list their account screens (sign-in, reset, sign-up) under
+  // /m/ in the sitemap. They are platform forms, not owner content.
+  routeScope: (sourceUrl) => ({
+    origin: new URL(sourceUrl).origin,
+    pathPrefixes: ['/'],
+    excludedPathPrefixes: ['/m'],
+  }),
   liberation: {
     cleanupRules: [
       { id: 'godaddy-freemium-acquisition', category: 'source-attribution', selector: '[data-freemium-ad="true"]' },
