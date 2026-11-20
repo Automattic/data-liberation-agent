@@ -15,6 +15,21 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.39.8] - 2026-11-20
+
+### Changed
+- regenerate plugin bundles
+- Expect cluster-seeded routes in the BigCommerce default budget test
+- Record used SVG paint in box-tree evidence
+- Put the shell's own current menu item at rest on access-gate placeholder routes
+- Export the Shopify products.json catalog as generic/products/v1 rows in content-index.json
+- Scale browser capture with templates, not pages
+
+### Fixed
+- compare self-fragment links by fragment for canonical aliases
+- discover collections from route-root JSON
+- preserve inline control labels in banner prose
+
 ## [0.39.7] - 2026-11-20
 
 ### Changed
