@@ -4053,6 +4053,27 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( JSON.stringify( receipt ) ).not.toContain( 'destination.example' );
 	} );
 
+	it( 'does not count links to non-document resources as uncaptured routes (#2159)', () => {
+		const capture = exportFixture( { directories: [ 'html', 'screenshots', 'media' ] } );
+		const outputDir = capture.build();
+		capture.file( join( 'html', 'home.html' ), '<h1>Home</h1><a href="/files/report.pdf">Report</a><a href="/files/scan.jpg">Scan</a><a href="/missing-html">Missing</a>' );
+		capture.manifest( { version: 1, entries: { 'https://example.com/': { html: 'html/home.html' } } } );
+		// Downloaded as media, but too large to ship in the portable website.
+		const media = MediaStubStore.load( outputDir );
+		capture.media( 'https://example.com/files/report.pdf', 'media/report.pdf', `%PDF-1.4 ${ 'x'.repeat( 4096 ) }`, media );
+		media.flush();
+		// Discovery classified the image link as a non-document resource.
+		capture.json( 'linked-page-coverage.json', { limits: { maxPages: 256, maxDepth: 8, timeoutMs: 1_800_000 }, requiredUrls: [ 'https://example.com/' ], scheduled: 1, diagnostics: [
+			{ code: 'non_document_url', url: 'https://example.com/files/scan.jpg', reason: 'URL identifies a non-document resource' },
+		] } );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [], limits: { maxFileBytes: 2048 } } ), 'utf8' ) );
+		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
+		expect( diagnostics.unresolvedAnchors ).toEqual( [
+			{ sourceUrl: 'https://example.com/', url: 'https://example.com/missing-html', reason: 'target route was not captured' },
+		] );
+		expect( receipt.summary.complete ).toBe( false );
+	} );
+
 	it( 'records an html alias of a directory route in website/_redirects', () => {
 		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
 		const outputDir = capture.build();

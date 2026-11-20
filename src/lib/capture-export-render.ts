@@ -555,7 +555,8 @@ function uncapturedRouteAnchors(
 		.filter( url => routeInScope( url, routeScope ) )
 		.map( url => scopedRouteKey( url, routeScope ) )
 		.filter( ( url ) => ! capturedRoutes.has(url) && ! capturedIdentities.has( normalizedUrl( url ) ) )
-		// Resource-owned links already have localization or explicit acquisition
+		// Resource-owned links (localized, downloaded as media, or classified as
+		// non-document URLs) already have localization or explicit acquisition
 		// diagnostics. Avoid duplicating those as missing HTML, without changing
 		// the independent required frontier or its frozen outcome obligations.
 		.filter( ( url ) => ! resourceInputs.has( url ) )

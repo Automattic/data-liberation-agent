@@ -19,6 +19,7 @@ import { normalizeDiscoveredRoutes } from './extraction/sitemap.js';
 import { routeInScope, scopedRouteKey, validateRouteScope } from './url/route-scope.js';
 import { githubPagesRouteScope } from '../hosts/github-pages.js';
 import { actionUrlExclusion, platformRuntimeExclusion, ROUTE_EXCLUDED_ACTION_URL } from './url/action-url.js';
+import { NON_DOCUMENT_URL } from './screenshot/linked-frontier.js';
 import { galleryFrameMediaUrls } from './screenshot/gallery-capture.js';
 import type { ManifestEntry } from './screenshot/manifest-queue.js';
 import { budgetOmittedRoutes, hasUncapturedProfiles, missingRoutes, withExportDroppedRoutes, type MissingRoute } from './capture-usability.js';
@@ -1009,10 +1010,10 @@ async function runCaptureWebsite(
 		finalSummary.routesFailed === 0 &&
 		! hasUncapturedProfiles( receipt.discoveryDiagnostics ) &&
 		! ( receipt.sourceProfile?.documentSelection?.routes ?? [] ).some( ( route: { missing?: string[] } ) => ( route.missing?.length ?? 0 ) > 0 ) &&
-		// Budget omission is the caller's scope choice and an action URL is not a
-		// page (see `budgetOmittedRoutes`, `actionUrlExclusion`); links to either
-		// carry their own reason.
-		! linkedDiagnostics.some( row => row.code !== ROUTE_OMITTED_BY_BUDGET && row.code !== ROUTE_EXCLUDED_ACTION_URL ) &&
+		// Budget omission is the caller's scope choice, and neither an action URL
+		// nor a non-document resource is a page (see `budgetOmittedRoutes`,
+		// `actionUrlExclusion`, `NON_DOCUMENT_URL`); links to them carry their own reason.
+		! linkedDiagnostics.some( row => row.code !== ROUTE_OMITTED_BY_BUDGET && row.code !== ROUTE_EXCLUDED_ACTION_URL && row.code !== NON_DOCUMENT_URL ) &&
 		unresolvedAnchors.every( ( anchor ) => anchor.reason !== 'target route was not captured' );
 	const result: CaptureResult = {
 		captureReceiptPath,

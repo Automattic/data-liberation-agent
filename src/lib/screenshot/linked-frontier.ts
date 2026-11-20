@@ -6,6 +6,9 @@ import type { CanonicalRouteAlias } from '../route-aliases.js';
 import { actionUrlExclusion, platformRuntimeExclusion } from '../url/action-url.js';
 import { isNonDocumentUrl } from '../extraction/sitemap.js';
 
+/** A link target that names a resource, never a page: owned by media or resource acquisition, not route capture. */
+export const NON_DOCUMENT_URL = 'non_document_url';
+
 export interface LinkedPageLimits {
 	maxPages?: number;
 	maxDepth?: number;
@@ -85,7 +88,7 @@ export class LinkedFrontier {
 			return false;
 		}
 		if (isNonDocumentUrl(url)) {
-			this.omit(url, 'non_document_url', 'URL identifies a non-document resource');
+			this.omit(url, NON_DOCUMENT_URL, 'URL identifies a non-document resource');
 			return false;
 		}
 		const owner = this.routeIdentities.get(normalizedUrl(url));
