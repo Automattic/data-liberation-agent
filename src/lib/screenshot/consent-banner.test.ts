@@ -137,6 +137,7 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a multi-level consent dialog as
     expect(banner?.accept_label).toBe('Accept all');
     expect(banner?.reject_label).toBe('Decline');
     expect(banner?.policy_link).toBeUndefined();
+    expect(banner?.colors).not.toHaveProperty('link');
   }
 });
 
@@ -148,7 +149,7 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a painted panel inside a transp
   {
     const page = await newPage({ viewport: { width: 1440, height: 900 } });
     const fixture = readFileSync(new URL('./fixtures/consent-panel.html', import.meta.url), 'utf8');
-    await page.setContent(fixture.replace('</style>', '#cs-banner .cs-panel{background:rgb(3,26,78)}#cs-banner .cs-text{color:#f8f8f8}</style>'));
+    await page.setContent(fixture.replace('</style>', '#cs-banner .cs-panel{background:rgb(3,26,78)}#cs-banner .cs-text{color:#f8f8f8}#cs-banner a{color:#fff}</style>'));
     const dismissed = await dismissOverlays(page);
     const banner = dismissed.find(item => item.consentBanner)?.consentBanner;
     expect(banner?.text).toBe('We collect personal information as specified in the privacy policy and use cookies as specified in the cookie policy. You can change your choice in the preferences panel.');
@@ -158,6 +159,8 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a painted panel inside a transp
     expect(banner?.presentation?.padding).toBe('24px');
     expect(banner?.colors?.background).toBe('rgb(3, 26, 78)');
     expect(banner?.colors?.text).toBe('rgb(248, 248, 248)');
+    expect(banner?.policy_link).toBeDefined();
+    expect(banner?.colors?.link).toBe('rgb(255, 255, 255)');
     expect(banner?.accept_label).toBe('Accept');
     expect(banner?.reject_label).toBe('Reject');
   }
@@ -319,7 +322,7 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('exports consent facts but removes lat
     expect(fact).toEqual({ schema: 'static-site-importer/consent-banner/v1',
       text: 'This website uses cookies for analytics.', accept_label: 'Accept', reject_label: 'Reject',
       policy_link: { label: 'Privacy policy', href: '/privacy/index.html' }, position: 'bottom',
-      colors: { background: 'rgb(34, 34, 34)', text: 'rgb(255, 255, 255)', button_background: 'rgb(153, 153, 153)', button_text: 'rgb(255, 255, 255)' },
+      colors: { background: 'rgb(34, 34, 34)', text: 'rgb(255, 255, 255)', button_background: 'rgb(153, 153, 153)', button_text: 'rgb(255, 255, 255)', link: 'rgb(0, 0, 238)' },
       presentation: {
         span: 'full', edge_offset: '0px', padding: '12px', gap: '8px',
         font_family: 'Calibri, sans-serif', font_size: '15px', line_height: '18px', text_margin: '0px 15px 0px 0px',
