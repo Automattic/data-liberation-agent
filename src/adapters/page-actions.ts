@@ -82,6 +82,13 @@ export interface LiberationHooks {
    * page's raw `document`, and must take the names the document gets.
    */
   canonicalizeHtml?(html: string, document?: string): string;
+  /** Resolve derived runtime media from the member's memoized light render.
+   * Undefined declines the member; capture verification remains unchanged. */
+  rewriteDerivedMedia?(input: {
+    memberServerHtml: string;
+    memberRenderedHtml?: string;
+    derivedHtml: string;
+  }): string | undefined;
   /**
    * Selectors that identify this platform's client-error shell: the document
    * its client runtime swaps in when the app crashes (for Next.js App Router,
