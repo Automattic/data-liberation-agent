@@ -30,6 +30,8 @@ const INSTANCE = `7UqG_EpycyF9calKVehmsqGeIuka3seGpv-QJJliLrY.${ base64Url( {
 } ) }`;
 const APP_WIDGET = `https://dev-wix-languages.appspot.com/widget?pageId=vt13i&compId=comp-l76p8of1&viewerCompId=comp-l76p8of1&width=180&height=180&instance=${ INSTANCE }&commonConfig=%7B%22host%22%3A%22VIEWER%22%7D`;
 const APP_MAP = `https://events.wixapps.net/events-server/html/google-map-v2?locale=de&lat=51.3396955&lng=12.3730747&instance=${ INSTANCE }`;
+const FAQ_INSTANCE = `sig.${ base64Url( { instanceId: '00000000-0000-4000-8000-000000000001', appDefId: '14c92d28-031e-7910-c9a8-a670011e062d' } ) }`;
+const FAQ_WIDGET = `https://faq-app.example.test/render/FaqOoi?compId=comp-faq&instance=${ FAQ_INSTANCE }`;
 const HTML_EMBED = 'https://www-example-hoa-test.filesusr.com/html/cf2dfb_0123456789abcdef0123456789abcdef.html';
 
 describe( 'isWixGoogleMapFrame', () => {
@@ -316,5 +318,50 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime embed
 		await portWixEventMaps( page, 500 );
 		expect( await page.locator( '#event-details-page-map iframe' ).count() ).toBe( 0 );
 		expect( await page.locator( '[data-blocks-engine-capture-unported-embed="wix"]' ).textContent() ).toBe( wixEmbedNote( 'Map' ) );
+	}, 30_000 );
+
+	it( 'keeps the questions a Wix FAQ widget frame renders after its own query', async ({ newPage }) => {
+		const page = await newPage();
+		// The widget loads empty and asks its server for the questions, like Wix's FAQ app.
+		const widget = `<!doctype html><div id="root"></div><script>
+			fetch( '/_api/faq-server/v2/question-entries/query', { method: 'POST', body: '{}' } ).then( response => response.json() ).then( ( { entries } ) => {
+				document.getElementById( 'root' ).innerHTML = '<div data-hook="faq-root">' + entries.map( ( entry, index ) =>
+					'<button data-hook="accordion-item-header" aria-expanded="' + ( index === 0 ) + '" aria-controls="item-' + index + '"><h3 data-hook="title">' + entry.question + '</h3><svg data-hook="expandIcon"></svg></button>' +
+					'<div id="item-' + index + '" data-hook="accordion-item-content" style="display:' + ( index === 0 ? 'block' : 'none' ) + '">' + entry.answer + '</div>' ).join( '' ) + '</div>';
+			} );
+		</script>`;
+		await page.route( 'https://faq-app.example.test/**', async ( route ) => {
+			if ( route.request().method() === 'POST' ) {
+				await new Promise( ( resolve ) => setTimeout( resolve, 500 ) );
+				await route.fulfill( { contentType: 'application/json', body: JSON.stringify( { entries: [
+					{ question: 'First question?', answer: '<div data-id="content-viewer"><p class="x" style="color:red"><span>An answer with </span><strong>bold text</strong> and <a href="https://example.test/more" onclick="alert(1)">a link</a>.</p></div>' },
+					{ question: 'Second question?', answer: '<p>Hidden answer <a href="javascript:alert(1)">kept</a> <a href="/relative">as text</a>.</p><ul><li>One</li><li>Two</li></ul><script>window.bad = 1</script>' },
+				] } ) } );
+				return;
+			}
+			await route.fulfill( { contentType: 'text/html', body: widget } );
+		} );
+		await page.setContent( `<style>body{margin:0}iframe{border:0;display:block;width:600px;height:400px}</style><div id="comp-faq"><iframe title="Wix FAQ" src="${ FAQ_WIDGET }"></iframe></div>` );
+		await portWixRuntimeEmbeds( page );
+		expect( await page.locator( '[data-blocks-engine-capture-unported-embed]' ).count() ).toBe( 0 );
+		const faq = page.locator( '#comp-faq > [data-blocks-engine-capture-ported-embed="wix-faq"]' );
+		expect( await faq.locator( 'details > summary' ).allTextContents() ).toEqual( [ 'First question?', 'Second question?' ] );
+		expect( await faq.locator( 'details' ).evaluateAll( ( items ) => items.map( ( item ) => ( item as HTMLDetailsElement ).open ) ) ).toEqual( [ true, false ] );
+		const answers = await faq.locator( 'details > div' ).evaluateAll( ( items ) => items.map( ( item ) => item.innerHTML ) );
+		expect( answers ).toEqual( [
+			'<p>An answer with <strong>bold text</strong> and <a href="https://example.test/more">a link</a>.</p>',
+			'<p>Hidden answer kept as text.</p><ul><li>One</li><li>Two</li></ul>',
+		] );
+		const html = await page.content();
+		expect( html ).not.toContain( 'instance=' );
+		expect( html ).not.toContain( '<iframe' );
+	}, 30_000 );
+
+	it( 'leaves the note when a Wix FAQ widget frame never renders its questions', async ({ newPage }) => {
+		const page = await newPage();
+		await page.route( 'https://faq-app.example.test/**', ( route ) => route.fulfill( { contentType: 'text/html', body: '<div id="root"></div>' } ) );
+		await page.setContent( `<style>iframe{border:0;display:block;width:600px;height:400px}</style><iframe title="Wix FAQ" src="${ FAQ_WIDGET }"></iframe>` );
+		await portWixRuntimeEmbeds( page, { faqRenderMilliseconds: 300 } );
+		expect( await page.locator( '[data-blocks-engine-capture-unported-embed="wix"]' ).textContent() ).toBe( wixEmbedNote( 'Wix FAQ' ) );
 	}, 30_000 );
 } );

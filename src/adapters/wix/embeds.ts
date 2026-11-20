@@ -18,6 +18,8 @@
 // Some App Market map widgets (Wix Events' venue map) are app iframes too,
 // but their URL already names the location (`lat`/`lng` query parameters), so
 // they are pointed at a Google Maps embed rather than replaced by a note.
+// Wix FAQ's app frame renders its questions and answers as plain content, so
+// they are carried as native `<details>` disclosures rather than a note.
 //
 // While the live page still has its runtime, a map is pointed at an ordinary
 // Google Maps embed of the location the wrapper drew, and an app widget is
@@ -25,8 +27,8 @@
 
 import type { ElementHandle, Frame, Page } from 'playwright';
 
-/** Marks a Wix map that was pointed at a portable Google Maps embed. */
-export const WIX_PORTED_MAP_ATTRIBUTE = 'data-blocks-engine-capture-ported-embed';
+/** Marks a Wix embed that was ported to portable content (a Google Maps embed, FAQ disclosures). */
+export const WIX_PORTED_EMBED_ATTRIBUTE = 'data-blocks-engine-capture-ported-embed';
 /** Marks the note left where a Wix-only widget could not be copied. */
 export const WIX_UNPORTED_EMBED_ATTRIBUTE = 'data-blocks-engine-capture-unported-embed';
 
@@ -40,6 +42,19 @@ const WIX_PINNED_CHAT_SELECTOR = `${ WIX_AI_ASSISTANT_LAYER }, ${ WIX_CHAT_LAUNC
 const MAP_LOCATION_WAIT_MILLISECONDS = 5_000;
 const MAP_EMBED_LOAD_MILLISECONDS = 5_000;
 const EVENT_MAP_MOUNT_MILLISECONDS = 8_000;
+/** The FAQ frame queries its server for the questions after it loads, in pages. */
+const FAQ_RENDER_MILLISECONDS = 8_000;
+
+/** Wix FAQ, the App Market app whose widget frame renders the site's questions and answers. */
+export const WIX_FAQ_APP_DEF_ID = '14c92d28-031e-7910-c9a8-a670011e062d';
+const WIX_FAQ_HEADER_SELECTOR = '[data-hook="faq-root"] [data-hook="accordion-item-header"][aria-controls]';
+
+export interface WixFaqItem {
+	question: string;
+	/** Answer markup rebuilt from an allowlist of text elements; never the frame's own markup. */
+	answer: string;
+	open: boolean;
+}
 
 /**
  * Wix Events' venue map on an event details page. Its widget renders the host
@@ -298,10 +313,98 @@ async function pointAtGoogleMap( handle: ElementHandle< Element >, embed: string
 			frame.setAttribute( args.attribute, 'wix-google-map' );
 			frame.removeAttribute( 'data-src' );
 		},
-		{ embed, attribute: WIX_PORTED_MAP_ATTRIBUTE }
+		{ embed, attribute: WIX_PORTED_EMBED_ATTRIBUTE }
 	);
 	// Let the reference screenshot show the map; the copy depends only on `src`.
 	await loaded;
+}
+
+/**
+ * Runs in the Wix FAQ frame: each rendered question, its answer and whether it
+ * is open. The answer keeps text structure only (paragraphs, emphasis, lists,
+ * headings and absolute links); scripts, styles, icons and attributes stay behind.
+ */
+function readWixFaqItems( selector: string ): WixFaqItem[] {
+	const kept = new Set( [ 'p', 'br', 'strong', 'b', 'em', 'i', 'u', 's', 'ul', 'ol', 'li', 'a', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'code', 'pre' ] );
+	const dropped = new Set( [ 'script', 'style', 'template', 'svg', 'button', 'iframe', 'noscript' ] );
+	// The frame is served by the app's host, so a relative link would resolve there, not on the site.
+	const linkTarget = ( anchor: Element ) => {
+		try {
+			const url = new URL( anchor.getAttribute( 'href' ) ?? '' );
+			return [ 'http:', 'https:', 'mailto:', 'tel:' ].includes( url.protocol ) ? url.href : '';
+		} catch {
+			return '';
+		}
+	};
+	const copy = ( source: Node, target: Node ) => {
+		for ( const child of source.childNodes ) {
+			if ( child.nodeType === Node.TEXT_NODE ) target.appendChild( document.createTextNode( child.textContent ?? '' ) );
+			if ( ! ( child instanceof Element ) || dropped.has( child.localName ) ) continue;
+			const href = child.localName === 'a' ? linkTarget( child ) : '';
+			if ( ! kept.has( child.localName ) || ( child.localName === 'a' && ! href ) ) {
+				copy( child, target );
+				continue;
+			}
+			const element = document.createElement( child.localName );
+			if ( href ) element.setAttribute( 'href', href );
+			copy( child, element );
+			target.appendChild( element );
+		}
+	};
+	return [ ...document.querySelectorAll( selector ) ].flatMap( ( header ) => {
+		const question = ( header.querySelector( '[data-hook="title"]' ) ?? header ).textContent?.replace( /\s+/g, ' ' ).trim() ?? '';
+		const panel = document.getElementById( header.getAttribute( 'aria-controls' ) ?? '' );
+		if ( ! question ) return [];
+		const answer = document.createElement( 'div' );
+		if ( panel ) copy( panel, answer );
+		return [ { question, answer: answer.innerHTML.trim(), open: header.getAttribute( 'aria-expanded' ) === 'true' } ];
+	} );
+}
+
+/** Runs in the page: swap the FAQ frame for its questions as native disclosures. */
+function installWixFaq( frame: Element, args: { items: WixFaqItem[]; attribute: string } ): void {
+	const bounds = frame.getBoundingClientRect();
+	if ( bounds.width <= 0 || bounds.height <= 0 ) {
+		// Another viewport's copy: nothing would show, and the token must not be kept.
+		frame.remove();
+		return;
+	}
+	const faq = document.createElement( 'div' );
+	faq.setAttribute( args.attribute, 'wix-faq' );
+	faq.style.cssText = `box-sizing:border-box;width:100%;max-width:${ Math.round( bounds.width ) }px`;
+	const font = getComputedStyle( frame.parentElement ?? document.body ).fontFamily;
+	if ( font ) faq.style.fontFamily = font;
+	for ( const item of args.items ) {
+		const details = document.createElement( 'details' );
+		details.open = item.open;
+		const summary = document.createElement( 'summary' );
+		summary.textContent = item.question;
+		const answer = document.createElement( 'div' );
+		// Rebuilt in the frame from allowlisted elements and absolute links only.
+		answer.innerHTML = item.answer;
+		details.append( summary, answer );
+		faq.append( details );
+	}
+	frame.replaceWith( faq );
+}
+
+/**
+ * Carry a Wix FAQ widget frame's questions into the page. The frame loads
+ * empty and fetches its questions from the FAQ server, so the read waits
+ * (bounded) for them to render. False when none rendered.
+ */
+async function portWixFaqFrame( handle: ElementHandle< Element >, renderMilliseconds: number ): Promise< boolean > {
+	const frame = await handle.contentFrame().catch( () => null );
+	if ( ! frame ) return false;
+	await frame.evaluate( () => {
+		const scope = globalThis as typeof globalThis & { __name?: ( fn: unknown ) => unknown };
+		if ( typeof scope.__name === 'undefined' ) scope.__name = ( fn ) => fn;
+	} ).catch( () => undefined );
+	await frame.waitForSelector( WIX_FAQ_HEADER_SELECTOR, { state: 'attached', timeout: renderMilliseconds } ).catch( () => undefined );
+	const items = await frame.evaluate( readWixFaqItems, WIX_FAQ_HEADER_SELECTOR ).catch( () => [] );
+	if ( ! items.length ) return false;
+	await handle.evaluate( installWixFaq, { items, attribute: WIX_PORTED_EMBED_ATTRIBUTE } );
+	return true;
 }
 
 /** Runs in the page: whether every Wix Events venue map has mounted its map. */
@@ -364,7 +467,7 @@ export async function portWixEventMaps( page: Page, mountMilliseconds = EVENT_MA
 		const view = googleMapsViewFromSearchLink( href ) ?? ( warmup ? wixEventVenueView( warmup ) : null );
 		const language = await page.evaluate( () => document.documentElement.lang ).catch( () => '' );
 		const embed = view ? googleMapsEmbedUrl( view, language || undefined ) : null;
-		if ( embed ) await handle.evaluate( installWixEventMapEmbed, { embed, attribute: WIX_PORTED_MAP_ATTRIBUTE } );
+		if ( embed ) await handle.evaluate( installWixEventMapEmbed, { embed, attribute: WIX_PORTED_EMBED_ATTRIBUTE } );
 		else await handle.evaluate( installWixEmbedNote, { note: wixEmbedNote( 'Map' ), attribute: WIX_UNPORTED_EMBED_ATTRIBUTE } );
 	}
 }
@@ -373,7 +476,7 @@ export async function portWixEventMaps( page: Page, mountMilliseconds = EVENT_MA
  * Port Wix map wrappers to Google Maps embeds and replace App Market widgets
  * with a visible note. Runs on the live DOM right before it is frozen.
  */
-export async function portWixRuntimeEmbeds( page: Page ): Promise< void > {
+export async function portWixRuntimeEmbeds( page: Page, { faqRenderMilliseconds = FAQ_RENDER_MILLISECONDS } = {} ): Promise< void > {
 	// tsx instruments nested functions with __name(); the built bundle does not.
 	await page.evaluate( () => {
 		const scope = globalThis as typeof globalThis & { __name?: ( fn: unknown ) => unknown };
@@ -420,8 +523,11 @@ export async function portWixRuntimeEmbeds( page: Page ): Promise< void > {
 			const language = ( url?.searchParams.get( 'locale' ) || url?.searchParams.get( 'language' ) ) ?? undefined;
 			const embed = googleMapsEmbedUrl( wixAppMapView( src, page.url() )!, language );
 			if ( embed ) await pointAtGoogleMap( handle, embed );
-		} else if ( wixAppInstance( src, page.url() ) ) {
+		} else {
+			const app = wixAppInstance( src, page.url() );
+			if ( ! app ) continue;
 			if ( await handle.evaluate( ( frame, selector ) => Boolean( frame.closest( selector ) ), WIX_PINNED_CHAT_SELECTOR ).catch( () => false ) ) continue;
+			if ( app.appDefId === WIX_FAQ_APP_DEF_ID && await portWixFaqFrame( handle, faqRenderMilliseconds ) ) continue;
 			await handle.evaluate( installWixEmbedNote, { note: wixEmbedNote( title ), attribute: WIX_UNPORTED_EMBED_ATTRIBUTE } );
 		}
 	}
