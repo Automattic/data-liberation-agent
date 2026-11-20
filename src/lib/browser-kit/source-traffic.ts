@@ -3,7 +3,7 @@ import { isSourceTransportThrottle } from '../source-request-governor.js';
 import type { SourceRequestAttribution, SourceReplayOutcome, SourceRequestCategory, SourceRequestGovernors } from '../source-request-governor.js';
 import { closingConnection } from './api-request-connection.js';
 
-const traffic = new WeakMap<BrowserContext, { governors: SourceRequestGovernors; origin: string; category?: SourceRequestCategory; phase?: string; device?: string; inFlight: Set<Request> }>();
+const traffic = new WeakMap<BrowserContext, { governors: SourceRequestGovernors; origin: string; category?: SourceRequestCategory; phase?: string; device?: string }>();
 
 /** Device checks precede capture. Keep a bounded response handoff for this capture. */
 const documents = new WeakMap<SourceRequestGovernors, Map<string, { url: string; status: number; headers: Record<string, string>; body: Buffer }>>();
@@ -63,8 +63,7 @@ export async function takeSourceDocument(context: BrowserContext, url: string, h
 
 /** Capture-owned state; contexts outside capture and third-party origins stay unchanged. */
 export async function governSourceContext(context: BrowserContext, governors: SourceRequestGovernors, sourceUrl: string, sourceTelemetry?: import('../../platform/types.js').Platform['sourceTelemetry']): Promise<void> {
-  const inFlight = new Set<Request>();
-  traffic.set(context, { governors, origin: new URL(sourceUrl).origin, inFlight });
+  traffic.set(context, { governors, origin: new URL(sourceUrl).origin });
   context.on('response', response => {
     const entry = nativeRequests.get(response.request());
     if (!entry) return;
@@ -79,22 +78,10 @@ export async function governSourceContext(context: BrowserContext, governors: So
     const entry = nativeRequests.get(request);
     if (!entry) return;
     nativeRequests.delete(request);
-    inFlight.delete(request);
     if (failed && !entry.throttled && isSourceTransportThrottle(new Error(request.failure()?.errorText ?? ''))) recordInterruptedLoad(request);
     if (!entry.throttled) entry.governor.observeBrowserOutcome(failed ? undefined : entry.status, undefined,
       failed ? new Error(request.failure()?.errorText ?? '') : undefined, entry.routeUrl, entry.refusalAdmission, entry.category, entry.attribution);
-    if (entry.acquired) entry.governor.release();
   };
-  // A closing context emits no outcome for requests still in flight: return
-  // their admission slots, or a throttled origin stays full for good.
-  context.once('close', () => {
-    for (const request of inFlight) {
-      const entry = nativeRequests.get(request);
-      nativeRequests.delete(request);
-      if (entry?.acquired) entry.governor.release();
-    }
-    inFlight.clear();
-  });
   context.on('requestfinished', request => finish(request, false));
   context.on('requestfailed', request => finish(request, true));
   if (sourceTelemetry?.length) await context.route('**/*', async route => {
@@ -133,7 +120,6 @@ function recordInterruptedLoad(request: Request): void {
 
 const nativeRequests = new WeakMap<Request, {
   governor: ReturnType<SourceRequestGovernors['forOrigin']>;
-  acquired: boolean;
   category: SourceRequestCategory;
   refusalAdmission?: number;
   routeUrl?: string;
@@ -142,25 +128,28 @@ const nativeRequests = new WeakMap<Request, {
   attribution: SourceRequestAttribution;
 }>();
 
-/** Preserve native streaming, multiplexing and range requests, even during recovery. */
+/**
+ * Preserve native streaming, multiplexing and range requests, even during
+ * recovery. Native loads wait out the origin's pause and learned rate ceiling
+ * by time and never hold a concurrency slot: Chromium's HTTP cache makes
+ * same-URL loads wait for the first loader, so slot-holding loads could wait
+ * forever on a load still queued for a slot.
+ */
 export async function continueSourceRoute(route: Route, context: BrowserContext, options: Parameters<Route['continue']>[0]): Promise<void> {
   const request = route.request();
   const governor = sourceGovernorFor(context, request.url());
   if (!governor) return route.continue(options);
   const requestAttribution = attribution(context, request);
   await governor.admitSourceRequest();
-  const acquired = governor.isBrowserThrottled;
   const abort = new AbortController();
   const close = () => abort.abort();
   context.once('close', close);
-  try { await (acquired ? governor.acquire(abort.signal, true) : governor.pace(abort.signal)); }
+  try { await governor.pace(abort.signal); }
   finally { context.off('close', close); }
-  traffic.get(context)?.inFlight.add(request);
-  nativeRequests.set(request, { governor, acquired, attribution: requestAttribution, category: request.resourceType() === 'document' ? traffic.get(context)?.category ?? 'document' : 'subresource', routeUrl: owningDocumentUrl(request), refusalAdmission: governor.refusalAdmission() });
+  nativeRequests.set(request, { governor, attribution: requestAttribution, category: request.resourceType() === 'document' ? traffic.get(context)?.category ?? 'document' : 'subresource', routeUrl: owningDocumentUrl(request), refusalAdmission: governor.refusalAdmission() });
   try { await route.continue(options); }
   catch (error) {
-    traffic.get(context)?.inFlight.delete(request);
-    if (nativeRequests.delete(request) && acquired) governor.release();
+    nativeRequests.delete(request);
     throw error; // failure-class: operational
   }
 }
