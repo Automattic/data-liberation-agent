@@ -5,6 +5,8 @@ import { enumerateShopifyProducts, shopifyStructuredContent } from './template-c
 import { SourceRequestGovernors, sourceRequestContext } from '../../lib/source-request-governor.js';
 import { downloadCaptureSectionMedia } from '../../lib/capture.js';
 import { exportWebsiteCapture } from '../../lib/capture-export.js';
+import { catalogImageSources } from '../../lib/product-row.js';
+import { shopifyAdapter } from './index.js';
 
 const fixture = (name: string) => JSON.parse(readFileSync(new URL(`./fixtures/catalog/${name}.json`, import.meta.url), 'utf8'));
 afterEach(() => vi.unstubAllGlobals());
@@ -57,5 +59,45 @@ it('exports fixture catalog rows and materializes catalog-only images while reus
 		// Both source URLs have identical bytes and share one emitted asset.
 		expect(content.products[0].images[0].src).toBe(content.products[1].images[0].src);
 		expect(readdirSync(join(directory, 'website/media'))).toHaveLength(1);
+	} finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+it('downloads and emits one file for a page srcset and the catalog row naming its cdn.shopify.com alias (#2142)', async () => {
+	mkdirSync('.tmp-test', { recursive: true });
+	const directory = mkdtempSync(join(process.cwd(), '.tmp-test/catalog-alias-'));
+	const source = 'https://example.com/';
+	const images: string[] = [];
+	vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+		const url = new URL(String(input));
+		if (url.pathname.endsWith('.svg')) {
+			images.push(url.href);
+			// Every rendition has its own bytes, as Shopify's resizer serves them.
+			return new Response(`<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><!-- ${url.href} --><rect width="20" height="20"/></svg>`, { headers: { 'Content-Type': 'image/svg+xml' } });
+		}
+		const data = url.pathname === '/products.json' && url.searchParams.get('page') === '1' ? { products: [{
+			handle: 'beans', title: 'Beans', body_html: '<p>Beans</p>', vendor: 'Shop', published_at: '2026-01-01', updated_at: '2026-01-02', tags: [],
+			options: [{ name: 'Title', values: ['Default Title'] }], variants: [{ price: '8.00', available: true }],
+			images: [{ src: 'https://cdn.shopify.com/s/files/1/0629/5971/4366/files/bean.svg?v=7', alt: 'Beans' }],
+		}] } : { products: [], collections: [] };
+		return new Response(JSON.stringify(data), { headers: { 'Content-Type': 'application/json' } });
+	}));
+	try {
+		for (const folder of ['html', 'screenshots', 'resources']) mkdirSync(join(directory, folder));
+		const file = (width: number) => `https://example.com/cdn/shop/files/bean.svg?v=7&amp;width=${width}`;
+		writeFileSync(join(directory, 'html/home.html'), `<!doctype html><html><head><title>Shop</title></head><body><img src="${file(800)}" srcset="${file(400)} 400w, ${file(800)} 800w, ${file(1200)} 1200w"></body></html>`);
+		writeFileSync(join(directory, 'screenshots/manifest.json'), JSON.stringify({ version: 1, entries: { [source]: { html: 'html/home.html' } } }));
+		const governors = new SourceRequestGovernors();
+		const result = await enumerateShopifyProducts(source, { governors });
+		const catalog = catalogImageSources(result.entries.map(entry => entry.product));
+		await sourceRequestContext.run(governors, () => downloadCaptureSectionMedia(directory, [source], undefined, shopifyAdapter.resolveImageOriginal?.bind(shopifyAdapter), catalog.sources));
+		exportWebsiteCapture({ outputDir: directory, sourceUrl: source, platform: 'shopify', summary: {}, failures: [], structuredContent: { source: shopifyStructuredContent, entries: result.entries } });
+		expect(images).toEqual(['https://example.com/cdn/shop/files/bean.svg?width=2048']);
+		expect(readdirSync(join(directory, 'website/media'))).toHaveLength(1);
+		const [emitted] = readdirSync(join(directory, 'website/media'));
+		const content = JSON.parse(readFileSync(join(directory, 'website/content-index.json'), 'utf8'));
+		expect(content.products[0].images).toEqual([{ src: `media/${emitted}`, alt: 'Beans' }]);
+		const home = readFileSync(join(directory, 'website/index.html'), 'utf8');
+		expect(home).not.toContain('cdn/shop/files');
+		expect(home).toContain(`media/${emitted}`);
 	} finally { rmSync(directory, { recursive: true, force: true }); }
 });
