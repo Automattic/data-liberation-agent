@@ -909,7 +909,9 @@ describe( 'captureWebsite route selection', () => {
 				urls: [ '/sample/', '/another/', '/catalog/', '/more/', '/about/', '/cart.php', '/login.php?action=login' ].map( path => ( { url: new URL( path, sourceUrl ).href } ) ),
 			} ) } ),
 		} );
-		expect( capturedUrls() ).toEqual( [ sourceUrl, `${ sourceUrl }about/`, `${ sourceUrl }sample/`, `${ sourceUrl }catalog/` ] );
+		// Template clusters are on by default: the declared product template's
+		// representative and verifier seed the budget, so its members derive.
+		expect( capturedUrls() ).toEqual( [ sourceUrl, `${ sourceUrl }sample/`, `${ sourceUrl }another/`, `${ sourceUrl }catalog/` ] );
 	} );
 
 	it( 'spends the budget on one route per template first with template-coverage', async () => {
