@@ -1,8 +1,10 @@
 import type { Page } from 'playwright';
 import { PNG } from 'pngjs';
+import { holdVideoFrames } from './video-hold.js';
 
 /** Full-page baseline after the caller's cleanup, lazy-load sweep and readiness. */
 export async function captureFullPageScreenshot( page: Page, excludedMotion: string[] = [] ): Promise<Buffer> {
+	await holdVideoFrames( page );
 	// Use the same authored-rest/terminal-entrance pose as geometry measurement.
 	const hidden = await page.evaluateHandle( selectors => selectors.flatMap( selector => [ ...document.querySelectorAll<HTMLElement>( selector ) ] ).map( element => {
 		const visibility = element.style.visibility;
@@ -50,6 +52,7 @@ export async function captureFullPageScreenshot( page: Page, excludedMotion: str
 
 /** Capture the compositor viewport without Playwright's fractional CSS clip. */
 export async function captureViewportScreenshot( page: Page ): Promise<Buffer> {
+	await holdVideoFrames( page );
 	const viewport = page.viewportSize();
 	if ( ! viewport ) throw new Error( 'Screenshot viewport is undeclared' );
 	const session = await page.context().newCDPSession( page );

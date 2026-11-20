@@ -39,6 +39,7 @@ import { probeDialogs } from './dialog-probe.js';
 import { checkInternalRoute, type InternalRouteOutcome } from './internal-route.js';
 import { attributedPixelRegionFailures, writePixelEvidence } from './evidence.js';
 import { captureFullPageScreenshot, captureViewportScreenshot } from './viewport-screenshot.js';
+import { holdVideoFrames } from './video-hold.js';
 import { checkSelfConsistency, type SelfConsistencyReport } from './self-consistency.js';
 import { REFERENCE_WIDTHS, readFrozenObservation, readReferenceArtifact, type FidelityReference, type FidelityStage } from './reference.js';
 import {
@@ -1375,7 +1376,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 			let sourcePng: Buffer | undefined;
 			let liberatedPng: Buffer | undefined;
 			const source = await observePage( page, sourceHref, viewport, Math.max( settleMs, sourceSettleMs ), null, receipt.cleanup?.policy,
-				options.screenshots ? async () => { sourcePng = await page!.screenshot(); } : undefined );
+				options.screenshots ? async () => { await holdVideoFrames( page! ); sourcePng = await page!.screenshot(); } : undefined );
 			const runtimeEmoji = await page.evaluate( () => document.documentElement.getAttribute( 'data-blocks-engine-capture-runtime-emoji' ) === 'wordpress' );
 			if (receipt.cleanup) {
 				const report = await readSourceCleanup(page);
@@ -1393,7 +1394,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 				// policy what it would still remove. Removing it first would hide
 				// exactly what is being measured.
 				const liberated = await observePage( page, localHref, viewport, settleMs, new URL( localHref ).origin, undefined,
-					options.screenshots ? async () => { liberatedPng = await page!.screenshot(); } : undefined, false, false, { runtimeEmoji } );
+					options.screenshots ? async () => { await holdVideoFrames( page! ); liberatedPng = await page!.screenshot(); } : undefined, false, false, { runtimeEmoji } );
 				const candidateRetained = receipt.cleanup
 					? ( await applySourceCleanup( page, receipt.cleanup.policy ) ).removed
 					: 0;
@@ -1406,7 +1407,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 				settleMs,
 				new URL( localHref ).origin,
 				receipt.cleanup?.policy,
-				options.screenshots ? async () => { liberatedPng = await page!.screenshot(); } : undefined,
+				options.screenshots ? async () => { await holdVideoFrames( page! ); liberatedPng = await page!.screenshot(); } : undefined,
 				false, false, { runtimeEmoji }
 			);
 			if (receipt.cleanup) {
