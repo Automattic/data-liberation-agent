@@ -127,6 +127,8 @@ export interface CaptureOptions {
 	 * (full-route parity).
 	 */
 	referenceSample?: number | 'all';
+	/** Export now; freeze capture-declared reference cells with the reference command later. */
+	deferReference?: boolean;
 	/**
 	 * Capture time budget in milliseconds, measured from the start of this call
 	 * until export must begin (browser acquisition only). Route admission
@@ -240,6 +242,7 @@ export interface UnresolvedAnchor {
 }
 
 export interface CaptureResult {
+	reference?: { status: 'pending' | 'complete' };
 	/** True only when export was deferred; resume into the same output directory. */
 	checkpoint?: boolean;
 	resumable?: boolean;
@@ -619,6 +622,9 @@ async function runCaptureWebsite(
 		await adapter.liberation?.initScript?.(page);
 	} : undefined;
 	const reference = createReferenceCollector( outputDir, sourceUrl, urls, {
+		defer: options.deferReference,
+		adapterId: adapter.id,
+		trustedOrigins: options.trustedOrigins,
 		routeScope,
 		publicUrlsOnly: true,
 		cleanupPolicy: ( await import( './source-cleanup.js' ) ).cleanupPolicy( adapter.liberation?.cleanupRules ),
@@ -732,7 +738,7 @@ async function runCaptureWebsite(
 		} : {} ),
 		// Memory admission reserves for what a route opens: bounded samples
 		// leave most routes without fresh reference pages.
-		...( reference.sampledSourceUrls ? { referenceSampleUrls: reference.sampledSourceUrls } : {} ),
+		...( options.deferReference ? { referenceSampleUrls: [] } : reference.sampledSourceUrls ? { referenceSampleUrls: reference.sampledSourceUrls } : {} ),
 		onRouteAlias: reference.alias,
 		withdrawSourceProfile: reference.withdraw,
 		...( adapter.liberation?.canonicalizeHtml
@@ -886,6 +892,9 @@ async function runCaptureWebsite(
 		routesDiscovered: screenshotResult.urls.length - ( screenshotResult.routeDiagnostics ?? [] ).filter( row => row.code === ROUTE_OMITTED_BY_BUDGET ).length,
 		routesCaptured: screenshotResult.captured + ( derivedTemplateClusters?.summary.derived ?? 0 ) + ( derivedTemplateClusters?.summary.httpAcquired ?? 0 ) + budgetHttp.acquired.length,
 		routesSkipped: screenshotResult.skipped,
+		routesPending: captureDiagnostics.filter(row => row.code === 'route_capture_pending').length,
+		sourceRequests: sourceGovernors.stats(),
+		...(blockedClient ? { resumable: true, stopReason: blockedClient.code } : {}),
 		routesFailed: screenshotResult.failed,
 		routesOmitted: budgetOmittedRoutes( captureDiagnostics ).length,
 		...( derivedTemplateClusters ? { routesDerived: derivedTemplateClusters.summary.derived } : {} ),
@@ -960,6 +969,7 @@ async function runCaptureWebsite(
 	const receipt = JSON.parse( readFileSync( captureReceiptPath, 'utf8' ) );
 	receipt.source.detection = detection;
 	receipt.preview = preview;
+	receipt.reference = { status: options.deferReference ? 'pending' : 'complete' };
 	receipt.templateClustersDecision = templateClustersDecision;
 	if ( templateGroups ) receipt.templateGroups = templateGroups;
 	if ( derivedTemplateClusters ) {
@@ -1006,7 +1016,9 @@ async function runCaptureWebsite(
 		unresolvedAnchors.every( ( anchor ) => anchor.reason !== 'target route was not captured' );
 	const result: CaptureResult = {
 		captureReceiptPath,
+		reference: { status: options.deferReference ? 'pending' : 'complete' },
 		outputDir,
+		...(blockedClient ? { resumable: true } : {}),
 		summary: { ...finalSummary, complete, entrypointCaptured: true },
 		complete,
 		entrypointCaptured: true,
