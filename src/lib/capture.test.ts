@@ -1125,6 +1125,26 @@ describe( 'captureWebsite time budget', () => {
 		expect( result.missingRoutes ).toEqual( [] );
 	} );
 
+	it( 'HTTP-acquires browser omissions even after the browser abandon deadline', async () => {
+		const omitted = `${ sourceUrl }contact`;
+		vi.mocked( safeFetch ).mockImplementation( async url => ( { finalUrl: url, status: 200,
+			body: Buffer.from( '<html><body><article>Contact</article></body></html>' ), headers: new Headers( { 'content-type': 'text/html' } ) } ) as Awaited< ReturnType< typeof safeFetch > > );
+		captureScreenshotsMock.mockImplementationOnce( async () => {
+			await new Promise( resolve => setTimeout( resolve, 10 ) );
+			return { urls: [ sourceUrl, omitted ], captured: 1, skipped: 0, failed: 0, durationMs: 10,
+				routeDiagnostics: [ { code: 'route_omitted_by_budget', url: omitted, reason: 'browser window spent' } ] } as never;
+		} );
+		const dependencies = adapter( [ omitted ] );
+		const base = dependencies.findAdapter();
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root, timeBudgetMs: 1 }, {
+			findAdapter: () => ( { ...base, acquisition: { id: 'neutral-server', variants: [ { id: 'desktop' } ], prepare: ( html: string ) => ( { html } ) } } ),
+		} );
+		expect( result.summary ).toMatchObject( { routesCaptured: 2, routesOmitted: 0 } );
+		const manifest = JSON.parse( readFileSync( join( root, 'screenshots/manifest.json' ), 'utf8' ) );
+		expect( manifest.entries[ omitted ].html ).toMatch( /^screenshots\/http\// );
+		vi.mocked( safeFetch ).mockImplementation( async url => ( { finalUrl: url, status: 200 } ) as Awaited< ReturnType< typeof safeFetch > > );
+	} );
+
 	it( 'passes the budget window to capture and maxFileBytes to export', async () => {
 		const before = Date.now();
 		await captureWebsite( { url: sourceUrl, outputDir: root, timeBudgetMs: 600_000, maxFileBytes: 1024, maxTotalBytes: 4096, maxFiles: 7 }, adapter( [] ) );

@@ -7,6 +7,10 @@ import { safeFetch } from './media-fetch/safe-fetch.js';
 import type { HttpAcquisitionProfile } from '../platform/acquisition.js';
 import { materializeHttpDocuments } from './http-materialization.js';
 import { SourceRequestGovernors } from './source-request-governor.js';
+import * as fetching from './media-fetch/safe-fetch.js';
+import { acquireEscalatedMembers } from './template-cluster-fallback.js';
+import { ManifestQueue } from './screenshot/manifest-queue.js';
+import { normalizedUrl } from './url/route-key.js';
 
 const directories: string[] = [];
 const source = 'https://acquisition.example/';
@@ -22,6 +26,69 @@ afterEach( () => { for ( const root of directories.splice( 0 ) ) rmSync( root, {
 const dependencies = ( fetchImpl: typeof fetch ) => ( { fetch: ( url: string, options: Parameters<typeof safeFetch>[1] ) => safeFetch( url, { ...options, fetchImpl } ) } );
 
 describe( 'HTTP document acquisition', () => {
+	it( 'acquires nav omissions before cluster requests exhaust the independent HTTP window', async () => {
+		const outputDir = directory();
+		const queue = new ManifestQueue( join( outputDir, 'screenshots/manifest.json' ) );
+		await queue.init();
+		const nav = `${ source }contact`;
+		const singleton = `${ source }singleton`;
+		const clusters = Array.from( { length: 12 }, ( _, i ) => `${ source }post-${ i }` );
+		const started: string[] = [];
+		const fetch = vi.spyOn( fetching, 'safeFetch' ).mockImplementation( async ( url, options ) => {
+			started.push( url );
+			if ( clusters.includes( url ) ) {
+				await new Promise( ( _resolve, reject ) => {
+					options!.signal!.addEventListener( 'abort', () => reject( options!.signal!.reason ), { once: true } );
+				} );
+			}
+			return { body: Buffer.from( '<html><body><article>Primary page</article></body></html>' ), status: 200, finalUrl: url, headers: new Headers( { 'content-type': 'text/html' } ) };
+		} );
+		try {
+			const result = await acquireEscalatedMembers( {
+				outputDir, sourceUrl: source, queue, governors: new SourceRequestGovernors(),
+				profile: { ...profile, variants: [ { id: 'desktop' } ] },
+				// Cluster-first input would fill every worker and exhaust this window.
+				members: [ ...clusters.map( url => ( { url, gate: 'cluster_verification_missing', reason: 'no verifier' } ) ),
+					{ url: singleton, gate: 'route_omitted_by_budget', reason: 'browser window spent' },
+					{ url: nav, gate: 'route_omitted_by_budget', reason: 'browser window spent' } ],
+				navigationTargets: new Set( [ normalizedUrl( nav ) ] ), deadline: Date.now() + 100,
+			} );
+			expect( started.slice( 0, 2 ) ).toEqual( [ nav, singleton ] );
+			expect( result.acquired ).toEqual( [ nav, singleton ] );
+			expect( result.failed.size ).toBe( clusters.length );
+			expect( queue.getEntry( nav )?.html ).toMatch( /^screenshots\/http\// );
+		} finally {
+			fetch.mockRestore();
+		}
+	} );
+	it( 'cancels in-flight requests and leaves queued documents unacquired at the deadline', async () => {
+		vi.useFakeTimers();
+		try {
+			const fetchImpl = vi.fn<typeof fetch>( async ( _input, init ) => new Promise( ( _resolve, reject ) => {
+				init!.signal!.addEventListener( 'abort', () => reject( init!.signal!.reason ), { once: true } );
+			} ) );
+			const acquisition = acquireHttpDocuments( {
+				url: source, urls: [ source, `${ source }other` ], outputDir: directory(), profile,
+				concurrency: 1, deadline: Date.now() + 100,
+			}, dependencies( fetchImpl ) );
+			await vi.advanceTimersByTimeAsync( 101 );
+			const result = await acquisition;
+			expect( fetchImpl ).toHaveBeenCalledTimes( 1 );
+			expect( result.coverage.acquired ).toBe( 0 );
+			expect( result.documents.slice( 1 ).every( document => document.attempts === 0 ) ).toBe( true );
+		} finally {
+			vi.useRealTimers();
+		}
+	} );
+	it( 'does not start queued requests after the capture window closes', async () => {
+		const fetchImpl = vi.fn<typeof fetch>();
+		const result = await acquireHttpDocuments( {
+			url: source, urls: [ source, `${ source }other` ], outputDir: directory(), profile, deadline: Date.now() - 1,
+		}, dependencies( fetchImpl ) );
+		expect( fetchImpl ).not.toHaveBeenCalled();
+		expect( result.coverage.acquired ).toBe( 0 );
+		expect( result.documents.every( document => document.attempts === 0 ) ).toBe( true );
+	} );
 	it( 'carries scoped seeds and redirect admission through HTTP export while keeping queries and shared resources', async () => {
 		const root = directory();
 		const url = `${source}customer`;

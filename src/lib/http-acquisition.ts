@@ -40,6 +40,8 @@ export interface HttpAcquisitionOptions {
 	profile: HttpAcquisitionProfile;
 	concurrency?: number;
 	timeoutMs?: number;
+	/** Absolute end of the capture window; queued requests stop when it closes. */
+	deadline?: number;
 	maxDocumentBytes?: number;
 	/** Stage deduplicated source dependencies; this does not localize a website. */
 	collectAssets?: boolean;
@@ -73,6 +75,9 @@ export async function acquireHttpDocuments( options: HttpAcquisitionOptions, dep
 	const started = performance.now();
 	const concurrency = Math.max( 1, Math.min( 12, options.concurrency ?? 6 ) );
 	const governor = options.governors?.forOrigin( origin, { concurrency } ) ?? new SourceRequestGovernor( origin, { concurrency } );
+	const signal = options.deadline === undefined ? undefined : options.deadline <= Date.now()
+		? AbortSignal.abort( new DOMException( 'Capture window exhausted', 'TimeoutError' ) )
+		: AbortSignal.timeout( options.deadline - Date.now() );
 	const documents = await mapPool( tasks, concurrency, async ( { url, variant } ) => {
 		const routeStarted = performance.now();
 		const document: AcquiredHttpDocument = { url, variant: variant.id, status: 'failed', attempts: 0, durationMs: 0 };
@@ -82,18 +87,19 @@ export async function acquireHttpDocuments( options: HttpAcquisitionOptions, dep
 			// thrown transient error is retried once here.
 			for ( let attempt = 0; attempt < 2; attempt++ ) {
 				try {
+					signal?.throwIfAborted();
 					response = ( await governor.run( () => {
 						document.attempts++;
 						return dependencies.fetch( url, {
-							governors: null,
+							governors: null, signal,
 							...(options.routeScope ? { authorizeUrl: (target: string) => { if (!routeInScope(target, options.routeScope)) throw new Error('HTTP document is outside its adapter route scope'); } } : {}),
 							headersForOrigin: requestOrigin => requestOrigin === origin ? variant.headers : undefined,
 							timeoutMs: options.timeoutMs ?? 30_000, maxBytes: options.maxDocumentBytes ?? SOURCE_DOCUMENT_MAX_BYTES,
 						} );
-					} ) ).response;
+					}, { signal } ) ).response;
 					break;
 				} catch ( error ) {
-					if ( attempt === 1 || error instanceof SsrfBlockedError || error instanceof BodyTooLargeError ) throw error;
+					if ( signal?.aborted || attempt === 1 || error instanceof SsrfBlockedError || error instanceof BodyTooLargeError ) throw error;
 					await new Promise( resolve => setTimeout( resolve, 500 ) );
 				}
 			}

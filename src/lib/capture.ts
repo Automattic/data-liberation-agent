@@ -22,7 +22,7 @@ import { actionUrlExclusion, platformRuntimeExclusion, ROUTE_EXCLUDED_ACTION_URL
 import { galleryFrameMediaUrls } from './screenshot/gallery-capture.js';
 import type { ManifestEntry } from './screenshot/manifest-queue.js';
 import { budgetOmittedRoutes, hasUncapturedProfiles, missingRoutes, withExportDroppedRoutes, type MissingRoute } from './capture-usability.js';
-import { DEFAULT_CAPTURE_TIME_BUDGET_MS, ROUTE_OMITTED_BY_BUDGET, routeBudgetReason, templateVerificationMember, rankTemplateClusterRoutes, selectRouteBudget, validateRouteLimit, validateRouteSelection, type RouteLimit } from './route-budget.js';
+import { DEFAULT_CAPTURE_TIME_BUDGET_MS, ROUTE_OMITTED_BY_BUDGET, routeBudgetReason, templateVerificationMember, dedupeRouteInventory, rankTemplateClusterRoutes, selectRouteBudget, validateRouteLimit, validateRouteSelection, type RouteLimit } from './route-budget.js';
 import type { RouteDiagnostic } from './capture-export-routes.js';
 import { ROUTE_ALIAS_CANONICAL, probeCanonicalRouteAliases } from './route-aliases.js';
 import { writeSourceFindings } from './source-findings.js';
@@ -769,6 +769,39 @@ async function runCaptureWebsite(
 	// ordinary manifest entries before export, so export needs no second input
 	// kind. Any failure degrades to the pre-derivation state: the member keeps
 	// its `route_omitted_by_budget` diagnostic.
+	const budgetHttp = { acquired: [] as string[], diagnostics: [] as RouteDiagnostic[] };
+	const acquireRemaining = async ( escalations: readonly import('./template-cluster-fallback.js').EscalatedMember[] ) => {
+		const { ManifestQueue } = await import( './screenshot/manifest-queue.js' );
+		const { acquireEscalatedMembers, runtimeRenderBudgetMs } = await import( './template-cluster-fallback.js' );
+		const queue = new ManifestQueue( join( outputDir, 'screenshots', 'manifest.json' ) );
+		await queue.init();
+		const escalationIdentities = new Set( escalations.map( member => normalizedUrl( member.url ) ) );
+		const omissions = timeBudget ? dedupeRouteInventory( [
+			...( screenshotResult.routeDiagnostics ?? [] ),
+			...( screenshotResult.linkedPageCoverage?.diagnostics ?? [] ),
+		].filter( row => row.code === ROUTE_OMITTED_BY_BUDGET || row.code === 'linked_page_budget_exhausted' ).map( row => row.url ) )
+			.filter( url => ! escalationIdentities.has( normalizedUrl( url ) ) && ! queue.getEntry( url )?.html ) : [];
+		try {
+			const fallback = await acquireEscalatedMembers( {
+				outputDir, sourceUrl, routeScope, profile: adapter.acquisition!, governors: sourceGovernors, queue,
+				members: [ ...escalations, ...omissions.map( url => ( { url, gate: ROUTE_OMITTED_BY_BUDGET, reason: 'browser admission closed' } ) ) ],
+				navigationTargets,
+				clusterMemberUrls: new Set( clusterRankingGroups.filter( group => group.size > 2 ).flatMap( group => group.members.map( normalizedUrl ) ) ),
+				maxTotalBytes: options.maxTotalBytes,
+				runtimeRenderBudgetMs: runtimeRenderBudgetMs( options.timeBudgetMs ),
+			} );
+			budgetHttp.acquired.push( ...fallback.acquired.filter( url => ! escalationIdentities.has( normalizedUrl( url ) ) ) );
+			budgetHttp.diagnostics.push( ...budgetHttp.acquired.map( url => ( {
+				code: ROUTE_TEMPLATE_ESCALATED, url, reason: `browser admission closed; captured through governed HTTP acquisition (${ adapter.acquisition!.id })`,
+				unit: 'route' as const, severity: 'warning' as const,
+			} ) ) );
+			budgetHttp.diagnostics.push( ...fallback.diagnostics );
+			// Cluster receipts count only escalations, not unrelated budget omissions.
+			return { ...fallback, diagnostics: [], acquired: fallback.acquired.filter( url => escalationIdentities.has( normalizedUrl( url ) ) ) };
+		} finally {
+			await queue.flush();
+		}
+	};
 	const derivedTemplateClusters = ! sourceGovernors.forOrigin( sourceUrl ).blockedClient && templateClusters && templateGrouping?.report
 		? await deriveTemplateClusterMembers( {
 				contentEntries,
@@ -787,6 +820,7 @@ async function runCaptureWebsite(
 				resolveImageOriginal: adapter.resolveImageOriginal?.bind( adapter ),
 				acquisition: adapter.acquisition,
 				deferral,
+				acquireRemaining,
 			} )
 		: undefined;
 	await deferral?.close();
@@ -797,6 +831,12 @@ async function runCaptureWebsite(
 		process.stderr.write(
 			`[template-clusters] ${ derivedTemplateClusters.summary.derived } derived, ${ derivedTemplateClusters.summary.escalated } escalated (${ derivedTemplateClusters.summary.httpAcquired } HTTP-acquired), ${ derivedTemplateClusters.summary.unavailable } unavailable, ${ Date.now() - mediaStartedAt }ms\n`
 		);
+	}
+
+	// Without template grouping there are still browser-budget omissions to acquire.
+	if ( ! derivedTemplateClusters && timeBudget && adapter.acquisition && ! sourceGovernors.forOrigin( sourceUrl ).blockedClient ) {
+		const fallback = await acquireRemaining( [] );
+		budgetHttp.diagnostics.push( ...fallback.diagnostics );
 	}
 
 	const exportStartedAt = Date.now();
@@ -818,7 +858,7 @@ async function runCaptureWebsite(
 	// A derived route is no longer omitted by budget: it shipped as a
 	// template-cluster derivative, so its omission row is replaced by the
 	// derivation's own loss row (`route_template_derived`).
-	const derivedUrls = new Set( [ ...derivedTemplateClusters?.summary.derivedUrls ?? [], ...derivedTemplateClusters?.summary.httpAcquiredUrls ?? [] ] );
+	const derivedUrls = new Set( [ ...derivedTemplateClusters?.summary.derivedUrls ?? [], ...derivedTemplateClusters?.summary.httpAcquiredUrls ?? [], ...budgetHttp.acquired ] );
 	const derivedIdentities = new Set( [ ...derivedUrls ].map( normalizedUrl ) );
 	const blockedClient = sourceGovernors.forOrigin( sourceUrl ).blockedClient;
 	// Frontier timeouts and late-pass refusals are capture-budget omissions too.
@@ -832,7 +872,7 @@ async function runCaptureWebsite(
 	} ) );
 	const captureDiagnostics = [
 		...discoveryDiagnostics, ...( screenshotResult.routeDiagnostics ?? [] ), ...linkedDiagnostics,
-		...( derivedTemplateClusters?.diagnostics ?? [] ), ...underived,
+		...( derivedTemplateClusters?.diagnostics ?? [] ), ...underived, ...budgetHttp.diagnostics,
 	].map( row => row.code === 'linked_page_budget_exhausted' ? { ...row, code: ROUTE_OMITTED_BY_BUDGET } : row )
 		.filter( row => {
 			if ( row.code !== ROUTE_OMITTED_BY_BUDGET ) return true;
@@ -844,7 +884,7 @@ async function runCaptureWebsite(
 	const summary = {
 		// Same route set `captured`, `skipped` and `failed` are counted over.
 		routesDiscovered: screenshotResult.urls.length - ( screenshotResult.routeDiagnostics ?? [] ).filter( row => row.code === ROUTE_OMITTED_BY_BUDGET ).length,
-		routesCaptured: screenshotResult.captured + ( derivedTemplateClusters?.summary.derived ?? 0 ) + ( derivedTemplateClusters?.summary.httpAcquired ?? 0 ),
+		routesCaptured: screenshotResult.captured + ( derivedTemplateClusters?.summary.derived ?? 0 ) + ( derivedTemplateClusters?.summary.httpAcquired ?? 0 ) + budgetHttp.acquired.length,
 		routesSkipped: screenshotResult.skipped,
 		routesFailed: screenshotResult.failed,
 		routesOmitted: budgetOmittedRoutes( captureDiagnostics ).length,
@@ -1208,6 +1248,8 @@ export async function deriveTemplateClusterMembers( input: {
 	maxTotalBytes?: number;
 	/** Platform original-rendition resolver for queued member media (#1701). */
 	resolveImageOriginal?: import('../platform/types.js').Platform['resolveImageOriginal'];
+	/** Capture supplies one shared pass for escalations and browser-budget omissions. */
+	acquireRemaining?: ( members: readonly import('./template-cluster-fallback.js').EscalatedMember[] ) => Promise< import('./template-cluster-fallback.js').EscalationFallback >;
 	/** The adapter's HTTP acquisition profile: escalated members fall back to it instead of being omitted. */
 	acquisition?: import('../platform/acquisition.js').HttpAcquisitionProfile;
 	/** The browser pass's deferral: its light renders verify and supply clusters whose runtime rewrites server content. */
@@ -1624,12 +1666,12 @@ export async function deriveTemplateClusterMembers( input: {
 	const httpAcquiredUrls: string[] = [];
 	const fallbackFailures = new Map< string, string >();
 	const runtimeResults = new Map< string, { observed: boolean; reason?: string } >();
-	if ( escalations.length && input.acquisition && ! input.governors.forOrigin( input.sourceUrl ).blockedClient ) {
+	if ( ( escalations.length || input.acquireRemaining ) && input.acquisition && ! input.governors.forOrigin( input.sourceUrl ).blockedClient ) {
 		const { acquireEscalatedMembers, runtimeRenderBudgetMs } = await import( './template-cluster-fallback.js' );
 		const fallbackQueue = new ManifestQueue( manifestPath );
 		await fallbackQueue.init();
 		try {
-			const fallback = await acquireEscalatedMembers( {
+			const fallback = input.acquireRemaining ? await input.acquireRemaining( escalations ) : await acquireEscalatedMembers( {
 				outputDir: input.outputDir, sourceUrl: input.sourceUrl, routeScope: input.routeScope, profile: input.acquisition,
 				governors: input.governors, members: escalations, queue: fallbackQueue, maxTotalBytes: input.maxTotalBytes,
 				runtimeRenderBudgetMs: input.runtimeRenderBudgetMs ?? runtimeRenderBudgetMs( input.timeBudgetMs ),
@@ -1641,7 +1683,7 @@ export async function deriveTemplateClusterMembers( input: {
 		} catch ( error ) {
 			for ( const member of escalations ) fallbackFailures.set( member.url, error instanceof Error ? error.message : String( error ) );
 		} finally {
-			await fallbackQueue.flush().catch( () => {} );
+			if ( ! input.acquireRemaining ) await fallbackQueue.flush().catch( () => {} );
 		}
 	}
 	const acquiredSet = new Set( httpAcquiredUrls );

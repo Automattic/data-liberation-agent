@@ -2653,14 +2653,16 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 	throw new Error( 'staging was not removed' );
 `
 		);
+		// This guards heap use, not throughput. Allow for CPU contention when
+		// the full capture suite runs browser workers alongside this process.
 		const result = spawnSync(
 			process.execPath,
 			[ '--max-old-space-size=144', '--max-semi-space-size=1', '--import', 'tsx', runnerPath ],
-			{ cwd: process.cwd(), encoding: 'utf8', timeout: 60_000 }
+			{ cwd: process.cwd(), encoding: 'utf8', timeout: 180_000 }
 		);
 		expect( result.error ).toBeUndefined();
 		expect( result.status, result.stderr ).toBe( 0 );
-	}, 70_000 );
+	}, 190_000 );
 
 	it( 'indexes structured semantic evidence into two bounded shards', () => {
 		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );

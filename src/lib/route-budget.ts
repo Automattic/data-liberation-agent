@@ -93,8 +93,8 @@ export function rankTemplateClusterRoutes(
 ): string[] {
 	const clustered = new Set< string >();
 	const seeds = new Map< string, number >();
-	const singletons = new Set( groups.filter( group => group.size < 2 ).map( group => normalizedUrl( group.representative ) ) );
-	for ( const group of [ ...groups ].filter( group => group.size >= 2 ).sort( ( a, b ) => b.size - a.size ) ) {
+	const singletons = new Set( groups.filter( group => group.size <= 2 ).flatMap( group => group.members.map( normalizedUrl ) ) );
+	for ( const group of [ ...groups ].filter( group => group.size > 2 ).sort( ( a, b ) => b.size - a.size ) ) {
 		for ( const member of group.members ) clustered.add( normalizedUrl( member ) );
 		const verifier = templateVerificationMember( group.members, group.representative );
 		for ( const url of [ group.representative, ...( verifier ? [ verifier ] : [] ) ] ) seeds.set( normalizedUrl( url ), seeds.size );
