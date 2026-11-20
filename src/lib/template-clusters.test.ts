@@ -5,6 +5,57 @@ import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
+describe( 'adapter-declared runtime widget islands', () => {
+	const page = ( title: string, widget = 'Like', extra = '' ) => `<body><main id="content"><h1>${ title }</h1><aside id="widget" data-runtime-widget>${ widget }</aside>${ extra }</main></body>`;
+	const input = {
+		repServerHtml: page( 'First' ),
+		repProcessedHtml: page( 'First', '<button>Post not marked as liked</button>1 like.' ),
+		memberServerHtml: page( 'Second', 'Like', '<p>Member content</p>' ),
+		baseUrl: 'https://fixture.test/',
+	};
+	it( 'retains a hydrated island inside a replaced subtree', () => {
+		const result = deriveMemberDocument( { ...input, runtimeWidgetSelectors: [ '[data-runtime-widget]' ] } );
+		expect( result.ok ).toBe( true );
+		if ( ! result.ok ) return;
+		expect( result.html ).toContain( '<h1>Second</h1>' );
+		expect( result.html ).toContain( '<p>Member content</p>' );
+		expect( result.html ).toContain( '<button>Post not marked as liked</button>1 like.' );
+		expect( result.html ).not.toContain( 'blocks-engine-runtime-island' );
+	} );
+	it( 'keeps undeclared text changes strict', () => {
+		expect( deriveMemberDocument( input ) ).toMatchObject( { ok: false, gate: { code: 'slot_anchor_unmapped' } } );
+		expect( deriveMemberDocument( { ...input, runtimeWidgetSelectors: [ '.other-widget' ] } ) ).toMatchObject( { ok: false, gate: { code: 'slot_anchor_unmapped' } } );
+	} );
+	it( 'does not hide runtime rewrites outside a declared island', () => {
+		expect( deriveMemberDocument( { ...input, repProcessedHtml: input.repProcessedHtml.replace( '<h1>First</h1>', '<h1>Runtime rewrite</h1>' ), runtimeWidgetSelectors: [ '[data-runtime-widget]' ] } ) ).toMatchObject( { ok: false, gate: { code: 'slot_anchor_unmapped' } } );
+	} );
+	it( 'fails closed when a declared island cannot be mapped', () => {
+		expect( deriveMemberDocument( { ...input, repProcessedHtml: '<body><main id="content"><h1>First</h1></main></body>', runtimeWidgetSelectors: [ '[data-runtime-widget]' ] } ) ).toMatchObject( { ok: false, gate: { code: 'slot_anchor_unmapped' } } );
+	} );
+	it( 'does not exempt differing runtime images or counts from verification', () => {
+		const derived = page( 'Second', '<img src="/representative.jpg">13 likes' );
+		const real = page( 'Second', '<img src="/member.jpg">2 likes' );
+		expect( compareDerivedWithCapture( { derivedHtml: derived, realHtml: real, baseUrl: input.baseUrl } ) ).toMatchObject( { equal: false, checks: { images: false, text: false } } );
+	} );
+	it( 'restores nested islands and multiple siblings without markers', () => {
+		const server = ( title: string ) => `<body><main><h1>${ title }</h1><aside data-runtime-widget><span data-runtime-widget>Server</span></aside><aside data-runtime-widget>Server</aside></main></body>`;
+		const result = deriveMemberDocument( { repServerHtml: server( 'First' ), memberServerHtml: server( 'Second' ), repProcessedHtml: server( 'First' ).replaceAll( 'Server', 'Hydrated' ), baseUrl: input.baseUrl, runtimeWidgetSelectors: [ '[data-runtime-widget]' ] } );
+		expect( result.ok ).toBe( true );
+		if ( result.ok ) {
+			expect( result.html.match( /Hydrated/g ) ).toHaveLength( 2 );
+			expect( result.html ).not.toContain( 'blocks-engine-runtime-island' );
+		}
+	} );
+	it( 'restores islands even when there are no member slots', () => {
+		const result = deriveMemberDocument( { ...input, memberServerHtml: input.repServerHtml, runtimeWidgetSelectors: [ '[data-runtime-widget]' ] } );
+		expect( result.ok ).toBe( true );
+		if ( result.ok ) {
+			expect( result.html ).toContain( '<button>Post not marked as liked</button>1 like.' );
+			expect( result.html ).not.toContain( 'blocks-engine-runtime-island' );
+		}
+	} );
+} );
+
 it('ignores only adapter-declared runtime state classes in the comparison skeleton', () => {
 	const page = (state: string) => `<body><header class="site-title ${state}">Title</header><main><div class="content ${state}">Same member</div></main></body>`;
 	const input = { baseUrl: 'https://fixture.example/post', derivedHtml: page('beforeReveal'), realHtml: page('revealed') };

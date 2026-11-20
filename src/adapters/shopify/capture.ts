@@ -13,6 +13,7 @@ import { preserveShopifyProductJsonLd } from './product-jsonld.js';
  * purely a rendered-capture concern.
  */
 export const capture: LiberationHooks = {
+  runtimeWidgetSelectors: [ '[id^="shopify-block-"][id*="__"]' ],
   beforeSerialize: preserveShopifyProductJsonLd,
   cleanupRules: [
     ...providerCreditRules('shopify', ['shopify.com'], 'Shopify'),
