@@ -910,9 +910,10 @@ describe( 'captureWebsite route selection', () => {
 				urls: [ '/sample/', '/another/', '/catalog/', '/more/', '/about/', '/cart.php', '/login.php?action=login' ].map( path => ( { url: new URL( path, sourceUrl ).href } ) ),
 			} ) } ),
 		} );
-		// Template clusters are on by default: the declared product template's
-		// representative and verifier seed the budget, so its members derive.
-		expect( capturedUrls() ).toEqual( [ sourceUrl, `${ sourceUrl }sample/`, `${ sourceUrl }another/`, `${ sourceUrl }catalog/` ] );
+		// Template clusters are on by default: after the entry's navigation target,
+		// the declared product template's representative and verifier seed the
+		// budget, so its members derive.
+		expect( capturedUrls() ).toEqual( [ sourceUrl, `${ sourceUrl }about/`, `${ sourceUrl }sample/`, `${ sourceUrl }another/` ] );
 	} );
 
 	it( 'spends the budget on one route per template first with template-coverage', async () => {
@@ -1024,6 +1025,39 @@ describe( 'captureWebsite route selection', () => {
 			url: posts[ 1 ], captured: true, equal: true,
 			checks: { text: true, links: true, images: true, skeleton: true, headStyles: true, fluidRules: true },
 		} );
+	} );
+
+	it( 'admits every navigation target within the browser budget before non-navigation template representatives (#2154)', async () => {
+		// Four three-member templates offer eight seeds (representative and verifier)
+		// against a budget of four; two navigation singletons must still be rendered.
+		const templates = [ 'article', 'section', 'aside', 'figure' ];
+		const clusters = templates.flatMap( tag => [ 1, 2, 3 ].map( index => `${ sourceUrl }${ tag }-${ index }/` ) );
+		const navigation = [ `${ sourceUrl }about/`, `${ sourceUrl }contact/` ];
+		const page = ( url: string ): string => {
+			const path = new URL( url ).pathname;
+			const tag = templates.find( name => path.startsWith( `/${ name }-` ) );
+			const main = url === sourceUrl ? '<section class="hero"><h1>Home</h1></section>'
+				: tag ? `<${ tag } class="${ tag }-template"><h1>${ path }</h1><p>${ path }</p></${ tag }>`
+				: path === '/about/' ? '<div class="team"><ul><li>Person</li></ul></div>'
+				: '<form><input name="email"><textarea></textarea></form>';
+			return `<html><head></head><body><header><nav><a href="/about/">About</a><a href="/contact/">Contact</a></nav></header><main>${ main }</main></body></html>`;
+		};
+		vi.mocked( safeFetch ).mockImplementation( async ( url: string ) => ( {
+			finalUrl: url, status: 200, headers: new Headers( { 'content-type': 'text/html' } ), body: Buffer.from( page( url ) ),
+		} ) );
+		await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 4, templateClusters: true }, {
+			findAdapter: () => ( {
+				id: 'generic', platform: 'generic',
+				discover: async () => ( { urls: [ ...clusters, ...navigation ].map( url => ( { url, type: 'page' } ) ) } ),
+				extract: async () => ( { title: '', content: '' } ),
+			} ),
+		} );
+		const report = JSON.parse( readFileSync( join( root, 'template-groups.json' ), 'utf8' ) );
+		expect( report.groups.filter( ( group: { size: number } ) => group.size > 2 ) ).toHaveLength( templates.length );
+		const selected = capturedUrls();
+		expect( selected ).toHaveLength( 4 );
+		expect( selected.slice( 0, 3 ) ).toEqual( [ sourceUrl, ...navigation ] );
+		expect( clusters ).toContain( selected[ 3 ] );
 	} );
 
 	it( 'rejects an unknown route selection before any fetch', async () => {

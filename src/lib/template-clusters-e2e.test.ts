@@ -271,13 +271,14 @@ describe( 'template-cluster derivation e2e (#784 phase 1)', () => {
 		const originals = new Map( rendered );
 		const paths = [ '/crawl-one/', '/crawl-two/', '/crawl-three/', '/crawl-four/' ];
 		// This family is absent from inventory and has a new page-style fingerprint.
-		// Entry links deliberately put unrelated inventory navigation first.
-		rendered.set( '/', member( 'home' ).replace( '</nav>', '<a href="/tabs/">Tabs</a><a href="/form/">Form</a></nav>' ).replace( '</article>', paths.map( path => `<a href="${ path }">Read</a>` ).join( '' ) + '</article>' ) );
+		// Entry links deliberately put unrelated inventory singletons first. They
+		// sit in content rather than navigation, which would outrank seeds (#2154).
+		rendered.set( '/', member( 'home' ).replace( '</article>', [ '/tabs/', '/form/', ...paths ].map( path => `<a href="${ path }">Read</a>` ).join( '' ) + '</article>' ) );
 		for ( const path of paths ) rendered.set( path, member( path, { style: '<style>.crawl-family{color:navy}</style>' } ) );
 		const started = new Set< string >();
 		const start = RouteTimeBudget.prototype.start;
 		const admits = RouteTimeBudget.prototype.admits;
-		// Deterministic three-route window: main spends it on home/tabs/form.
+		// Deterministic three-route window: without #1764 it goes to home/tabs/form.
 		const startSpy = vi.spyOn( RouteTimeBudget.prototype, 'start' ).mockImplementation( function ( this: RouteTimeBudget, url ) {
 			started.add( url ); start.call( this, url );
 		} );

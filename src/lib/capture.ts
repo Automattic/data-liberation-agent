@@ -585,8 +585,8 @@ async function runCaptureWebsite(
 		for ( const href of await renderedEntryNavigation( sourceUrl, sourceGovernors, adapter.sourceTelemetry ) ) navigationTargets.add( normalizedUrl( href ) );
 	}
 	const entryNavigationRoutes = prunedInventoryUrls.filter( url => navigationTargets.has( normalizedUrl( url ) ) );
-	// Cluster seeds unlock whole collections before navigation spends the window.
-	// Without clusters, preserve navigation-first selection and inventory spread.
+	// Navigation targets come first, then cluster seeds that unlock whole
+	// collections. Without clusters, navigation then representatives and spread.
 	const preferred = templateClusters
 		? rankTemplateClusterRoutes( prunedInventoryUrls, sourceUrl, clusterRankingGroups, navigationTargets, contentSource?.termName.bind( contentSource ) )
 		: [ ...entryNavigationRoutes, ...( templateGrouping?.representatives ?? [] ) ];

@@ -13,9 +13,9 @@ it.each( [ 'initial inventory', 'rendered navigation' ] )( 'ranks cluster admiss
 	];
 	const expected = [
 		'/',
+		'/about', '/contact', '/post/002', '/post/003', '/blog/tag/nav', '/blog/category/nav', '/custom-archive',
 		'/post/000', '/post/001',
-		'/about', '/contact', '/form', '/small/rep', '/small/verify', '/blog/tag/nav', '/blog/category/nav', '/custom-archive', '/tag/seed', '/category/verify',
-		'/post/002', '/post/003',
+		'/form', '/small/rep', '/small/verify', '/tag/seed', '/category/verify',
 		'/other', '/tag/other', '/post/004',
 	].map( url );
 	const navigation = new Set( [ '/about', '/contact', '/blog/tag/nav', '/blog/category/nav', '/custom-archive', '/post/002', '/post/003' ].map( url ) );
