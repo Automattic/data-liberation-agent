@@ -144,6 +144,19 @@ it('keeps hidden data and blob placeholders while removing a hidden network trac
   }
 });
 
+it('removes a rendered 1×1 SDK frame while keeping hidden and real-size frames', async ({ newPage }) => {
+  const page = await newPage();
+  await page.route('https://sdk.example/**', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>Blank</title>' }));
+  await page.setContent(`<style>.offscreen{position:absolute;width:1px;height:1px;top:-9999px}</style>
+    <iframe id="sdk-frame" class="offscreen" title="Blank" src="https://sdk.example/sdk.html" width="1" height="1"></iframe>
+    <div hidden><iframe id="tab-video" src="https://sdk.example/video.html" width="560" height="315"></iframe></div>
+    <iframe id="map" src="https://sdk.example/map.html" width="400" height="300"></iframe>`);
+  const report = await applySourceCleanup(page, cleanupPolicy());
+  expect(await page.locator('iframe').evaluateAll(frames => frames.map(frame => frame.id))).toEqual(['tab-video', 'map']);
+  expect(report.records.filter(record => record.rule === 'tracking-frame').map(record => record.selector)).toEqual(['#sdk-frame']);
+  expect(report.failures).toEqual([]);
+});
+
 it('keeps script-injected inert image placeholders in processed and exported HTML without cleanup removals', async ({ serve }) => {
   const image = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
   const photo = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAeCAIAAADRv8uKAAAAKUlEQVR4nO3NoQ0AAAwCMP5/ensBh2lS31wysVnFYrFYLBaLxWKxWFx5Pp2rjeB5c/4AAAAASUVORK5CYII=';
