@@ -15,6 +15,18 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.40.0] - 2026-11-20
+
+### Added
+- defer compare reference capture to a resumable reference stage
+
+### Changed
+- regenerate plugin bundles
+- Remove Blogger account widgets and platform credit during capture
+
+### Fixed
+- resolve responsive cross-width swaps without the confirm wait
+
 ## [0.39.15] - 2026-11-20
 
 ### Changed
