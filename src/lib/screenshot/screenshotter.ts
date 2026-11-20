@@ -560,6 +560,16 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				// copy. This runs last: the walks above pair document and snapshot
 				// nodes by position.
 				for ( const hidden of snapshot.querySelectorAll( '[data-blocks-engine-capture-cleanup-hidden]' ) ) hidden.remove();
+				// DOM insertion permits flow elements in <head>; the HTML parser
+				// does not. Move them in the snapshot only, after positional walks,
+				// so re-parsing cannot push later base/meta/title into the body.
+				const head = snapshot.querySelector( 'head' );
+				const body = snapshot.querySelector( 'body' );
+				if ( head && body ) {
+					const headTags = new Set( 'base basefont bgsound link meta title noscript noframes style script template'.split( ' ' ) );
+					const misplaced = Array.from( head.children ).filter( element => ! headTags.has( element.localName ) );
+					body.prepend( ...misplaced );
+				}
 				const boxNodes = captureBoxes ? (new Function('return (' + boxTreeSource + ')')() as typeof observeBoxTree)(snapshot, boxTreeProperties, nodeIdAttribute) : undefined;
 				return { html: `<!DOCTYPE html>${ snapshot.outerHTML }`, boxNodes, findings, omittedStyles: ( window as typeof window & { __dlaOmittedRuntimeStyles?: Array<{ bytes: number; rules: number }> } ).__dlaOmittedRuntimeStyles ?? [] };
 			} finally {

@@ -17,6 +17,24 @@ it('ignores only adapter-declared runtime state classes in the comparison skelet
 	expect(compareDerivedWithCapture({ ...input, runtimeStateClasses, realHtml: page('revealed alternate-layout') }).checks.skeleton).toBe(false);
 });
 
+it('compares capture-fitted affine head rules within one pixel across the sweep', () => {
+	const page = (css: string, capture = true) => `<head><style ${capture ? 'data-blocks-engine-capture-fluid-rules' : ''}>${css}</style></head><body><main>Same member</main></body>`;
+	const rule = (fit: string) => `@media (min-width:320px) { .hero { height: ${fit} !important; } }`;
+	const original = rule('calc(12.19vw + 58.79px)');
+	const compare = (css: string, capture = true) => compareDerivedWithCapture({
+		baseUrl: 'https://fixture.example/post', derivedHtml: page(original, capture), realHtml: page(css, capture),
+	});
+	expect(compare(rule('calc(12.25vw + 58.38px)')).equal).toBe(true);
+	expect(compare(rule('calc(12.19vw + 59.79px)')).checks.headStyles).toBe(true);
+	expect(compare(rule('calc(12.19vw + 59.80px)')).checks.headStyles).toBe(false);
+	// A fit close at the phone end but over one pixel away at desktop fails.
+	expect(compare(rule('calc(12.29vw + 58.79px)')).checks.headStyles).toBe(false);
+	expect(compare(rule('calc(12.25vw + 58.38px)'), false).checks.headStyles).toBe(false);
+	expect(compare(original.replace('.hero', '.other')).checks.headStyles).toBe(false);
+	expect(compare(original.replace('height:', 'width:')).checks.headStyles).toBe(false);
+	expect(compare('').checks.headStyles).toBe(false);
+});
+
 it('ignores an inline style a runtime probe injected into one capture only', () => {
 	const page = (...styles: string[]) => `<html><head>${styles.map(text => `<style>${text}</style>`).join('')}</head><body><p>Same member</p></body></html>`;
 	const context = { baseUrl: 'https://fixture.example/post', repServerHtml: page('body { color: black }'), memberServerHtml: page('body { color: black }') };
