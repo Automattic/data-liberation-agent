@@ -15,6 +15,15 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.40.4] - 2026-11-20
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- Shopify catalog images starve: responsive variants exhaust the byte budget and CDN host aliases defeat reuse
+- don't count links to non-document resources as uncaptured routes
+
 ## [0.40.3] - 2026-11-20
 
 ### Changed
