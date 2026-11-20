@@ -6,24 +6,34 @@ const servers: Server[] = [];
 
 async function squarespaceServer(
   archive: (request: URL) => { status?: number; body: string },
+  paths = ['/blog', '/about', '/contact', '/services', '/privacy'],
 ): Promise<{ url: string; archiveRequests: URL[] }> {
   const archiveRequests: URL[] = [];
   const server = createServer((request, response) => {
     const url = new URL(request.url || '/', `http://${request.headers.host}`);
     if (url.pathname === '/sitemap.xml') {
       const origin = url.origin;
-      response.end(`<urlset>${['/blog', '/about', '/contact', '/services', '/privacy'].map((path) => `<url><loc>${origin}${path}</loc></url>`).join('')}</urlset>`);
+      response.end(`<urlset>${paths.map((path) => `<url><loc>${origin}${path}</loc></url>`).join('')}</urlset>`);
       return;
     }
-    if (url.searchParams.get('format') === 'json') {
+    if (url.pathname === '/' && url.searchParams.get('format') === 'json') {
       response.end(JSON.stringify({ website: { siteTitle: 'Test Site' } }));
       return;
     }
-    if (url.pathname === '/blog' && url.searchParams.get('format') === 'json-pretty') {
+    if (url.searchParams.get('format') === 'json') {
       archiveRequests.push(url);
-      const result = archive(url);
+      const result = url.pathname === '/blog' || !paths.includes('/blog')
+        ? archive(url)
+        : { body: '{}' };
       response.statusCode = result.status || 200;
-      response.end(result.body);
+      // Real collection responses identify themselves; malformed shapes remain
+      // untouched so the failure-path tests still exercise invalid JSON.
+      let body = result.body;
+      try {
+        const data = JSON.parse(body);
+        if (url.pathname === '/blog' && data && Array.isArray(data.items)) body = JSON.stringify({ collection: { type: 1, typeName: 'blog' }, ...data });
+      } catch { /* Return the malformed fixture verbatim. */ }
+      response.end(body);
       return;
     }
     response.end('<html></html>');
@@ -40,6 +50,53 @@ afterEach(async () => {
 });
 
 describe('Squarespace archive discovery', () => {
+  it('discovers neutral collections across pagination and probes non-collections only once', async () => {
+    const { url, archiveRequests } = await squarespaceServer((request) => {
+      if (request.pathname !== '/people' && request.pathname !== '/library') {
+        // Neither half of the collection contract alone admits any items.
+        return { body: JSON.stringify(request.pathname === '/about'
+          ? { items: [{ urlId: 'fake', fullUrl: '/fake' }] }
+          : { collection: { type: 10 } }) };
+      }
+      const second = request.searchParams.get('offset') === 'next';
+      return { body: JSON.stringify({
+        collection: { type: request.pathname === '/people' ? 7 : 12, typeName: 'collection' },
+        items: [{ urlId: second ? 'two' : 'one', fullUrl: `${request.pathname}/${second ? 'two' : 'one'}` }],
+        pagination: second ? {} : { nextPageOffset: 'next' },
+      }) };
+    }, ['/people', '/library', '/about', '/contact']);
+
+    const inventory = await discover(url, {});
+    for (const root of ['/people', '/library']) {
+      expect(inventory.urls.map(({ url }) => url)).toEqual(expect.arrayContaining([
+        `${url}${root}/one`, `${url}${root}/two`,
+      ]));
+      expect(archiveRequests.filter((request) => request.pathname === root).map((request) => request.searchParams.get('offset'))).toEqual([null, 'next']);
+    }
+    expect(inventory.collections).toEqual([
+      { url: `${url}/people`, type: 7, typeName: 'collection', itemCount: 2 },
+      { url: `${url}/library`, type: 12, typeName: 'collection', itemCount: 2 },
+    ]);
+    expect(inventory.urls.some(({ url }) => url.endsWith('/fake'))).toBe(false);
+    for (const root of ['/about', '/contact']) {
+      expect(archiveRequests.filter((request) => request.pathname === root)).toHaveLength(1);
+    }
+  });
+
+  it('finds roots from navigation and item parents without expanding the feed frontier', async () => {
+    const { url, archiveRequests } = await squarespaceServer((request) => ({
+      body: JSON.stringify({
+        collection: { type: 7 },
+        items: [{ urlId: 'new', fullUrl: '/unprobed/new' }],
+      }),
+    }), ['/directory/people/known']);
+    const inventory = await discover(url, {
+      entryHtml: '<nav><a href="/library">Library</a><a href="/directory/people/known">People</a><a href="https://other.example/foreign">External</a></nav>',
+    });
+    expect(archiveRequests.map((request) => request.pathname)).toEqual(['/directory', '/directory/people', '/library']);
+    expect(inventory.urls.filter(({ url: itemUrl }) => itemUrl === `${url}/unprobed/new`)).toHaveLength(1);
+  });
+
   it('recovers paginated posts the sitemap omitted', async () => {
     const { url, archiveRequests } = await squarespaceServer((request) => {
       if (request.searchParams.get('offset') === '100') {
@@ -53,7 +110,7 @@ describe('Squarespace archive discovery', () => {
     expect(inventory.urls).toContainEqual({ url: `${url}/blog/one`, type: 'post' });
     expect(inventory.urls).toContainEqual({ url: `${url}/blog/two`, type: 'post' });
     expect(inventory.counts.post).toBe(2);
-    expect(archiveRequests.map((request) => request.searchParams.get('offset'))).toEqual([null, '100']);
+    expect(archiveRequests.filter((request) => request.pathname === '/blog').map((request) => request.searchParams.get('offset'))).toEqual([null, '100']);
   });
 
   it('deduplicates urlIds and terminates a non-advancing offset', async () => {
@@ -67,7 +124,7 @@ describe('Squarespace archive discovery', () => {
     const inventory = await discover(url, {});
 
     expect(inventory.urls.filter(({ url: discoveredUrl }) => discoveredUrl === `${url}/blog/one`)).toHaveLength(1);
-    expect(archiveRequests).toHaveLength(2);
+    expect(archiveRequests.filter((request) => request.pathname === '/blog')).toHaveLength(2);
   });
 
   it('keeps sitemap discovery when the archive response is malformed or fails', async () => {
@@ -93,7 +150,7 @@ describe('Squarespace archive discovery', () => {
 
     const inventory = await discover(url, {});
 
-    expect(archiveRequests).toHaveLength(200);
+    expect(archiveRequests.filter((request) => request.pathname === '/blog')).toHaveLength(200);
     expect(inventory.urls.filter(({ type }) => type === 'post')).toHaveLength(200);
   });
 
@@ -113,6 +170,6 @@ describe('Squarespace archive discovery', () => {
     expect(inventory.urls.filter(({ type }) => type === 'post')).toEqual([
       { url: `${mixed.url}/blog/valid`, type: 'post' },
     ]);
-    expect(mixed.archiveRequests).toHaveLength(1);
+    expect(mixed.archiveRequests.filter((request) => request.pathname === '/blog')).toHaveLength(1);
   });
 });
