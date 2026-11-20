@@ -394,7 +394,7 @@ function buildExportCapture(
 	// pair. Release every private pair, including unretained route aliases,
 	// before rendering and building the portable/identity geometry indexes.
 	for ( const entry of capturedEntries ) entry.evidenceDocuments.length = 0;
-	const { mediaFamilies, failedMedia, mixedSrcsetReferences, interactionMediaReferences, retainedMediaFamilies, referencedImageAssets, imageByUrl, diagnostics: mediaCandidateDiagnostics } = collectMediaCandidates( { retainedEntries, outputDir, sourceUrl: options.sourceUrl, mediaStubs, exclusions, maxFileBytes } );
+	const { mediaFamilies, failedMedia, mixedSrcsetReferences, interactionMediaReferences, retainedMediaFamilies, referencedImageAssets, imageByUrl, diagnostics: mediaCandidateDiagnostics } = collectMediaCandidates( { retainedEntries, outputDir, sourceUrl: options.sourceUrl, mediaStubs, exclusions, maxFileBytes, catalogImages: options.structuredContent?.entries.flatMap(entry => entry.product?.images?.map(image => image.src) ?? []) } );
 	routeCaptureDiagnostics.push( ...mediaCandidateDiagnostics );
 	const portableMediaBudget = portableMediaTotalBytesLimit;
 	const portableMediaPlan = planPortableMediaFamilies(
@@ -460,7 +460,7 @@ function buildExportCapture(
 	const rendered = renderRoutePages( { canonicalizeHtml: options.canonicalizeHtml, retainedEntries, websiteDir, resourceReplacements, portableUrlByFamily, mixedSrcsetReferences, portableMediaReplacements, replaceResources, replaceMedia, mediaMetadataPathsBySource: mediaStage.metadataPathsBySource, portablePathsBySource, routePathOf, capturedRouteKeys, absentRouteKeys, omittedRouteKeys, resourceInputKeys, routeScope: options.routeScope, boundaryRoutes, verifiedRouteObservations, sourceRouteLinks, portableServedPaths } );
 	unresolvedAnchors.push( ...rendered.unresolvedAnchors );
 	routeCaptureDiagnostics.push( ...rendered.diagnostics );
-	const { inventory, diagnostics: projectionDiagnostics } = projectPortableWebsite( { websiteDir, stageDir, sourceUrl: options.sourceUrl, responsiveIdentities: rendered.responsiveIdentities, responsiveBodyClassProjections, collapsedBodyClassProjections, sourceHashesByPortablePath: resourceStage.sourceHashesByPortablePath, retainedEntries, routePathOf, interactionPages, scrollStatesPages, structuredContent: options.structuredContent, routes, portableRedirects } );
+	const { inventory, diagnostics: projectionDiagnostics } = projectPortableWebsite( { websiteDir, stageDir, sourceUrl: options.sourceUrl, responsiveIdentities: rendered.responsiveIdentities, responsiveBodyClassProjections, collapsedBodyClassProjections, sourceHashesByPortablePath: resourceStage.sourceHashesByPortablePath, retainedEntries, routePathOf, interactionPages, scrollStatesPages, structuredContent: options.structuredContent, routes, portableRedirects, productMediaPaths: portablePathsBySource } );
 	routeCaptureDiagnostics.push( ...projectionDiagnostics );
 	exportPublicationBoundary( EXPORT_PUBLICATION_BOUNDARIES.afterHtml );
 

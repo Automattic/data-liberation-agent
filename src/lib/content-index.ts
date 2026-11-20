@@ -12,8 +12,10 @@ export interface ContentIndexTerm {
 
 export interface ContentIndex {
 	schema: typeof CONTENT_INDEX_SCHEMA;
+	/** generic/products/v1 catalog rows, including products without captured pages. */
+	products?: import('./product-row.js').ProductRow[];
 	/** Entry facts without their bodies: each post's body ships in its own exported document. */
-	posts: Array< Omit< StructuredContentEntry, 'contentHtml' > & { path: string } >;
+	posts: Array< Omit< StructuredContentEntry, 'contentHtml' | 'product' > & { path: string } >;
 	terms: ContentIndexTerm[];
 	redirects: Array< { from: string; to: string } >;
 }
@@ -23,7 +25,7 @@ export interface ContentIndex {
  * Paths come from the exporter's allocated routes; a term without a captured
  * archive gets a deterministic generated path.
  */
-export function structuredContentIndex( entries: StructuredContentEntry[], routes: Array< { url: string; path: string } >, source: Pick< StructuredContentSource, 'termArchiveUrl' | 'termName' >, sourceUrl: string ): ContentIndex {
+export function structuredContentIndex( entries: StructuredContentEntry[], routes: Array< { url: string; path: string } >, source: Pick< StructuredContentSource, 'termArchiveUrl' | 'termName' >, sourceUrl: string, mediaPaths: ReadonlyMap<string, string> = new Map(), diagnostic: (url: string, reason: string) => void = () => {} ): ContentIndex {
 	const paths = new Map( routes.map( route => [ route.url, `/${ route.path.replace( /^website\//, '' ) }` ] ) );
 	const capturedTerms = new Map< string, ContentIndexTerm >();
 	for ( const route of routes ) {
@@ -38,9 +40,20 @@ export function structuredContentIndex( entries: StructuredContentEntry[], route
 		if ( terms.some( term => term.name === name ) ) continue;
 		terms.push( { name, kind: 'term-archive', sourceUrl: source.termArchiveUrl( name, sourceUrl ), path: `/terms/${ createHash( 'sha256' ).update( name ).digest( 'hex' ) }.html` } );
 	}
-	const posts = entries.filter( entry => paths.has( entry.permalink ) ).map( ( { contentHtml: _body, ...entry } ) => ( { ...entry, path: paths.get( entry.permalink )! } ) );
+	const posts = entries.filter( entry => paths.has( entry.permalink ) ).map( ( { contentHtml: _body, product: _product, ...entry } ) => ( { ...entry, path: paths.get( entry.permalink )! } ) );
+	const products = entries.flatMap(entry => {
+		if (!entry.product) return [];
+		const { images, source_path: _path, ...row } = entry.product;
+		const localized = images?.flatMap(image => {
+			const path = mediaPaths.get(image.src);
+			if (!path) { diagnostic(image.src, 'Catalog image could not be materialized within portable limits'); return []; }
+			return [{ ...image, src: path.replace(/^\/?website\//, '').replace(/^\//, '') }];
+		});
+		return [{ ...row, ...(localized?.length ? { images: localized } : {}), ...(paths.has(entry.permalink) ? { source_path: paths.get(entry.permalink)! } : {}) }];
+	});
 	return {
 		schema: CONTENT_INDEX_SCHEMA,
+		...(products.length ? { products } : {}),
 		posts,
 		terms,
 		redirects: [ ...posts.map( post => ( { from: post.permalink, to: post.path } ) ), ...terms.map( term => ( { from: term.sourceUrl, to: term.path } ) ) ],

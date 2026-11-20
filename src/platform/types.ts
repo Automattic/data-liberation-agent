@@ -132,6 +132,8 @@ export interface PlatformEntryResolver {
 
 /** One content item a platform publishes as structured data. */
 export interface StructuredContentEntry {
+	/** Optional provider-neutral generic/products/v1 data; image URLs are localized by capture/export. */
+	product?: import('../lib/product-row.js').ProductRow;
 	permalink: string;
 	/** Source slug from the permalink; the export keeps it as the item's slug. */
 	slug: string;

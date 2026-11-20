@@ -705,9 +705,9 @@ export function renderRoutePages( { canonicalizeHtml, retainedEntries, websiteDi
 	return { unresolvedAnchors, diagnostics, responsiveIdentities };
 }
 
-export function projectPortableWebsite( { websiteDir, stageDir, sourceUrl, responsiveIdentities, responsiveBodyClassProjections, collapsedBodyClassProjections, sourceHashesByPortablePath, retainedEntries, routePathOf, interactionPages, scrollStatesPages, structuredContent, routes, portableRedirects }: {
+export function projectPortableWebsite( { websiteDir, stageDir, sourceUrl, responsiveIdentities, responsiveBodyClassProjections, collapsedBodyClassProjections, sourceHashesByPortablePath, retainedEntries, routePathOf, interactionPages, scrollStatesPages, structuredContent, routes, portableRedirects, productMediaPaths }: {
  websiteDir: string; stageDir: string; sourceUrl: string; responsiveIdentities: RenderedRoutes['responsiveIdentities']; responsiveBodyClassProjections: CapturedRoutes['responsiveBodyClassProjections']; collapsedBodyClassProjections: CapturedRoutes['collapsedBodyClassProjections']; sourceHashesByPortablePath: Map<string, string>;
- retainedEntries: CaptureEntry[]; routePathOf: (url: string) => string; interactionPages: CapturedRoutes['interactionPages']; scrollStatesPages: CapturedRoutes['scrollStatesPages']; structuredContent?: { source: StructuredContentSource; entries: StructuredContentEntry[] }; routes: RouteLinks['routes']; portableRedirects: Array<{ from: string; to: string }>;
+ retainedEntries: CaptureEntry[]; routePathOf: (url: string) => string; interactionPages: CapturedRoutes['interactionPages']; scrollStatesPages: CapturedRoutes['scrollStatesPages']; structuredContent?: { source: StructuredContentSource; entries: StructuredContentEntry[] }; routes: RouteLinks['routes']; portableRedirects: Array<{ from: string; to: string }>; productMediaPaths?: Map<string, string>;
 } ): { inventory: WebsiteInventory; diagnostics: RouteDiagnostic[] } {
  const diagnostics: RouteDiagnostic[] = [];
 	const inventory = new WebsiteInventory( websiteDir );
@@ -752,7 +752,7 @@ export function projectPortableWebsite( { websiteDir, stageDir, sourceUrl, respo
 	}
 	if ( structuredContent?.entries.length ) {
 		const { source, entries } = structuredContent;
-		const content = structuredContentIndex( entries, routes, source, sourceUrl );
+		const content = structuredContentIndex( entries, routes, source, sourceUrl, productMediaPaths, (url, reason) => diagnostics.push({ code: 'product_image_omitted', url, reason, unit: 'asset', severity: 'warning' }) );
 		for ( const term of content.terms ) {
 			if ( routes.some( route => route.url === term.sourceUrl ) ) continue;
 			const page = cheerio.load( '<!doctype html><html><head><meta charset="utf-8"><title></title></head><body><main><h1></h1><ul></ul></main></body></html>' );

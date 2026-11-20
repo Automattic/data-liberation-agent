@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import { shopifyProductRow } from './product-row.js';
 import type { StructuredContentEntry, StructuredContentSource } from '../../platform/types.js';
 import { safeFetch } from '../../lib/media-fetch/safe-fetch.js';
 
@@ -41,7 +42,9 @@ export async function enumerateShopifyProducts(sourceUrl: string, options: Param
 				seen.add(product.handle);
 				fresh++;
 				const prices = new Set<string>((Array.isArray(product.variants) ? product.variants : []).map((variant: { price?: unknown } | null) => variant?.price).filter((price: unknown): price is string => typeof price === 'string' && /^\d+\.\d{2}$/.test(price)));
-				entries.push({ permalink: `${origin}/products/${product.handle}`, slug: product.handle, kind: 'page', title: product.title,
+				const row = shopifyProductRow(product);
+				if (!row) diagnostics.push({ code: 'product_row_omitted', url: `${origin}/products/${product.handle}`, reason: 'Catalog product has unrepresentable price, stock or option evidence' });
+				entries.push({ ...(row ? { product: row } : {}), permalink: `${origin}/products/${product.handle}`, slug: product.handle, kind: 'page', title: product.title,
 					contentHtml: product.body_html, published: product.published_at, updated: product.updated_at, author: product.vendor,
 					terms: (typeof product.tags === 'string' ? product.tags.split(',') : product.tags).map((tag: string) => tag.trim()).filter(Boolean),
 					images: Array.isArray(product.images) ? product.images.flatMap((image: { src?: unknown }) => typeof image?.src === 'string' && /^https?:\/\//.test(image.src) ? [image.src] : []) : [],
@@ -80,13 +83,14 @@ export async function enumerateShopifyProducts(sourceUrl: string, options: Param
 			}
 		}
 	};
-	const collections = new Set<string>();
+	const collections = new Map<string, string>();
 	await readPages('/collections.json', 'collections', item => {
-		if (typeof item.handle === 'string' && /^[a-z0-9][a-z0-9-]*$/i.test(item.handle)) collections.add(item.handle);
+		if (typeof item.handle === 'string' && /^[a-z0-9][a-z0-9-]*$/i.test(item.handle)) collections.set(item.handle, typeof item.title === 'string' && item.title.trim() ? item.title : item.handle);
 	});
-	for (const handle of collections) await readPages(`/collections/${handle}/products.json`, 'products', item => {
+	for (const [handle, title] of collections) await readPages(`/collections/${handle}/products.json`, 'products', item => {
 		const entry = catalog.get(String(item.handle));
 		if (entry && !entry.terms.includes(`collection:${handle}`)) entry.terms.push(`collection:${handle}`);
+		if (entry?.product) entry.product.categories = [...new Set([...(entry.product.categories ?? []), title])];
 	});
 	return { entries, diagnostics };
 }
