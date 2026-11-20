@@ -5,7 +5,8 @@ import { dirname, join, relative } from 'node:path';
 import { CHROME_AUDIT_PROPERTIES } from '../replicate/chrome-audit-types.js';
 import { extractFull } from '../replicate/section-extract.js';
 import { SectionSpecsStore } from '../replicate/section-specs-store.js';
-import { readSourceCleanup, sweepSourceCleanup, type CleanupPolicy } from '../source-cleanup.js';
+import { reassertAccessGatePlaceholder } from '../access-gate.js';
+import { accessGateRemoval, readSourceCleanup, sweepSourceCleanup, type CleanupPolicy } from '../source-cleanup.js';
 import { slugify } from '../url/index.js';
 import { SiteAnalysisAggregator } from './aggregator.js';
 import { captureChromeFidelity } from './capture-chrome-fidelity.js';
@@ -416,6 +417,10 @@ export function baselineSteps(
 	const serializeDocument = async ( frozen: boolean ): Promise<{ html: string; documentUrl: { url: string; baseUrl: string } }> => {
 		args.diagnostics?.push( ...await removeRuntimeWidgets( page ) );
 		await sweepSourceCleanup( page, sourcePolicy );
+		// A gated route ships its placeholder note or nothing (see access-gate.ts).
+		if ( args.entry.accessGate && ! ( await reassertAccessGatePlaceholder( page ) ) ) {
+			throw new Error( `Access-gate placeholder for ${ url } is missing at serialization; refusing to ship the shell's own content under the route` );
+		}
 		await preserveStreamedVideoPosters( page, resourceStore, url ).catch ( orElse( undefined ) );
 		// Source width changes can rerender emoji replacement images (#954).
 		args.diagnostics?.push( ...await restoreRuntimeEmoji( page ) );
@@ -871,6 +876,12 @@ export function baselineSteps(
 				const cleanup = await readSourceCleanup( page, sourcePolicy );
 				entry.cleanup = { policy: sourcePolicy, reports: [...( entry.cleanup?.reports ?? [] ), cleanup] };
 				if ( cleanup.failures.length || cleanup.residual ) throw new Error('Source cleanup incomplete; see cleanup evidence');
+				// Fail closed: a provider gate stripped from a route that kept no
+				// content, without the placeholder note, would ship an empty page.
+				const strippedGate = entry.accessGate ? undefined : accessGateRemoval( cleanup, sourcePolicy );
+				if ( strippedGate && ! ( await page.evaluate( () => Boolean( document.querySelector( 'main,[role="main"]' ) ) ) ) ) {
+					throw new Error( `Access gate ${ strippedGate.rule } was removed after the placeholder step; the route would ship without its members-only note` );
+				}
 
 			}
 		},

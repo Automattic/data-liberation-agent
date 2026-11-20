@@ -11,7 +11,7 @@ import { externalNavigationMessage, navigateSourceDocument, storeExternalBoundar
 import { resolveDocumentReferences } from '../document-resource-base.js';
 import { applyCaptureRemovals } from './apply-removals.js';
 import { accessGateRemoval, cleanupPolicyForResponse, applySourceCleanup, readSourceCleanup, cleanupPolicy, type CleanupPolicy } from '../source-cleanup.js';
-import { accessGateNote, installAccessGatePlaceholder, openAccessGateShell, routeKeptContent, type AccessGateEvidence } from '../access-gate.js';
+import { ACCESS_GATE_SETTLE_MS, accessGateNote, awaitAccessGateOrContent, awaitShellContentRoot, installAccessGatePlaceholder, openAccessGateShell, routeKeptContent, type AccessGateEvidence } from '../access-gate.js';
 import { navigationDocumentUrl, serverRedirectTarget } from './document-integrity.js';
 import { waitForHiddenEmbeds } from './embed-readiness.js';
 import { nonHtmlDocumentError } from './absent-document.js';
@@ -230,22 +230,32 @@ export async function loadSourceBaseline( args: SourceLoadInput ): Promise<Sourc
 	// never mistaken for a gated route.
 	// The settle waits are bounded and best-effort, so a page that stopped
 	// answering during them arrives here; bound these reads too.
-	let accessGate: AccessGateEvidence | undefined;
-	let gate: ReturnType< typeof accessGateRemoval >;
-	let gateTitle = '';
 	const stoppedResponding = ( error: unknown, during: string ): undefined => {
 		if ( ! isEvaluateTimeout( error ) ) throw error; // failure-class: operational
 		fail( 'evaluate', `page stopped responding while settling (${ during }): no answer to an evaluate within ${ evaluateTimeoutMs }ms` );
 		return undefined;
 	};
-	try {
-		const gateRemoval = accessGateRemoval( await withEvaluateTimeout( readSourceCleanup( page, sourcePolicy ), evaluateTimeoutMs ), sourcePolicy );
-		gate = gateRemoval && ! ( await withEvaluateTimeout( routeKeptContent( page ), evaluateTimeoutMs ) ) ? gateRemoval : undefined;
-		if ( gate ) gateTitle = ( await withEvaluateTimeout( page.title().catch( orElse( '' ) ), evaluateTimeoutMs ) ).trim();
-	} catch ( error ) {
-		return stoppedResponding( error, 'source cleanup / access gate' );
-	}
-	if ( gate ) {
+	// Detection and placement are one step: a recorded gate removal on a route
+	// left without content always ends in the placeholder (or a failure), never
+	// in a stripped, empty page. Returns 'placed', 'none', or undefined after `fail`.
+	const placeAccessGate = async ( settle: boolean ): Promise< 'placed' | 'none' | undefined > => {
+		if ( ! sourcePolicy.rules.some( ( rule ) => rule.accessGate ) ) return 'none';
+		let gate: ReturnType< typeof accessGateRemoval >;
+		let gateTitle = '';
+		try {
+			// Network and DOM quiet say nothing about a gate a runtime mounts later
+			// on an otherwise empty route: wait for the gate or the content.
+			if ( settle && ! ( await withEvaluateTimeout( routeKeptContent( page ), evaluateTimeoutMs ) ) ) {
+				const settled = await withEvaluateTimeout( awaitAccessGateOrContent( page, sourcePolicy ), ACCESS_GATE_SETTLE_MS + evaluateTimeoutMs );
+				if ( settled === 'timeout' ) args.diagnostics?.push( { code: 'access_gate_unsettled', reason: `${ url }: no content root and no access gate within ${ ACCESS_GATE_SETTLE_MS }ms` } );
+			}
+			const gateRemoval = accessGateRemoval( await withEvaluateTimeout( readSourceCleanup( page, sourcePolicy ), evaluateTimeoutMs ), sourcePolicy );
+			gate = gateRemoval && ! ( await withEvaluateTimeout( routeKeptContent( page ), evaluateTimeoutMs ) ) ? gateRemoval : undefined;
+			if ( gate ) gateTitle = ( await withEvaluateTimeout( page.title().catch( orElse( '' ) ), evaluateTimeoutMs ) ).trim();
+		} catch ( error ) {
+			return stoppedResponding( error, 'source cleanup / access gate' );
+		}
+		if ( ! gate ) return 'none';
 		// Loading the public shell is this capture's own explained navigation.
 		await releaseBaselineNavigation();
 		let shell: string | undefined;
@@ -258,25 +268,42 @@ export async function loadSourceBaseline( args: SourceLoadInput ): Promise<Sourc
 			if ( shell ) {
 				await withEvaluateTimeout( applySourceCleanup( page, sourcePolicy ), evaluateTimeoutMs );
 				await waitForStable( page );
+				// The note goes into the shell's content root, between its header and
+				// footer; a runtime-mounted root must exist before it is placed.
+				if ( ! ( await awaitShellContentRoot( page ) ) ) args.diagnostics?.push( { code: 'access_gate_shell_incomplete', reason: `${ url }: public shell ${ shell } showed no content root within ${ ACCESS_GATE_SETTLE_MS }ms` } );
 			}
-			accessGate = { ...gate, ...( shell ? { shell } : {} ) };
+			const accessGate: AccessGateEvidence = { ...gate, ...( shell ? { shell } : {} ) };
 			const placed = await withEvaluateTimeout( page.evaluate( installAccessGatePlaceholder, {
 				route: url, gateTitle, note: accessGateNote( gate.provider ), provider: gate.provider,
 			} ), evaluateTimeoutMs );
 			accessGate.label = placed.label;
 			entry.accessGate = accessGate;
+			return 'placed';
 		} catch ( error ) {
 			return stoppedResponding( error, 'access-gate shell' );
 		}
-	}
+	};
+	const gated = await placeAccessGate( true );
+	if ( ! gated ) return undefined;
 	// Preserve one-way scroll-driven classes before overlays, probes or lazy-load scroll.
 	await withEvaluateTimeout( markInitialScrollClasses( page ), evaluateTimeoutMs );
 	// Dismiss takeover modals / consent banners BEFORE lazy-load (a modal's
 	// scroll-lock would defeat the scroll-through) and again AFTER (scrolling can
 	// trigger exit-intent / scroll-depth popups). Best-effort: never fails capture.
 	args.phases?.enter( 'lazy-load' );
-	const dismissedEarly = await dismissOverlays( page, { consentViewports: args.consentViewports } );
+	let dismissedEarly = await dismissOverlays( page, { consentViewports: args.consentViewports } );
 	await triggerLazyLoad( page, args.learnFluid === true, { expandContent: false } );
+	// A gate the runtime mounted later still (during lazy load, or over content
+	// it then unmounted) is placed now, on the same terms, before baseline.
+	if ( gated === 'none' ) {
+		const late = await placeAccessGate( false );
+		if ( ! late ) return undefined;
+		if ( late === 'placed' ) {
+			await withEvaluateTimeout( markInitialScrollClasses( page ), evaluateTimeoutMs );
+			dismissedEarly = await dismissOverlays( page, { consentViewports: args.consentViewports } );
+			await triggerLazyLoad( page, args.learnFluid === true, { expandContent: false } );
+		}
+	}
 	const dismissedLate = await dismissOverlays( page, { consentViewports: args.consentViewports } );
 	args.phases?.enter( 'baseline' );
 	const dismissedHere = [ ...dismissedEarly, ...dismissedLate ];

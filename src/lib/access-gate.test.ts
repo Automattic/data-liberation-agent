@@ -140,3 +140,65 @@ it( 'fails fast when the public shell stops answering while the placeholder is p
 	const failures = JSON.parse( readFileSync( join( directory, 'screenshots', 'failures.json' ), 'utf8' ) );
 	expect( failures ).toMatchObject( [ { stage: 'evaluate', error: expect.stringMatching( /stopped responding while settling \(access-gate shell\)/ ) } ] );
 }, 150_000 );
+
+// Wix's other members-only shape: the route is served with an empty
+// `#site-root` (no header, navigation, main or footer at all) and the runtime
+// mounts the blocking layer beside it well after `load`. That page is quiet,
+// and generically "ready", before the gate exists.
+const emptyGatedRoute = ( title: string, delayMs: number ) => `<!doctype html><html><head><meta charset="utf-8"><title>${ title }</title></head>
+<body><div id="SITE_CONTAINER"><div id="main_MF" class="main_MF"><div id="site-root" class="site-root"></div></div></div>
+<script>addEventListener('load',()=>setTimeout(()=>{const l=document.createElement('div');l.setAttribute('data-testid','siteMembersDialogBlockingLayer');l.innerHTML=${ JSON.stringify( membersDialog ) };document.getElementById('main_MF').append(l)},${ delayMs }));</script>
+</body></html>`;
+
+async function captureGated( routes: Record< string, string >, path: string ) {
+	const home = await source( routes );
+	const gatedUrl = new URL( path, home ).href;
+	mkdirSync( join( process.cwd(), '.tmp-test' ), { recursive: true } );
+	directory = mkdtempSync( join( process.cwd(), '.tmp-test', 'access-gate-' ) );
+	const result = await captureScreenshots( {
+		urls: [ gatedUrl ], primaryUrl: gatedUrl, outputDir: directory,
+		cleanupPolicy: cleanupPolicy( wixCapture.cleanupRules ), learnFluid: false, settleMs: 200,
+	} );
+	const manifest = JSON.parse( readFileSync( join( directory, 'screenshots', 'manifest.json' ), 'utf8' ) );
+	const entry = manifest.entries[ gatedUrl ];
+	return { result, entry, html: entry?.html ? markup( readFileSync( join( directory, entry.html ), 'utf8' ) ) : '' };
+}
+
+it( 'waits for a gate mounted after the empty route settles, and places the note inside the site chrome', async () => {
+	const { result, entry, html } = await captureGated( { ...pages, '/portfolio': emptyGatedRoute( 'Owner HOA', 1_500 ) }, '/portfolio' );
+	expect( result.failed ).toBe( 0 );
+	expect( entry.accessGate ).toMatchObject( { provider: 'Wix', rule: 'wix-members-gate', label: 'Portfolio' } );
+	expect( html ).toContain( 'members-only on your Wix site' );
+	expect( html ).toContain( 'id="SITE_HEADER"' );
+	expect( html ).toContain( '© Owner HOA' );
+	expect( html ).not.toContain( 'siteMembersDialog' );
+	expect( html ).not.toContain( 'emailAuth' );
+}, 240_000 );
+
+it( 'keeps the shell header and footer when its content root mounts after load', async () => {
+	// The public shell renders its chrome at once and its content root later.
+	const lateMain = shell( 'Home | Owner HOA', '' ).replace( /<main id="PAGES_CONTAINER"><\/main>/, '' )
+		.replace( '</script>', `;addEventListener('load',()=>setTimeout(()=>{const m=document.createElement('main');m.innerHTML='<h1>Welcome</h1><p>Owner home content.</p>';document.getElementById('SITE_FOOTER').before(m)},1500));</script>` );
+	const { result, entry, html } = await captureGated( { ...pages, '/': lateMain }, '/dues' );
+	expect( result.failed ).toBe( 0 );
+	expect( entry.accessGate ).toMatchObject( { provider: 'Wix', label: 'Dues' } );
+	expect( html ).toContain( 'members-only on your Wix site' );
+	expect( html ).toContain( 'id="SITE_HEADER"' );
+	expect( html ).toContain( 'id="SITE_FOOTER"' );
+	expect( html ).not.toContain( 'Owner home content.' );
+}, 240_000 );
+
+it( 'keeps the note when the shell runtime re-renders its content root after the placeholder is placed', async () => {
+	// The public shell's runtime hydrates its sections again after load, as
+	// Wix does, which would put the root page back under the gated route.
+	const rehydrating = shell( 'Home | Owner HOA', '<h1>Welcome neighbours</h1><p>Owner home content.</p>',
+		`addEventListener('load',()=>setTimeout(()=>{document.getElementById('PAGES_CONTAINER').innerHTML='<h1>Welcome neighbours</h1><p>Owner home content, rehydrated.</p>'},2500));` );
+	const { result, entry, html } = await captureGated( { ...pages, '/': rehydrating }, '/dues' );
+	expect( result.failed ).toBe( 0 );
+	expect( entry.accessGate ).toMatchObject( { provider: 'Wix', label: 'Dues' } );
+	expect( html ).toContain( 'members-only on your Wix site' );
+	expect( html ).not.toContain( 'Owner home content' );
+	expect( html ).toContain( 'id="SITE_HEADER"' );
+	expect( html ).toContain( 'id="SITE_FOOTER"' );
+	expect( html ).toMatch( /<title>Dues \| Owner HOA<\/title>/ );
+}, 240_000 );

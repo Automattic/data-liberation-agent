@@ -860,3 +860,14 @@ describe('captcha widget cleanup', () => {
     } finally { await page.close(); }
   }, 20_000);
 });
+
+it('records an access gate removal even after the record cap is reached', async ({ newPage }) => {
+  const page = await newPage();
+  const credits = Array.from({ length: 220 }, (_, index) => `<div id="WIX_ADS" data-n="${index}">ad</div>`).join('');
+  await page.setContent(`<body>${credits}<div data-testid="siteMembersDialogBlockingLayer"><input type="password"></div></body>`);
+  const policy = cleanupPolicy(wixCapture.cleanupRules);
+  await applySourceCleanup(page, policy);
+  const report = await readSourceCleanup(page, policy);
+  expect(report.truncated).toBe(true);
+  expect(report.records.some((record) => record.rule === 'wix-members-gate')).toBe(true);
+}, 30_000);
