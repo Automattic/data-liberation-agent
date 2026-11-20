@@ -7,7 +7,7 @@ import { imageSize } from 'image-size';
 import { rewriteCssUrlReferences, srcsetCandidates } from './srcset.js';
 import { metadataImageReferences } from './identity-resources.js';
 import { readDocument, withParsedDocuments } from './parsed-documents.js';
-import { MAX_PORTABLE_MEDIA_BYTES, MAX_PORTABLE_MEDIA_DIMENSION, portableSrcsetRepresentative } from './portable-media-limits.js';
+import { MAX_PORTABLE_MEDIA_BYTES, MAX_PORTABLE_MEDIA_DIMENSION, boundedResponsiveRenditions, portableSrcsetRepresentative } from './portable-media-limits.js';
 import { deriveFilenameFromUrl, downloadMedia, existingMediaNames, extensionFromContentType, resolveMediaPath, safeFilename, type DownloadResult } from './media-fetch/media.js';
 import { isIntegrityError } from './failure-class.js';
 import { launchChromium } from './browser-kit/index.js';
@@ -543,8 +543,8 @@ export async function captureAssets( root: string, documents: ImageDocuments, de
 				images.map( record => ( { record, rendition: false } ) );
 			for ( const parent of images ) {
 				if ( parent.kind !== 'image' ) continue;
-				for ( const url of parent.source_urls ) {
-					if ( url === parent.resolved_original || ! resources[ url ] ) continue;
+				const captured = parent.source_urls.filter( url => url !== parent.resolved_original && resources[ url ] );
+				for ( const url of boundedResponsiveRenditions( captured, parent.rendition_widths ) ) {
 					jobs.push( { record: {
 						kind: 'image', destination_owner: parent.destination_owner,
 						source_urls: [ url ], references: parent.references.filter( reference => reference.source_url === url ),

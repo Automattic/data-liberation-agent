@@ -16,6 +16,7 @@ import { renderSourceData, type SourceDataScript } from './source-data.js';
 import { routeInScope, validateRouteScope } from './url/route-scope.js';
 import type { SiteRouteScope } from '../platform/types.js';
 import { planPortableMediaFamilies } from './portable-media-plan.js';
+import { catalogImageSources } from './product-row.js';
 import { SectionSpecsStore } from './replicate/section-specs-store.js';
 import { MediaStubStore } from './resume-state/index.js';
 import { COARSE_SWEEP_WIDTHS } from './screenshot/fluid-capture.js';
@@ -395,11 +396,14 @@ function buildExportCapture(
 	// pair. Release every private pair, including unretained route aliases,
 	// before rendering and building the portable/identity geometry indexes.
 	for ( const entry of capturedEntries ) entry.evidenceDocuments.length = 0;
-	const { mediaFamilies, failedMedia, mixedSrcsetReferences, interactionMediaReferences, retainedMediaFamilies, referencedImageAssets, imageByUrl, diagnostics: mediaCandidateDiagnostics } = collectMediaCandidates( { retainedEntries, outputDir, sourceUrl: options.sourceUrl, mediaStubs, exclusions, maxFileBytes, catalogImages: options.structuredContent?.entries.flatMap(entry => entry.product?.images?.map(image => image.src) ?? []) } );
+	const catalogImages = catalogImageSources( options.structuredContent?.entries.map( entry => entry.product ) ?? [] );
+	const { mediaFamilies, failedMedia, mixedSrcsetReferences, interactionMediaReferences, retainedMediaFamilies, referencedImageAssets, imageByUrl, diagnostics: mediaCandidateDiagnostics } = collectMediaCandidates( { retainedEntries, outputDir, sourceUrl: options.sourceUrl, mediaStubs, exclusions, maxFileBytes, catalogImages: catalogImages.sources } );
 	routeCaptureDiagnostics.push( ...mediaCandidateDiagnostics );
 	const portableMediaBudget = portableMediaTotalBytesLimit;
 	const portableMediaPlan = planPortableMediaFamilies(
-		[ ...mediaFamilies ].map( ( [ family, candidates ] ) => ( { family, candidates } ) ),
+		// Each catalog row's primary image is reserved before any other family.
+		[ ...mediaFamilies ].map( ( [ family, candidates ] ) => ( { family, candidates, ...( candidates.some( candidate =>
+			catalogImages.primary.has( candidate.sourceUrl ) || candidate.imageAsset?.source_urls.some( url => catalogImages.primary.has( url ) ) ) ? { reserved: true } : {} ) } ) ),
 		portableMediaBudget,
 		entrypointEntry.htmlPath,
 	);

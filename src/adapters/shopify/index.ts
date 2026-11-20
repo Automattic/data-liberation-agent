@@ -5,6 +5,7 @@ import { discover } from './discover.js';
 import { shopifyAcquisition } from './acquisition.js';
 import { shopifyStructuredContent } from './template-content.js';
 import { shopifyTemplateIdentity } from './template-identity.js';
+import { shopifyImageOriginal } from './media-identity.js';
 
 // ---------------------------------------------------------------------------
 // Re-exports — public API surface (importers use shopify/index.js by name)
@@ -25,6 +26,7 @@ export const shopifyAdapter: PlatformAdapter = {
   detection,
   liberation: capture,
   discover,
+  resolveImageOriginal: shopifyImageOriginal,
   routeScope: sourceUrl => ({
     origin: new URL(sourceUrl).origin,
     pathPrefixes: ['/'],
