@@ -15,6 +15,15 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.39.2] - 2026-11-20
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- Capture a tablet box-tree viewport
+- Settle debounced resize handlers before observing box-tree viewports
+
 ## [0.39.1] - 2026-11-20
 
 ### Changed
