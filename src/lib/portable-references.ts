@@ -38,6 +38,35 @@ export function omitDegenerateReplacements(
 	return values;
 }
 
+/** One URL token through a replacement map: exact spelling, then without its
+ * fragment, then resolved against the document URL. `undefined` when unmapped. */
+function portableUrlLookup( values: ReadonlyMap< string, string > ): ( reference: string, documentUrl?: string ) => string | undefined {
+	return ( reference, documentUrl ) => {
+		const exact = values.get( reference );
+		if ( exact !== undefined ) return exact;
+		// A captured document owns all of its fragment targets. Resolve authored
+		// URL forms to that identity without treating #symbol as part of the file.
+		if ( reference.startsWith( '#' ) ) return undefined;
+		const fragment = reference.indexOf( '#' );
+		const path = fragment < 0 ? reference : reference.slice( 0, fragment );
+		let local = values.get( path );
+		if ( local === undefined && documentUrl ) {
+			try { local = values.get( new URL( path.replace( /&amp;/g, '&' ), documentUrl ).href ); }
+			catch { /* Invalid authored URLs stay unchanged. */ }
+		}
+		return local === undefined ? undefined : local + ( fragment < 0 ? '' : reference.slice( fragment ) );
+	};
+}
+
+/** The URL-token resolution `preparePortableReplacements` applies to `url(...)`
+ * and resource attributes, for callers that hold URLs outside page markup. */
+export function preparePortableUrlResolver(
+	replacements: Map< string, string >,
+	rejectedKeys?: Set< string >
+): ( reference: string, documentUrl?: string ) => string | undefined {
+	return portableUrlLookup( omitDegenerateReplacements( replacements, rejectedKeys ) );
+}
+
 export function preparePortableReplacements(
 	replacements: Map< string, string >,
 	rejectedKeys?: Set< string >
@@ -61,21 +90,8 @@ export function preparePortableReplacements(
 			.join( '|' ) + ')' + URL_TERMINATOR_LOOKAHEAD,
 		'g'
 	);
-	const replaceUrl = ( reference: string, documentUrl?: string ): string => {
-		const exact = values.get( reference );
-		if ( exact !== undefined ) return exact;
-		// A captured document owns all of its fragment targets. Resolve authored
-		// URL forms to that identity without treating #symbol as part of the file.
-		if ( reference.startsWith( '#' ) ) return reference;
-		const fragment = reference.indexOf( '#' );
-		const path = fragment < 0 ? reference : reference.slice( 0, fragment );
-		let local = values.get( path );
-		if ( local === undefined && documentUrl ) {
-			try { local = values.get( new URL( path.replace( /&amp;/g, '&' ), documentUrl ).href ); }
-			catch { /* Invalid authored URLs stay unchanged. */ }
-		}
-		return local === undefined ? reference : local + ( fragment < 0 ? '' : reference.slice( fragment ) );
-	};
+	const lookup = portableUrlLookup( values );
+	const replaceUrl = ( reference: string, documentUrl?: string ): string => lookup( reference, documentUrl ) ?? reference;
 	return ( content, documentUrl ) => rewriteMediaReferences(
 		content,
 		url => replaceUrl( url, documentUrl ),
