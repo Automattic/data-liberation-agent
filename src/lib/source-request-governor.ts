@@ -6,9 +6,9 @@
  * throttling slows the whole capture instead of stopping one pass.
  *
  * - At most `concurrency` HTTP requests are in flight at once. Browser
- *   fan-out is uncapped while healthy; it shares admission limits only after
- *   an origin throttle, until success-driven recovery reaches full speed.
- *   Every source request then stays paced at the learned rate ceiling.
+ *   fan-out never takes a slot: after a throttle it waits out the pause and
+ *   the learned rate ceiling by time. Every source request stays paced at
+ *   that ceiling for the rest of the capture.
  * - A throttle response (429 or 503) pauses new requests for the source's
  *   `Retry-After` (delta-seconds or an HTTP date, capped at
  *   `maxRetryAfterMs`), drops the in-flight limit to 1 and retries the
@@ -414,7 +414,7 @@ export class SourceRequestGovernor {
 		} else if (status !== undefined) this.recordSuccess();
 	}
 
-	/** Native browser requests share concurrency slots only while recovering. */
+	/** True from a throttle until concurrency recovers; governs browser-flagged `run()` callers. */
 	get isBrowserThrottled(): boolean { return this.browserThrottled; }
 
 	/** Spacing at the learned ceiling, bounded like any source-requested wait. */
@@ -432,9 +432,8 @@ export class SourceRequestGovernor {
 		if ( ++this.successes < this.recoveryStep ) return;
 		this.successes = 0;
 		this.limit = Math.min(this.maxConcurrency, this.limit + 1);
-		// Recovery restores browser parallelism, never the pre-throttle rate:
-		// `pace()` keeps native requests at the learned ceiling without holding
-		// a slot, which same-URL cache locks could otherwise deadlock.
+		// Recovery restores parallelism, never the pre-throttle rate: every
+		// request stays paced at the learned ceiling.
 		if (this.limit === this.maxConcurrency) this.browserThrottled = false;
 		this.wake();
 	}

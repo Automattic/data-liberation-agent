@@ -4,7 +4,7 @@ import { expect, it, vi } from 'vitest';
 import { SourceRequestGovernors } from '../source-request-governor.js';
 import { categorizeSourceContext, continueSourceRoute, governSourceContext, sourceLoadInterruptions } from './source-traffic.js';
 
-it('observes native outcomes, admits only recovery traffic and releases failures', async () => {
+it('observes native outcomes and paces recovery traffic without holding admission slots', async () => {
   const context = new EventEmitter() as EventEmitter & BrowserContext;
   const governors = new SourceRequestGovernors({ concurrency: 2, recoveryStep: 1, fallbackRetryAfterMs: 0 });
   const governor = governors.forOrigin('https://source.test');
@@ -28,10 +28,9 @@ it('observes native outcomes, admits only recovery traffic and releases failures
   expect(sourceLoadInterruptions(page)).toBe(1);
   const recovery = routeFor();
   await continueSourceRoute(recovery.route, context, {});
-  expect(acquire).toHaveBeenCalledOnce();
+  expect(recovery.native.continue).toHaveBeenCalledOnce();
   context.emit('response', { request: () => recovery.request, status: () => 200, headers: () => ({}) });
   context.emit('requestfinished', recovery.request);
-  expect(release).toHaveBeenCalledOnce();
   expect(governor.isBrowserThrottled).toBe(false);
   expect(sourceLoadInterruptions(page)).toBe(1);
 
@@ -44,7 +43,6 @@ it('observes native outcomes, admits only recovery traffic and releases failures
   const failed = routeFor();
   await continueSourceRoute(failed.route, context, {});
   context.emit('requestfailed', failed.request);
-  expect(release).toHaveBeenCalledTimes(2);
   expect(governor.throttleEvents).toBe(3);
 
   const thirdParty = routeFor('https://other.test/image');
@@ -52,21 +50,7 @@ it('observes native outcomes, admits only recovery traffic and releases failures
   context.emit('requestfailed', thirdParty.request);
   expect(governor.throttleEvents).toBe(3);
   expect(sourceLoadInterruptions(page)).toBe(3);
-  expect(acquire).toHaveBeenCalledTimes(2);
+  expect(acquire).not.toHaveBeenCalled();
+  expect(release).not.toHaveBeenCalled();
   expect(governor.stats().requestCounts).toMatchObject({ subresource: 4, 'asset-original': 0, 'device-check': 0 });
-});
-
-it('returns admission slots of requests still in flight when their context closes', async () => {
-  const governors = new SourceRequestGovernors({ concurrency: 1, fallbackRetryAfterMs: 0 });
-  const governor = governors.forOrigin('https://source.test');
-  governor.observeBrowserOutcome(429, '0');
-  const context = new EventEmitter() as EventEmitter & BrowserContext;
-  governSourceContext(context, governors, 'https://source.test');
-  const request = { url: () => 'https://source.test/image', isNavigationRequest: () => false, resourceType: () => 'image', frame: () => ({ url: () => 'https://source.test/page' }) } as Request;
-  await continueSourceRoute({ request: () => request, continue: vi.fn().mockResolvedValue(undefined) } as unknown as Route, context, {});
-  context.emit('close');
-  const next = new AbortController();
-  const timer = setTimeout(() => next.abort(), 3000);
-  try { await expect(governor.acquire(next.signal, true)).resolves.toBeUndefined(); }
-  finally { clearTimeout(timer); governor.release(); }
 });
