@@ -470,7 +470,11 @@ export function installCleanupInPage(args: { policy: CleanupPolicy; recovered?: 
           }
         }
         const reclaimedVariables = reclaimReservedSpace(rule);
-        if (report.records.length < 200) report.records.push({ rule: rule.id, category: rule.category,
+        // An access gate's removal is what turns the route into a placeholder
+        // (see access-gate.ts), so its first record is kept past the cap: a busy
+        // page must never strip the gate without the evidence that places the note.
+        const firstGateRecord = Boolean(rule.accessGate) && !report.records.some((record) => record.rule === rule.id);
+        if (report.records.length < 200 || firstGateRecord) report.records.push({ rule: rule.id, category: rule.category,
           selector: selectorFor(node), text: (node.textContent ?? '').trim().slice(0, 160), action: 'remove', reclaimedBodyPadding, ...(rule.host ? { host: rule.host } : {}), ...(rule.evidence ? { evidence: rule.evidence } : {}), ...(reclaimedVariables ? { reclaimedVariables } : {}) });
         else report.truncated = true;
         let parent = node.parentElement;

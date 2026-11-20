@@ -1,4 +1,5 @@
 import type { Page } from 'playwright';
+import type { CleanupPolicy } from './source-cleanup.js';
 
 /**
  * Routes whose content the provider withholds behind its own login (a Wix
@@ -43,11 +44,58 @@ export async function routeKeptContent( page: Page ): Promise< boolean > {
 	return page.evaluate( () => Boolean( document.querySelector( 'main,[role="main"]' ) ) );
 }
 
+/**
+ * Bound on waiting for a content-less route to show either its content or its
+ * gate. Generic readiness (network and DOM quiet) knows nothing about a gate:
+ * Wix serves a members-only route with an empty `#site-root` that is quiet
+ * well before its runtime mounts the blocking layer (1.2–1.6 s after `load` on
+ * qure.rocks/portfolio, at desktop and phone widths). Reading the gate on that
+ * quiet page sees nothing; the cleanup observer then strips the gate when it
+ * arrives, and the route ships empty, with neither note nor site chrome.
+ */
+export const ACCESS_GATE_SETTLE_MS = 10_000;
+
+export type AccessGateSettle = 'gate' | 'content' | 'timeout' | 'no-gate-rules';
+
+/**
+ * Wait until the route has either fired an access-gate cleanup rule or shows a
+ * content root, whichever comes first, within `timeoutMs`. Each poll runs the
+ * installed cleanup sweep, so a gate inserted after the mutation observer's
+ * round budget is still removed and recorded here.
+ */
+export async function awaitAccessGateOrContent( page: Page, policy: CleanupPolicy, timeoutMs: number = ACCESS_GATE_SETTLE_MS ): Promise< AccessGateSettle > {
+	const rules = policy.rules.filter( ( rule ) => rule.accessGate ).map( ( rule ) => rule.id );
+	if ( ! rules.length ) return 'no-gate-rules';
+	return page.evaluate( ( { rules, timeoutMs } ) => new Promise< 'gate' | 'content' | 'timeout' >( ( resolve ) => {
+		const started = performance.now();
+		const check = () => {
+			const state = ( window as unknown as { __dlaCleanup?: { report: { records: Array< { rule: string } > }; sweep: () => void } } ).__dlaCleanup;
+			state?.sweep();
+			if ( state?.report.records.some( ( record ) => rules.includes( record.rule ) ) ) return resolve( 'gate' );
+			if ( document.querySelector( 'main,[role="main"]' ) ) return resolve( 'content' );
+			if ( performance.now() - started >= timeoutMs ) return resolve( 'timeout' );
+			setTimeout( check, 100 );
+		};
+		check();
+	} ), { rules, timeoutMs } );
+}
+
 export async function openAccessGateShell( page: Page, route: string ): Promise< string | undefined > {
 	const shell = new URL( '/', route ).href;
 	if ( shell === new URL( route ).href ) return undefined;
 	const response = await page.goto( shell, { waitUntil: 'load', timeout: 30_000 } ).catch( () => null );
 	return response && response.status() < 400 ? shell : undefined;
+}
+
+/**
+ * The placeholder replaces the shell's content root and keeps everything
+ * around it (header, navigation, footer). A builder runtime can mount that root
+ * after `load`; placing the note before it exists would have nowhere to go but
+ * the whole body, taking the site chrome with it. Wait for it, within a bound.
+ */
+export async function awaitShellContentRoot( page: Page, timeoutMs: number = ACCESS_GATE_SETTLE_MS ): Promise< boolean > {
+	return page.waitForFunction( () => Boolean( document.querySelector( 'main,[role="main"]' ) ), undefined, { timeout: timeoutMs, polling: 100 } )
+		.then( () => true, () => false );
 }
 
 /** Serialized into the page. Replaces the main content with the placeholder and restores the route's identity. */
@@ -89,7 +137,16 @@ export function installAccessGatePlaceholder( args: { route: string; gateTitle: 
 	const title = ! args.gateTitle || args.gateTitle === label ? label
 		: args.gateTitle.startsWith( label ) ? args.gateTitle : `${ label } | ${ args.gateTitle }`;
 
-	const main = document.querySelector( 'main' ) ?? document.body;
+	// The note replaces the content root only. Without one, a new root goes in
+	// before the footer, so the shell's header and footer are never wiped.
+	const contentRoot = () => document.querySelector( 'main' ) ?? document.querySelector( '[role="main"]' ) ?? ( () => {
+		const root = document.createElement( 'main' );
+		const footer = document.querySelector( 'footer,[role="contentinfo"]' );
+		if ( footer?.parentNode ) footer.before( root );
+		else document.body.append( root );
+		return root;
+	} )();
+	const main = contentRoot();
 	// Speak in the site's own type rather than the browser default.
 	const headingFont = ( () => {
 		const sample = main.querySelector( 'h1,h2,h3' );
@@ -123,5 +180,47 @@ export function installAccessGatePlaceholder( args: { route: string; gateTitle: 
 		'meta[property^="og:image"]', 'meta[name^="og:image"]', 'meta[name="twitter:description"]', 'meta[property="twitter:description"]',
 		'meta[name^="twitter:image"]', 'meta[property^="twitter:image"]' ].join( ',' ) ) ) meta.remove();
 	if ( location.href !== route.href ) history.replaceState( history.state, '', route.href );
+	// The shell is a live page: its runtime can re-render the content root
+	// (Wix hydrates the root page's sections after load, during lazy load or
+	// probing) and silently put the root page back under the route's name. Hold
+	// the note in place for the rest of the capture; serialization re-asserts it
+	// once more and refuses a document without it.
+	const host = window as unknown as { __dlaAccessGate?: { observer: MutationObserver; reassert: () => boolean } };
+	host.__dlaAccessGate?.observer.disconnect();
+	// Only repairs count against the budget, not the page's own animation.
+	let repairs = 0;
+	const displaced = () => {
+		const root = document.querySelector( 'main' ) ?? document.querySelector( '[role="main"]' );
+		return ! root || root.childNodes.length !== 1 || root.firstChild !== section || document.title !== title;
+	};
+	const reassert = () => {
+		const root = contentRoot();
+		if ( root.childNodes.length !== 1 || root.firstChild !== section ) root.replaceChildren( section );
+		if ( document.title !== title ) document.title = title;
+		return section.isConnected;
+	};
+	const observer = new MutationObserver( () => {
+		if ( ! displaced() ) return;
+		if ( ++repairs > 100 ) {
+			observer.disconnect();
+			return;
+		}
+		reassert();
+	} );
+	observer.observe( document.documentElement, { childList: true, subtree: true } );
+	host.__dlaAccessGate = { observer, reassert };
 	return { label, title };
+}
+
+/**
+ * Put the placeholder back if the shell's runtime replaced it, immediately
+ * before serializing. False when the document no longer carries it (the shell
+ * re-initialized its document); the caller must not ship that document.
+ */
+export async function reassertAccessGatePlaceholder( page: Page ): Promise< boolean > {
+	return page.evaluate( () => {
+		const state = ( window as unknown as { __dlaAccessGate?: { reassert: () => boolean } } ).__dlaAccessGate;
+		state?.reassert();
+		return Boolean( document.querySelector( '[data-blocks-engine-capture-access-gate]' ) );
+	} );
 }
