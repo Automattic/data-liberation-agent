@@ -1,6 +1,8 @@
 import { exportWebsiteCapture } from './capture-export.js';
 
 export interface HttpMaterializationOptions {
+	/** Adapter-declared non-content attributes for route identity only. */
+	nonContentAttributes?: readonly string[];
 	routeScope?: import('../platform/types.js').SiteRouteScope;
 	outputDir: string;
 	sourceUrl: string;

@@ -946,6 +946,7 @@ async function runCaptureWebsite(
 		sourceUrl,
 		platform: detection.platform,
 		canonicalizeHtml: adapter.liberation?.canonicalizeHtml?.bind( adapter.liberation ),
+		nonContentAttributes: adapter.nonContentAttributes,
 		routeScope,
 		resolveDocumentSelection: adapter.liberation?.documentSelection,
 		...( screenshotResult.deviceMode ? { deviceMode: screenshotResult.deviceMode.mode } : {} ),

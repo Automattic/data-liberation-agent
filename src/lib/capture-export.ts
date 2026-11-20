@@ -67,6 +67,8 @@ interface ExportBuild {
 }
 
 interface ExportCaptureOptions {
+	/** Adapter-declared non-content attributes for route identity only. */
+	nonContentAttributes?: readonly string[];
 	/** Adapter structured content (#1701): entry slugs, term archives, content index and redirects. */
 	structuredContent?: { source: import('../platform/types.js').StructuredContentSource; entries: import('../platform/types.js').StructuredContentEntry[] };
 	routeScope?: SiteRouteScope;
@@ -366,7 +368,8 @@ function buildExportCapture(
 		// A homepage with no manifest entry (abandoned at its deadline, skipped by
 		// the time budget) is explained only by the capture stage's rows.
 		[ ...routeCaptureDiagnostics, ...( options.discoveryDiagnostics ?? [] ) ],
-		options.canonicalAliases ?? []
+		options.canonicalAliases ?? [],
+		options.nonContentAttributes
 	);
 	// Like a route_export_failed route, a path-dropped route keeps only its allocation finding.
 	const droppedUrls = new Set( pathDiagnostics.map( diagnostic => diagnostic.url ) );

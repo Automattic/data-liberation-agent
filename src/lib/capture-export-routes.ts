@@ -175,7 +175,9 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 	redirectAliases: Array< { url: string; target: string } >,
 	routeDiagnostics: ReadonlyArray< RouteDiagnostic > = [],
 	/** Routes skipped before capture because their rel=canonical is another inventory route (#835). */
-	preCaptureAliases: ReadonlyArray< CanonicalRouteAlias > = []
+	preCaptureAliases: ReadonlyArray< CanonicalRouteAlias > = [],
+	/** Adapter-declared asset-loader/bookkeeping attributes, ignored only for content identity. */
+	nonContentAttributes: readonly string[] = []
 ): RouteStage<T> {
 	const normalizedSourceUrl = normalizedUrl( sourceUrl );
 	const requestedEntrypointCandidates = capturedEntries.filter( ( { url } ) => documentRequestUrl( url ) === documentRequestUrl( sourceUrl ) );
@@ -251,6 +253,7 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 	// `data-blocks-engine-*` attributes are capture bookkeeping (node ids are
 	// numbered per capture, so one document captured twice differs by them).
 	// Cache only digests, rather than holding every parsed document in memory.
+	const ignoredAttributes = new Set( nonContentAttributes );
 	const contentDigests = new Map< T, string >();
 	const contentDigest = ( entry: T ): string => {
 		const cached = contentDigests.get( entry );
@@ -262,7 +265,7 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 			// Whitespace runs inside an attribute value are serialization, not
 			// content: a server can indent one embedded JSON value differently per route.
 			for ( const name of Object.keys( element.attribs ) ) {
-				if ( name.startsWith( 'data-blocks-engine-' ) ) delete element.attribs[ name ];
+				if ( name.startsWith( 'data-blocks-engine-' ) || ignoredAttributes.has( name ) ) delete element.attribs[ name ];
 				else element.attribs[ name ] = element.attribs[ name ].replace( /\s+/g, ' ' ).trim();
 			}
 			// Compare link targets, not their spelling: a default document and

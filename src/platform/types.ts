@@ -107,6 +107,10 @@ export interface Platform {
 	 * Unknown documents return undefined and retain the generic fingerprint. */
 	templateIdentity?: import('../lib/template-groups.js').TemplateIdentity;
 
+	/** Lowercase asset-loader or bookkeeping attribute names that are not page content.
+	 * Ignored only by route content-identity proofs; captured/exported HTML is unchanged.
+	 * Never declare attributes carrying authored content, media identity or interaction semantics. */
+	nonContentAttributes?: readonly string[];
 	/** Runtime-only class token patterns ignored by template fingerprints and verification. Anchor patterns to match whole tokens. */
 	runtimeStateClasses?: readonly RegExp[];
 	/** Content the platform publishes as structured data (a feed or API). Template-cluster

@@ -1,7 +1,8 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { allocateCaptureRoutes, type RouteEntry } from './capture-export-routes.js';
+import { squarespaceAdapter } from '../adapters/squarespace/index.js';
 
 const dirs: string[] = [];
 afterEach( () => {
@@ -15,6 +16,29 @@ function entry( dir: string, filename: string, url: string, html: string ): Rout
 }
 
 describe( 'capture export route stage', () => {
+	it.each( [
+		{ label: 'stylesheet version skew', css: 1062, scripts: 1061, content: 'Welcome', declared: true, canonical: true, collapse: true },
+		{ label: 'script version skew', css: 1061, scripts: 1062, content: 'Welcome', declared: true, canonical: true, collapse: true },
+		{ label: 'both loader versions skew', css: 1062, scripts: 1062, content: 'Welcome', declared: true, canonical: true, collapse: true },
+		{ label: 'real content attribute differs', css: 1062, scripts: 1062, content: 'Different', declared: true, canonical: true, collapse: false },
+		{ label: 'undeclared loader attributes', css: 1062, scripts: 1062, content: 'Welcome', declared: false, canonical: true, collapse: false },
+		{ label: 'no canonical alias proof', css: 1062, scripts: 1062, content: 'Welcome', declared: true, canonical: false, collapse: false },
+	] )( 'handles $label in canonical content proofs', ( test ) => {
+		mkdirSync( '.tmp-test', { recursive: true } );
+		const dir = mkdtempSync( join( '.tmp-test', 'liberation-loader-alias-' ) ); dirs.push( dir );
+		const rootUrl = 'https://example.com/';
+		const html = ( css: number, scripts: number, content: string ) => `<html><head><link rel="canonical" href="${ rootUrl }"></head><body><main data-block-css='["https://definitions.sqspcdn.com/website-component-definition/text_${ css }.css"]' data-block-scripts='["https://definitions.sqspcdn.com/website-component-definition/text_${ scripts }.js"]'><h1 aria-label="${ content }">Home</h1></main></body></html>`;
+		const root = entry( dir, 'root.html', rootUrl, html( 1061, 1061, 'Welcome' ) );
+		const aliasHtml = html( test.css, test.scripts, test.content );
+		const alias = { ...entry( dir, 'alias.html', `${ rootUrl }home`, aliasHtml ), ...( test.canonical ? { canonicalUrl: rootUrl, canonicalLinkUrl: rootUrl } : {} ) };
+		for ( const entries of [ [ root, alias ], [ alias, root ] ] ) {
+			const routes = allocateCaptureRoutes( entries, rootUrl, [], [], [], test.declared ? squarespaceAdapter.nonContentAttributes : undefined );
+			expect( routes.retainedEntries ).toHaveLength( test.collapse ? 1 : 2 );
+			expect( routes.duplicateRoutes ).toEqual( test.collapse ? [ { url: alias.url, canonicalUrl: rootUrl, path: 'website/index.html' } ] : [] );
+			if ( test.collapse ) expect( routes.canonicalRouteAliases.get( alias.url ) ).toBe( 'index.html' );
+		}
+		expect( readFileSync( alias.htmlPath, 'utf8' ) ).toBe( aliasHtml );
+	} );
 	it( 'folds identical case variants and allocates distinct content around case-folded reservations', () => {
 		mkdirSync( '.tmp-test', { recursive: true } );
 		const dir = mkdtempSync( join( '.tmp-test', 'liberation-case-routes-' ) ); dirs.push( dir );
