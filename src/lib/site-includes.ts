@@ -22,8 +22,7 @@ export function parseLocatedStructure( html: string ) {
 	} } );
 }
 
-export function includeReferences( html: string ): Array< HtmlRange & { path: string } > {
-	const $ = parseLocatedStructure( html );
+export function includeReferences( html: string, $ = parseLocatedStructure( html ) ): Array< HtmlRange & { path: string } > {
 	const includes: Array< HtmlRange & { path: string } > = [];
 	function visit( node: AnyNode ) {
 		if ( node.type === 'comment' && /^\s*#include/i.test( node.data ) ) {
