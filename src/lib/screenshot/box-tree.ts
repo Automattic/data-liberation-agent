@@ -31,6 +31,10 @@ export const BOX_TREE_STYLES = [
 	'backdrop-filter', 'pointer-events', 'cursor',
 	'background-position-x', 'background-position-y', 'background-size', 'background-repeat',
 	'background-clip', 'background-origin', 'background-attachment', 'background-blend-mode',
+	// SVG paint: author rules paint retained artwork (icon shapes, badge text), and the
+	// consumer does not ship author CSS on evidence routes.
+	'fill', 'fill-opacity', 'fill-rule', 'stroke', 'stroke-width', 'stroke-opacity',
+	'stroke-linecap', 'stroke-linejoin', 'stroke-dasharray', 'stroke-dashoffset',
 ] as const;
 
 type BoxObservation = { border_box: { x: number; y: number; width: number; height: number }; used_styles: Record<string, string> };

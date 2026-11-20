@@ -44,6 +44,29 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('keeps the capture viewport when anoth
 	}
 });
 
+// One Chromium pass (~1 second). Author rules paint retained SVG artwork; the
+// consumer does not ship them on evidence routes, so the observed paint is all it has.
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('records the used SVG paint of artwork shapes and text', async () => {
+	expect(BOX_TREE_STYLES).toEqual(expect.arrayContaining(['fill', 'fill-opacity', 'stroke', 'stroke-width', 'stroke-opacity']));
+	const browser = await chromium.launch({ headless: true });
+	try {
+		const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+		await page.setContent('<html><head><style>.bag path{fill:#333}.bag .handle{fill:none;stroke:#333;stroke-width:2px;stroke-linecap:round}.bag text{fill:#f8f4f0;fill-opacity:.9}</style></head><body><a class="bag" href="/cart"><svg viewBox="0 0 20 24" width="20" height="24"><path d="M0 6h20v18H0z"></path><path class="handle" d="M5 6a5 5 0 0 1 10 0"></path><text x="10" y="18">0</text></svg></a></body></html>');
+		await stampNodeIds(page);
+		let nodes: BoxTree['nodes'] | undefined;
+		const html = await capturePageHtml(page, [], undefined, observed => { nodes = observed && 'nodes' in observed ? observed.nodes : undefined; });
+		expect(nodes).toBeDefined();
+		const id = (pattern: RegExp) => html.match(pattern)![1];
+		const used = (pattern: RegExp) => nodes![id(pattern)].viewports.capture.used_styles;
+		expect(used(/<svg[^>]*data-blocks-engine-node-id="([^"]+)"/)).toMatchObject({ fill: 'rgb(0, 0, 0)', stroke: 'none' });
+		expect(used(/<path d="M0[^>]*data-blocks-engine-node-id="([^"]+)"/)).toMatchObject({ fill: 'rgb(51, 51, 51)', stroke: 'none' });
+		expect(used(/<path class="handle"[^>]*data-blocks-engine-node-id="([^"]+)"/)).toMatchObject({ fill: 'none', stroke: 'rgb(51, 51, 51)', 'stroke-width': '2px', 'stroke-linecap': 'round' });
+		expect(used(/<text[^>]*data-blocks-engine-node-id="([^"]+)"/)).toMatchObject({ fill: 'rgb(248, 244, 240)', 'fill-opacity': '0.9' });
+	} finally {
+		await browser.close();
+	}
+});
+
 it('names the first node at which saved bytes and the observed tree disagree', () => {
 	const tree = { schema: 'blocks-engine/box-tree/v2' as const, viewports: {}, nodes: {
 		n0: { children: ['n1', 'n2'], viewports: {} }, n1: { children: [], viewports: {} }, n2: { children: ['n3', 'n4'], viewports: {} }, n3: { children: [], viewports: {} }, n4: { children: [], viewports: {} },
