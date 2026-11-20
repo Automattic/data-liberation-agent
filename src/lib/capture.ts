@@ -1270,6 +1270,7 @@ export async function deriveTemplateClusterMembers( input: {
 	const { deriveMemberDocument, compareDerivedWithCapture, TEMPLATE_CLUSTER_LIMITS, writeTemplateClusters, TEMPLATE_CLUSTERS_FILE } =
 		await import( './template-clusters.js' );
 	const { templateClusterUnits } = await import( './template-groups.js' );
+	const { chromeInteractionStates } = await import( './static-dialogs.js' );
 	const memberShape = structuredMemberShape( input.contentSource, input.contentEntries );
 	// Derivation documents go through the run's source governors, as grouping
 	// does: throttles wait out Retry-After and retry (#1685). A failed or non-2xx
@@ -1624,6 +1625,9 @@ export async function deriveTemplateClusterMembers( input: {
 					const slug = await queue.claimSlug( memberFeed?.slug ?? slugify( url ) );
 					const capturedAtNow = new Date().toISOString();
 					const repProfile = repEntry.profiles?.desktop;
+					// Site chrome identical to the representative's keeps its
+					// observed dropdowns and menus, as on captured routes.
+					const chromeStates = chromeInteractionStates( repProcessedHtml, derivation.html, repEntry.interactions );
 					const repMobileProfile = memberMobilePath ? repEntry.profiles?.mobile : undefined;
 					await queue.updateEntry( url, {
 						slug,
@@ -1634,6 +1638,7 @@ export async function deriveTemplateClusterMembers( input: {
 						...( memberMobilePath && repEntry.deviceMode ? { deviceMode: repEntry.deviceMode } : {} ),
 						...( memberMobilePath && repEntry.fluidMobile ? { fluidMobile: repEntry.fluidMobile } : {} ),
 						...( repEntry.fluid ? { fluid: repEntry.fluid } : {} ),
+						...( chromeStates ? { interactions: chromeStates } : {} ),
 					} as import('./screenshot/manifest-queue.js').ManifestEntry );
 					lap( 'manifest' );
 					diagnostics.push( {
