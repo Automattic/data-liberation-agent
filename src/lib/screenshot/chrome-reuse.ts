@@ -31,6 +31,11 @@ import { orElse } from '../failure-class.js';
  * route root's, and the state is kept only when every rebased selector names
  * the corresponding node on the route. Anything else is probed in place.
  *
+ * Chrome the entrypoint does not render (a home page's hero header, say) is
+ * probed in place by the first route that renders it, and that route's
+ * outcomes are kept as a learned variant: later routes rendering the same
+ * chrome reuse its recorded triggers' outcomes and probe only the rest.
+ *
  * Builder navbars are often plain elements with no landmark. A probed control
  * outside every landmark then names its own root: its outermost ancestor that
  * holds no page heading or main content (see `builderChromeRoots`). Templates
@@ -150,6 +155,12 @@ export interface SharedChromeEvidence {
 	states: ChromeState[];
 	/** Probed states that are not chrome evidence: trigger outside chrome or an unresolvable selector. */
 	unanchored: number;
+	/**
+	 * Learned from a route's own probe rather than the one-time chrome probe:
+	 * it records the controls that route probed, so it authorizes skipping
+	 * those triggers only, never every control of a matched root.
+	 */
+	learned?: true;
 }
 
 /** The one-time entrypoint probe for one capture profile. */
@@ -159,6 +170,13 @@ export interface SharedChromeProbe {
 	reason?: string;
 	evidence?: SharedChromeEvidence;
 	durationMs: number;
+	/**
+	 * Chrome variants the entrypoint does not render (a home page's hero
+	 * header, say), each learned from the first route that rendered and probed
+	 * it in place (`learnSharedChrome`). Routes running later reuse them like the
+	 * entrypoint evidence. Shared by every route of the profile.
+	 */
+	learned?: SharedChromeEvidence[];
 }
 
 /** Recorded per route and profile on the manifest. */
@@ -174,11 +192,13 @@ export interface SharedChromeRouteDecision {
 	nestedMatches?: number;
 	/** Entrypoint states whose rebased selectors named other nodes here; probed in place. */
 	rejectedStates?: number;
+	/** The route whose learned chrome evidence was reused, when not the entrypoint's. */
+	learnedFrom?: string;
 }
 
 export interface SharedChromeSummary {
 	entrypoint: string;
-	profiles: Record< string, { status: SharedChromeProbe['status']; reason?: string; landmarks: number; states: number; captured: number; unanchored: number; durationMs: number } >;
+	profiles: Record< string, { status: SharedChromeProbe['status']; reason?: string; landmarks: number; states: number; captured: number; unanchored: number; durationMs: number; learned?: number } >;
 	routes: { checked: number; reused: number; probedInPlace: Array< { url: string; profile: string; reason: string } > };
 }
 
@@ -464,14 +484,30 @@ export async function readChromeLandmarks( page: Page, mark = false, builderRoot
 			// in the page grid is the template's, not the chrome's.
 			const rendersText = ( element: Element ) => /^(INPUT|TEXTAREA|SELECT|LI)$/.test( element.tagName )
 				|| Array.from( element.childNodes ).some( child => child.nodeType === Node.TEXT_NODE && ( child.textContent ?? '' ).trim() );
+			// An absolutely positioned element whose containing block lies outside
+			// the root (a visually hidden label at its static position) resolves its
+			// insets against the page around the chrome, not the chrome itself.
+			const insetsFromPage = ( element: Element, own: CSSStyleDeclaration ) => {
+				if ( element === root || own.position !== 'absolute' ) return false;
+				for ( let node = element.parentElement; node; node = node.parentElement ) {
+					const style = getComputedStyle( node );
+					if ( style.position !== 'static' || style.transform !== 'none' || style.translate !== 'none' || style.rotate !== 'none' || style.scale !== 'none'
+						|| style.perspective !== 'none' || style.filter !== 'none' || style.backdropFilter !== 'none' || style.containerType !== 'normal'
+						|| /layout|paint|strict|content/.test( style.contain ) || /transform|perspective|filter/.test( style.willChange ) ) return false;
+					if ( node === root ) return true;
+				}
+				return true;
+			};
 			const styleOf = ( element: Element ) => {
 				const parts: string[] = [];
+				const own = getComputedStyle( element );
 				const ignored = new Set( [
 					...( element === root ? [ 'grid-row-start', 'grid-row-end', 'grid-column-start', 'grid-column-end' ] : [] ),
 					...( rendersText( element ) ? [] : [ 'font-family' ] ),
+					...( insetsFromPage( element, own ) ? [ 'top', 'right', 'bottom', 'left' ] : [] ),
 				] );
 				for ( const pseudo of [ null, '::before', '::after' ] ) {
-					const style = getComputedStyle( element, pseudo );
+					const style = pseudo ? getComputedStyle( element, pseudo ) : own;
 					if ( pseudo && [ 'none', 'normal' ].includes( style.content ) ) continue;
 					parts.push( pseudo ?? '' );
 					for ( const name of properties ) {
@@ -621,37 +657,47 @@ export interface ChromeReuse {
 	 * probes their phone-only controls in place (see `probePhoneOnlyChrome`).
 	 */
 	unmatchedRoots?: string[];
+	/**
+	 * This route's resting chrome, read in full before any probe, when some of
+	 * it matches no evidence: its probe results can then be learned for later
+	 * routes (`learnSharedChrome`).
+	 */
+	learn?: ChromeLandmark[];
 }
 
 /**
- * Match this route's chrome to the entrypoint's, rebase and validate the
- * entrypoint's states, and mark the reused triggers on the page.
+ * Match this route's chrome to the entrypoint's (or a learned variant's),
+ * rebase and validate that evidence's states, and mark the reused triggers on
+ * the page. With `learn`, chrome no evidence matches is read in full for
+ * `learnSharedChrome`.
  */
-export async function reuseSharedChrome( page: Page, probe: SharedChromeProbe ): Promise< ChromeReuse > {
-	const evidence = probe.evidence;
-	if ( probe.status !== 'captured' || ! evidence ) {
+export async function reuseSharedChrome( page: Page, probe: SharedChromeProbe, { learn: learning = false }: { learn?: boolean } = {} ): Promise< ChromeReuse > {
+	const entrypoint = probe.evidence;
+	if ( probe.status !== 'captured' || ! entrypoint ) {
 		return { decision: { chromeReused: false, reason: probe.status === 'skipped' ? probe.reason ?? 'the entrypoint chrome was not probed' : `the entrypoint chrome probe failed: ${ probe.reason ?? 'no evidence' }` }, states: [] };
 	}
-	if ( ! evidence.landmarks.length ) return { decision: { chromeReused: false, reason: 'the entrypoint has no chrome landmarks' }, states: [] };
-	const landmarks = await readChromeLandmarks( page, false, evidence.landmarks.flatMap( landmark => landmark.identity ? [ landmark.identity ] : [] ), evidence.landmarks );
-	const counts = { route: landmarks.length, entrypoint: evidence.landmarks.length };
+	if ( ! entrypoint.landmarks.length ) return { decision: { chromeReused: false, reason: 'the entrypoint has no chrome landmarks' }, states: [] };
+	const sources = [ entrypoint, ...( probe.learned ?? [] ) ];
+	const builderRoots = [ ...new Set( sources.flatMap( source => source.landmarks.flatMap( landmark => landmark.identity ? [ landmark.identity ] : [] ) ) ) ];
+	const landmarks = await readChromeLandmarks( page, false, builderRoots, sources.flatMap( source => source.landmarks ) );
+	// The evidence matching the most of this route's roots is reused; the
+	// entrypoint's wins a tie.
+	const matches = sources.map( source => matchChrome( source, landmarks ) );
+	const best = matches.reduce( ( found, match, index ) => match.matched.size > matches[ found ]!.matched.size ? index : found, 0 );
+	const evidence = sources[ best ]!, { matched, used } = matches[ best ]!;
+	const counts = { route: landmarks.length, entrypoint: entrypoint.landmarks.length };
 	if ( ! landmarks.length ) return { decision: { chromeReused: false, reason: 'this route has no chrome landmarks', landmarks: { ...counts, matched: 0 } }, states: [] };
-	// The n-th occurrence of a signature pairs with its n-th occurrence here.
-	const matched = new Map< number, number >();
-	const used = new Set< number >();
-	evidence.landmarks.forEach( ( landmark, index ) => {
-		const found = landmarks.findIndex( ( candidate, position ) => ! used.has( position ) && sameChrome( candidate, landmark ) );
-		if ( found < 0 ) return;
-		used.add( found );
-		matched.set( index, found );
-	} );
 	const unmatchedRoots = landmarks.filter( ( root, position ) => ! used.has( position ) && root.parent === undefined ).map( root => root.prefixes[ 1 ] );
+	// Chrome no evidence covers is probed in place here; this route's resting
+	// chrome is read in full now, before any probe, so that probe can teach
+	// later routes (see `learnSharedChrome`).
+	const learn = learning && unmatchedRoots.length && ( probe.learned?.length ?? 0 ) < MAX_LEARNED_CHROME ? await readChromeLandmarks( page, false, builderRoots ) : undefined;
 	const nestedMatches = [ ...used ].filter( position => {
 		const parent = landmarks[ position ]!.parent;
 		return parent !== undefined && ! used.has( parent );
 	} ).length;
 	if ( ! matched.size ) {
-		return { unmatchedRoots, decision: { chromeReused: false, reason: `no chrome landmark matches the entrypoint's (${ landmarks.map( item => item.label ).join( ', ' ) } here; ${ evidence.landmarks.map( item => item.label ).join( ', ' ) } there)`, landmarks: { ...counts, matched: 0 } }, states: [] };
+		return { unmatchedRoots, ...( learn ? { learn } : {} ), decision: { chromeReused: false, reason: `no chrome landmark matches the entrypoint's (${ landmarks.map( item => item.label ).join( ', ' ) } here; ${ entrypoint.landmarks.map( item => item.label ).join( ', ' ) } there)${ probe.learned?.length ? ` or any of ${ probe.learned.length } learned chrome variants` : '' }`, landmarks: { ...counts, matched: 0 } }, states: [] };
 	}
 	const eligible = evidence.states.filter( item =>
 		matched.has( item.root ) && item.anchors.every( anchor => typeof anchor !== 'object' || 'outside' in anchor || matched.has( anchor.root ) )
@@ -687,28 +733,73 @@ export async function reuseSharedChrome( page: Page, probe: SharedChromeProbe ):
 		// Invalid replay evidence still gets a fresh probe, as before.
 		for ( const selector of rejected ) document.querySelector( selector )?.removeAttribute( attribute );
 	}, {
-		// Incomplete entrypoint evidence cannot authorize skipping unrecorded controls.
-		roots: evidence.unanchored || eligible.length !== reused.length ? reused.map( candidate => candidate.state.trigger.selector ) : [ ...used ].map( index => landmarks[ index ]!.prefixes[ 1 ] ),
+		// Incomplete evidence cannot authorize skipping unrecorded controls.
+		roots: evidence.learned || evidence.unanchored || eligible.length !== reused.length ? reused.map( candidate => candidate.state.trigger.selector ) : [ ...used ].map( index => landmarks[ index ]!.prefixes[ 1 ] ),
 		rejected: candidates.filter( candidate => ! reused.includes( candidate ) ).map( candidate => candidate.state.trigger.selector ),
 		attribute: CHROME_REUSED_ATTRIBUTE,
 	} );
 	const rejected = eligible.length - reused.length;
 	const states = reused.filter( candidate => candidate.state.status === 'captured' || candidate.state.status === 'observed-incomplete' )
 		.map( candidate => ( { ...candidate.state, reusedFrom: evidence.url } ) );
+	const source = evidence === entrypoint ? 'the entrypoint' : `the chrome learned on ${ evidence.url }`;
 	return {
 		decision: {
 			chromeReused: true,
-			reason: `${ matched.size } of ${ landmarks.length } chrome landmarks match the entrypoint; ${ states.length } entrypoint states reused; ${ nestedMatches } nested landmarks matched; ${ reused.length } outcomes reused${ rejected ? `, ${ rejected } probed in place because their selectors name other nodes here or their current-route marking cannot be moved` : '' }`,
+			reason: `${ matched.size } of ${ landmarks.length } chrome landmarks match ${ source }; ${ states.length } ${ evidence === entrypoint ? 'entrypoint' : 'learned' } states reused; ${ nestedMatches } nested landmarks matched; ${ reused.length } outcomes reused${ rejected ? `, ${ rejected } probed in place because their selectors name other nodes here or their current-route marking cannot be moved` : '' }`,
 			landmarks: { ...counts, matched: matched.size },
 			reusedStates: states.length,
 			reusedOutcomes: reused.length,
 			nestedMatches,
 			...( rejected ? { rejectedStates: rejected } : {} ),
+			...( evidence === entrypoint ? {} : { learnedFrom: evidence.url } ),
 		},
 		states,
 		...( matched.size ? { skip: `[${ CHROME_REUSED_ATTRIBUTE }]` } : {} ),
 		...( unmatchedRoots.length ? { unmatchedRoots } : {} ),
+		...( learn ? { learn } : {} ),
 	};
+}
+
+/** Pair each evidence landmark with the route landmark it matches: the n-th occurrence of a signature with its n-th occurrence here. */
+function matchChrome( evidence: SharedChromeEvidence, landmarks: readonly ChromeLandmark[] ): { matched: Map< number, number >; used: Set< number > } {
+	const matched = new Map< number, number >();
+	const used = new Set< number >();
+	evidence.landmarks.forEach( ( landmark, index ) => {
+		const found = landmarks.findIndex( ( candidate, position ) => ! used.has( position ) && sameChrome( candidate, landmark ) );
+		if ( found < 0 ) return;
+		used.add( found );
+		matched.set( index, found );
+	} );
+	return { matched, used };
+}
+
+/** Learned chrome variants kept per profile: each is one more candidate every route compares. */
+const MAX_LEARNED_CHROME = 8;
+
+/**
+ * Keep what a route probed in its own chrome — chrome no earlier evidence
+ * matched — for later routes. `landmarks` are the route's resting chrome,
+ * read before any probe (`ChromeReuse.learn`); `states` are the route's
+ * completed dialog probe results, including any it reused. Only outcomes a
+ * later route can replay are kept: dialog states whose trigger is inside a
+ * chrome root, and not a failed click. A later route reuses each recorded
+ * trigger, and still probes every other control. Nothing is learned when the
+ * route's chrome already matches a learned variant.
+ */
+export async function learnSharedChrome( page: Page, probe: SharedChromeProbe, url: string, landmarks: readonly ChromeLandmark[], states: readonly CapturedDialogInteraction[] ): Promise< SharedChromeEvidence | undefined > {
+	const learned = ( probe.learned ??= [] );
+	if ( learned.length >= MAX_LEARNED_CHROME || ! landmarks.length ) return undefined;
+	const known = ( evidence: SharedChromeEvidence ) => evidence.landmarks.length === landmarks.length && matchChrome( evidence, landmarks ).matched.size === landmarks.length;
+	if ( learned.some( known ) ) return undefined;
+	const replayable = states.filter( state => ( state.kind ?? 'dialog' ) === 'dialog' && state.status !== 'click-failed' )
+		.map( ( { reusedFrom: _reusedFrom, ...state } ) => state as CapturedDialogInteraction );
+	const anchored = await anchorChromeStates( page, landmarks, replayable );
+	if ( ! anchored.states.length ) return undefined;
+	// Another route of this variant may have finished first.
+	if ( learned.length >= MAX_LEARNED_CHROME || learned.some( known ) ) return undefined;
+	const evidence: SharedChromeEvidence = { url, landmarks: [ ...landmarks ], states: anchored.states, unanchored: 0, learned: true };
+	learned.push( evidence );
+	return evidence;
 }
 
 export function summarizeSharedChrome(
@@ -726,6 +817,7 @@ export function summarizeSharedChrome(
 			captured: probe.evidence?.states.filter( item => item.state.status === 'captured' ).length ?? 0,
 			unanchored: probe.evidence?.unanchored ?? 0,
 			durationMs: probe.durationMs,
+			...( probe.learned?.length ? { learned: probe.learned.length } : {} ),
 		} ] ) ),
 		routes: {
 			checked: decisions.length,
