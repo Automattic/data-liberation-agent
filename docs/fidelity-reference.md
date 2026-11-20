@@ -13,7 +13,7 @@ critical path. Capture still declares the cells, records each sampled route's
 source motion (painted, latent and rotating tokens), browser profile, external
 boundary and runtime errors, the cleanup policy, route scope, sample and trusted
 origins, and extracts entrypoint navigation landmarks. It writes them to
-`reference-stage.json` (`data-liberation/reference-stage/v1`), exports `website/`,
+`reference-stage.json` (`blocks-engine-capture/reference-stage/v1`), exports `website/`,
 and reports `reference: { status: 'pending' }` in the result and receipt. Memory
 admission reserves no reference contexts. No `fidelity-reference.json` is written.
 

@@ -18,7 +18,7 @@ export async function runReferenceStage( directory: string, dependencies: { find
 
 async function runStage( directory: string, state: ReferenceHandoff, dependencies: { findAdapter?: typeof findAdapter } ): Promise<{ status: 'pending' | 'complete'; path: string }> {
 	const statePath = join( directory, 'reference-stage.json' );
-	if ( state.schema !== 'data-liberation/reference-stage/v1' || ! state.receipt ) throw new IntegrityError( 'Invalid reference stage handoff' );
+	if ( state.schema !== 'blocks-engine-capture/reference-stage/v1' || ! state.receipt ) throw new IntegrityError( 'Invalid reference stage handoff' );
 	readReferenceArtifact( directory, state.receipt );
 	if ( state.status === 'complete' ) return { status: 'complete', path: join( directory, 'fidelity-reference.json' ) };
 	const adapter = state.adapterId ? ( dependencies.findAdapter ?? findAdapter )( state.adapterId ) : undefined;

@@ -26,7 +26,7 @@ const MEDIA_READY_TIMEOUT_MS = 10_000;
 const MEDIA_STREAM_TIMEOUT_MS = 60_000;
 
 export interface ReferenceHandoff {
-	schema: 'data-liberation/reference-stage/v1';
+	schema: 'blocks-engine-capture/reference-stage/v1';
 	status: 'pending' | 'complete';
 	captureId: string;
 	sourceUrl: string;
@@ -128,7 +128,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 	const jobs: ReferenceHandoff['jobs'] = options.handoff?.jobs ?? [];
 	const checkpoint = ( receipt?: ReferenceArtifact ): void => {
 		const state: ReferenceHandoff = {
-			schema: 'data-liberation/reference-stage/v1', status: 'pending', captureId, sourceUrl, sourceUrls,
+			schema: 'blocks-engine-capture/reference-stage/v1', status: 'pending', captureId, sourceUrl, sourceUrls,
 			adapterId: options.adapterId, trustedOrigins: options.trustedOrigins, options: { routeScope: options.routeScope, publicUrlsOnly: options.publicUrlsOnly,
 				cleanupPolicy: options.cleanupPolicy, removeSelectors: options.removeSelectors, clientErrorShellSelectors: options.clientErrorShellSelectors, referenceSample: sampleLimit },
 			sampledUrls: [ ...sampledUrls ], cells: [ ...cells.values() ], jobs, entries, receipt: receipt ?? options.handoff?.receipt,
