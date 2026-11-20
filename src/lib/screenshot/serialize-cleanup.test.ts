@@ -4,6 +4,26 @@ import { it } from '../../../test/browser.js';
 import { capturePageHtml } from './screenshotter.js';
 import { applySourceCleanup, cleanupPolicy, sweepSourceCleanup } from '../source-cleanup.js';
 
+it( 'keeps head metadata in the head when a script inserted flow content there', async ({ newPage }) => {
+	const page = await newPage();
+	await page.setContent( '<html><head><base href="https://fixture.example/"><meta name="description" content="Member"><title>Member title</title></head><body><main>Content</main></body></html>' );
+	await page.evaluate( () => {
+		const frame = document.createElement( 'iframe' );
+		frame.id = 'runtime-frame';
+		document.head.prepend( frame );
+	} );
+	const html = await capturePageHtml( page );
+	// Repair is serialization-only: do not reparent the source runtime's nodes.
+	expect( await page.locator( 'head > iframe' ).count() ).toBe( 1 );
+	const copy = await newPage();
+	await copy.setContent( html );
+	expect( await copy.locator( 'head > title' ).textContent() ).toBe( 'Member title' );
+	expect( await copy.locator( 'head > meta[name="description"]' ).getAttribute( 'content' ) ).toBe( 'Member' );
+	expect( await copy.locator( 'head > base' ).getAttribute( 'href' ) ).toBe( 'https://fixture.example/' );
+	expect( await copy.locator( 'body > iframe#runtime-frame' ).count() ).toBe( 1 );
+	expect( await copy.locator( 'body > main' ).textContent() ).toBe( 'Content' );
+}, 30_000 );
+
 // A source widget can mount after the pre-serialization sweep, while capture
 // still waits on the document (here a pending video source). Once the cleanup
 // observer has spent its budget, only a sweep inside the serializing task

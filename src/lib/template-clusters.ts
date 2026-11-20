@@ -726,6 +726,30 @@ function replaceProcessedNode( repNode: Element, memberNode: Element ): void {
 }
 
 /**
+ * Only capture-fitted affine lengths tolerate measurement noise. Everything
+ * around them (selectors, properties, media bounds, order) stays exact. The
+ * difference of two affine fits reaches its maximum at a sweep endpoint, so
+ * checking 320–1920px covers every default sampled width, not just one pose.
+ * Unknown expressions deliberately fall back to exact comparison.
+ */
+function equivalentFluidStyles( left: string[], right: string[] ): boolean {
+	if ( left.length !== right.length ) return false;
+	const affine = /calc\(\s*([+-]?(?:\d*\.)?\d+)vw\s*([+-])\s*((?:\d*\.)?\d+)px\s*\)/g;
+	return left.every( ( text, index ) => {
+		const fits = ( css: string ) => [ ...css.matchAll( affine ) ].map( match => ( {
+			slope: Number( match[ 1 ] ) / 100,
+			offset: Number( match[ 3 ] ) * ( match[ 2 ] === '-' ? -1 : 1 ),
+		} ) );
+		const other = right[ index ]!;
+		const a = fits( text );
+		const b = fits( other );
+		return text.replace( affine, '<affine-length>' ) === other.replace( affine, '<affine-length>' ) &&
+			a.length === b.length && a.every( ( fit, i ) => [ 320, 1920 ].every( width =>
+				Math.abs( ( fit.slope - b[ i ]!.slope ) * width + fit.offset - b[ i ]!.offset ) <= 1 ) );
+	} );
+}
+
+/**
  * Compare a derived member against its real browser capture, on the six
  * acceptance checks of #784 phase 1: text, links, images, skeleton, fluid
  * rules and head styles. Runs offline, no browser: the checks diff the two
@@ -788,7 +812,9 @@ export function compareDerivedWithCapture( input: {
 	// not written by the capture, and with nothing differing on the other side.
 	const runtimeOnly = ( block: TemplateStyleBlock ): boolean => !! serverStyleTexts &&
 		! serverStyleTexts.has( styleText( block ) ) && ! Object.keys( block.attributes ).some( name => name.startsWith( 'data-blocks-engine-capture' ) );
-	const inlineStyles = ( $: cheerio.CheerioAPI ) => styleBlocks( $ ).map( block => ( { text: styleText( block ), runtimeOnly: runtimeOnly( block ) } ) );
+	const isFluidStyle = ( block: TemplateStyleBlock ): boolean => 'data-blocks-engine-capture-fluid-rules' in block.attributes;
+	const fluidStyles = ( $: cheerio.CheerioAPI ): string[] => styleBlocks( $ ).filter( isFluidStyle ).map( block => normalizedWhitespace( block.text ) );
+	const inlineStyles = ( $: cheerio.CheerioAPI ) => styleBlocks( $ ).filter( block => ! isFluidStyle( block ) ).map( block => ( { text: styleText( block ), runtimeOnly: runtimeOnly( block ) } ) );
 	const [ derivedInline, realInline ] = [ inlineStyles( derived ), inlineStyles( real ) ];
 	const unmatched = ( side: typeof derivedInline, other: typeof derivedInline ) => {
 		const texts = new Set( other.map( style => style.text ) );
@@ -818,7 +844,8 @@ export function compareDerivedWithCapture( input: {
 		links: collect( derived, 'a[href]', 'href' ).join( '\n' ) === collect( real, 'a[href]', 'href' ).join( '\n' ),
 		images: images( derived ) === images( real ),
 		skeleton: skeleton( derived ) === skeleton( real ),
-		headStyles: styles( derived, derivedInline ).join( '\n' ) === styles( real, realInline ).join( '\n' ),
+		headStyles: styles( derived, derivedInline ).join( '\n' ) === styles( real, realInline ).join( '\n' ) &&
+			equivalentFluidStyles( fluidStyles( derived ), fluidStyles( real ) ),
 		fluidRules: fluidSheets( derived ).join( '\n' ) === fluidSheets( real ).join( '\n' ),
 	};
 	return { equal: Object.values( checks ).every( value => value ), checks };
