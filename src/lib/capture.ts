@@ -564,7 +564,7 @@ async function runCaptureWebsite(
 		reason: `Route skipped before capture: its server-HTML rel=canonical resolves to ${ documentRequestUrl( canonicalUrl ) }, another inventory route`,
 		unit: 'route' as const,
 	} ) );
-	const routeSelection = options.routeSelection ?? ( templateClusters ? 'template-coverage' : undefined );
+	const routeSelection = options.routeSelection ?? ( templateClusters || adapter.templateIdentity ? 'template-coverage' : undefined );
 	const templateGrouping = routeSelection === 'template-coverage'
 		? await groupInventoryTemplates( { contentEntries, sourceUrl, urls: prunedInventoryUrls, routeScope, styleNormalization: adapter.templateStyleNormalization, templateIdentity: adapter.templateIdentity, runtimeStateClasses: adapter.runtimeStateClasses, outputDir, timeBudgetMs, wholeInventory: options.routeLimit === 'all' || templateClusters, governors: sourceGovernors } )
 		: undefined;
@@ -716,9 +716,9 @@ async function runCaptureWebsite(
 			prioritizePendingRoutes: ( pending: string[] ) => {
 				if ( templateClusters ) return rankTemplateClusterRoutes( pending, sourceUrl, clusterRankingGroups, navigationTargets, contentSource?.termName.bind( contentSource ) );
 				const pendingRoutes = new Set( pending );
-				const promoted = prunedInventoryUrls.filter( url => pendingRoutes.has( url ) && navigationTargets.has( normalizedUrl( url ) ) );
+				const promoted = [ ...prunedInventoryUrls.filter( url => navigationTargets.has( normalizedUrl( url ) ) ), ...( templateGrouping?.representatives ?? [] ) ].filter( url => pendingRoutes.has( url ) );
 				const promotedRoutes = new Set( promoted );
-				return [ ...promoted, ...pending.filter( url => ! promotedRoutes.has( url ) ) ];
+				return [ ...promotedRoutes, ...pending.filter( url => ! promotedRoutes.has( url ) ) ];
 			},
 		} : {} ),
 		// Memory admission reserves for what a route opens: bounded samples

@@ -910,6 +910,21 @@ describe( 'captureWebsite route selection', () => {
 		expect( JSON.parse( readFileSync( result.captureReceiptPath, 'utf8' ) ).templateClustersDecision ).toEqual( { enabled: false, source: 'explicit' } );
 	} );
 
+	it( 'uses BigCommerce template declarations for a small default route budget', async () => {
+		const { bigcommerceAdapter } = await import( '../adapters/bigcommerce/index.js' );
+		const fixture = JSON.parse( readFileSync( new URL( '../adapters/bigcommerce/fixture.json', import.meta.url ), 'utf8' ) );
+		vi.mocked( safeFetch ).mockImplementation( async ( url: string ) => ( {
+			finalUrl: url, status: 200, headers: new Headers( { 'content-type': 'text/html' } ),
+			body: Buffer.from( fixture.documents[ new URL( url ).pathname ] ?? '' ),
+		} ) );
+		await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 4 }, {
+			findAdapter: () => ( { ...bigcommerceAdapter, discover: async () => ( {
+				urls: [ '/sample/', '/another/', '/catalog/', '/more/', '/about/', '/cart.php', '/login.php?action=login' ].map( path => ( { url: new URL( path, sourceUrl ).href } ) ),
+			} ) } ),
+		} );
+		expect( capturedUrls() ).toEqual( [ sourceUrl, `${ sourceUrl }about/`, `${ sourceUrl }sample/`, `${ sourceUrl }catalog/` ] );
+	} );
+
 	it( 'spends the budget on one route per template first with template-coverage', async () => {
 		serveHtml();
 		const result = await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 6, routeSelection: 'template-coverage' }, adapter() );
