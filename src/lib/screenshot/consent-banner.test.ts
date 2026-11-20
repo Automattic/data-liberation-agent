@@ -163,6 +163,26 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads a painted panel inside a transp
   }
 });
 
+// One browser pass (~1 second): Termly uses inline role=button spans as links.
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('keeps inline controls in consent prose but excludes standalone actions', async ({ newPage }) => {
+  const page = await newPage({ viewport: { width: 1440, height: 900 } });
+  await page.setContent(`<style>
+    #termly-cookie-banner { position:fixed;bottom:0;left:0;right:0;padding:20px;background:white }
+  </style><main><h1>Page title</h1><p>${'Ordinary page copy. '.repeat(60)}</p></main>
+  <div id="termly-cookie-banner">
+    <div data-termly-part="banner-message">We use cookies as described in our <span role="button" tabindex="0" aria-haspopup="dialog" data-testid="cookie-policy-link">Cookie Policy</span>. You can change your cookie settings at any time by clicking “<span role="button" tabindex="0" aria-haspopup="dialog" data-testid="preferences-link">Preferences</span>.”
+      <span role="button" style="display:block">Manage cookies</span>
+    </div>
+    <p>Read <button style="display:inline">more details</button>.</p>
+    <div data-termly-part="banner-actions"><button data-tid="banner-accept" onclick="this.closest('#termly-cookie-banner').remove()">Accept</button><button onclick="this.closest('#termly-cookie-banner').remove()">Reject</button><span role="button">Standalone settings</span></div>
+  </div>`);
+  const dismissed = await dismissOverlays(page);
+  const banner = dismissed.find(item => item.consentBanner)?.consentBanner;
+  expect(banner?.text).toBe('We use cookies as described in our Cookie Policy. You can change your cookie settings at any time by clicking “Preferences.” Read more details.');
+  expect(banner?.accept_label).toBe('Accept');
+  expect(banner?.reject_label).toBe('Reject');
+});
+
 // One Chromium session (~1 second), through the real readConsentBanner path.
 it.skipIf(process.env.SKIP_BROWSER_TESTS)('reads consent controls independently of their language and anchor fragments', async ({ newPage }) => {
   const { chromium } = await import('playwright');

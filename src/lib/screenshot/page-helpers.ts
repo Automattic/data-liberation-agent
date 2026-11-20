@@ -1619,8 +1619,8 @@ async function readConsentBanner(page: Page, target: OverlayTarget): Promise<imp
       ?? controls.find(node => node !== reject && node !== policy && !/close|dismiss|settings|preferences|manage/i.test(label(node)))
       ?? (controls.length === 0 ? links.find(node => node !== policy) : undefined);
     if (!accept || !label(accept)) return;
-    // Read rendered prose without mutating live DOM. Keep inline link labels so
-    // sentences remain whole; standalone block links are recorded separately.
+    // Read rendered prose without mutating live DOM. Keep inline link and
+    // in-prose control labels so sentences remain whole.
     const clone = root.cloneNode(true) as HTMLElement;
     const originals = Array.from(root.querySelectorAll<HTMLElement>('*'));
     const copies = Array.from(clone.querySelectorAll<HTMLElement>('*'));
@@ -1632,15 +1632,18 @@ async function readConsentBanner(page: Page, target: OverlayTarget): Promise<imp
     // A heading that leads the prose is the banner's title, with its own type.
     const heading = originals.find(node => node.matches('h1, h2, h3, h4, h5, h6, [role="heading"]') && visible(node)
       && !visuallyHidden(node) && !node.closest('button, [role="button"], a') && !!node.innerText.trim());
-    const prose = originals.filter(node => visible(node) && !visuallyHidden(node) && ownText(node) > 0
+    const proseCandidates = originals.filter(node => visible(node) && !visuallyHidden(node) && ownText(node) > 0
       && !heading?.contains(node) && !node.closest('button, [role="button"], input, label, a, script, style'))
-      .sort((a, b) => ownText(b) - ownText(a))[0];
+      .sort((a, b) => ownText(b) - ownText(a));
+    const prose = proseCandidates[0];
     const title = heading && prose && heading.compareDocumentPosition(prose) & Node.DOCUMENT_POSITION_FOLLOWING
       ? heading.innerText.replace(/\s+/g, ' ').trim() : undefined;
     for (let i = originals.length - 1; i >= 0; i--) {
       const node = originals[i];
       if (!visible(node) || visuallyHidden(node) || node === accept || node === reject || (title && node === heading)
-        || node.matches('button, [role="button"], input, label, script, style')) copies[i].remove();
+        || node.matches('input, label, script, style')) copies[i].remove();
+      else if (node.matches('button, [role="button"]')
+        && (!getComputedStyle(node).display.startsWith('inline') || !proseCandidates.some(parent => parent.contains(node)))) copies[i].remove();
       else if (node.matches('a') && !getComputedStyle(node).display.startsWith('inline')) copies[i].remove();
     }
     // textContent drops boundaries between block elements. Insert whitespace at
