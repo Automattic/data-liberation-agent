@@ -94,6 +94,19 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('does not treat a probe-exclu
 	}
 });
 
+// ~1 second: an unrelated booking form must not open a disposable probe document.
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('ignores an unrelated booking form beside a static grid', async ({ serve, newContext }) => {
+	const source = '<main><div class="grid"><article><a href="/a">A</a></article><article><a href="/b">B</a></article></div><section class="booking"><form><select><option>1</option><option>2</option><option>3</option></select><button type="submit">Send</button></form></section></main>';
+	const { server } = await serve((_request, response) => { response.setHeader('Content-Type', 'text/html'); response.end(source); });
+	const page = await (await newContext()).newPage();
+	await page.goto(`http://127.0.0.1:${(server.address() as { port: number }).port}/`);
+	const newProbe = vi.spyOn(page.context(), 'newPage');
+	const components = await captureCollections(page);
+	expect(components).toEqual([]);
+	expect(await collectionRegions(page)).toEqual([]);
+	expect(newProbe).not.toHaveBeenCalled();
+});
+
 // A consent dialog hidden in place after dismissal, and never rendered once consent is stored, is not a collection.
 it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('skips lists inside a dismissed consent dialog without waiting on them', async ({ serve, newContext }) => {
 	const source = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Consent collections</title><style>#consent{position:fixed;inset:auto 0 0 0;background:#fff;padding:1rem}</style></head><body>

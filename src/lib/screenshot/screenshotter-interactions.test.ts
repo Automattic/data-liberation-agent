@@ -30,6 +30,11 @@ vi.mock( './interaction-capture.js', async ( importOriginal ) => ( {
 	captureTriggeredDialogs: vi.fn(),
 } ) );
 
+// Collection discovery needs a real DOM (covered in collection-capture.test.ts).
+// Do not let its evaluate callback hit this fixture's design-token fallback:
+// a non-array result would abort shared-chrome probing before dialogs run.
+vi.mock( './collection-capture.js', () => ( { captureCollections: vi.fn().mockResolvedValue( [] ) } ) );
+
 // Typed search drives real inputs; this file is about dialog evidence.
 vi.mock( './typed-search-capture.js', () => ( { captureTypedSearchStates: vi.fn().mockResolvedValue( [] ) } ) );
 
