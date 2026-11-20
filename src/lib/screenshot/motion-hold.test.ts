@@ -68,10 +68,18 @@ const activeSlides = ( html: string ) => [ ...html.matchAll( /<blockquote class=
 
 describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )( 'source motion hold', () => {
 	// About one second: one page.
-	it( 'defers source timers, including ones source scripts register during the hold, and runs probe timers', async ( { newPage, serve } ) => {
+	it( 'defers source timers, including ones source scripts register during the hold, and runs probe timers and frames through page wrappers', async ( { newPage, serve } ) => {
 		const { origin } = await serve( ( _request, response ) => {
 			response.setHeader( 'content-type', 'text/html' );
-			response.end( '<!doctype html><script>window.rearm = () => setTimeout(() => { window.rearmed = true; }, 20);</script>' );
+			response.end( `<!doctype html><script>
+				const nativeTimeout = window.setTimeout;
+				window.setTimeout = function(...a) { return nativeTimeout.apply(this, a); };
+				const nativeFrame = window.requestAnimationFrame;
+				window.requestAnimationFrame = function(...a) { return nativeFrame.apply(this, a); };
+				window.addEventListener('message', event => {
+					if (event.data === 'rearm') setTimeout(() => { window.rearmed = true; }, 20);
+				});
+			</script>` );
 		} );
 		const page = await newPage();
 		await page.addInitScript( observeMotionHold );
@@ -88,11 +96,18 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		expect( await holdSourceMotion( page ) ).toBe( true );
 		const read = () => page.evaluate( () => { const state = window as unknown as { ticks: number; frames: number; late: boolean; rearmed: boolean }; return { ticks: state.ticks, frames: state.frames, late: state.late, rearmed: state.rearmed }; } );
 		const before = await read();
-		// A page script re-arming its timer during the hold is source work.
-		await page.evaluate( () => { ( window as unknown as { rearm: () => void } ).rearm(); } );
-		const probe = await page.evaluate( () => new Promise<boolean>( resolve => setTimeout( () => resolve( true ), 30 ) ) );
+		// Re-arm from a source task, not a direct probe call into a page function.
+		await page.evaluate( () => window.postMessage( 'rearm', '*' ) );
+		// Bound outside the page: on regression even the probe's timeout is held.
+		const probe = await Promise.race( [
+			page.evaluate( () => Promise.all( [
+				new Promise<boolean>( resolve => setTimeout( () => resolve( true ), 30 ) ),
+				new Promise<boolean>( resolve => requestAnimationFrame( () => requestAnimationFrame( () => resolve( true ) ) ) ),
+			] ) ),
+			new Promise<false>( resolve => setTimeout( () => resolve( false ), 1_000 ) ),
+		] );
 		await page.waitForTimeout( 300 );
-		expect( probe ).toBe( true );
+		expect( probe ).toEqual( [ true, true ] );
 		expect( await read() ).toEqual( before );
 		await releaseSourceMotion( page );
 		await page.waitForFunction( ( ticks: number ) => { const state = window as unknown as { ticks: number; late: boolean; rearmed: boolean }; return state.ticks > ticks && state.late && state.rearmed; }, before.ticks );
