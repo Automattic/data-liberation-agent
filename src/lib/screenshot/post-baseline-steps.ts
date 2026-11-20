@@ -2,7 +2,7 @@ import type { Page } from 'playwright';
 import { isIntegrityError } from '../failure-class.js';
 import { choiceGroupInteractionLosses } from '../static-dialogs.js';
 import { SkipSet, type CaptureStep } from './capture-steps.js';
-import { clearChromeMarks, reuseSharedChrome, type ChromeReuse, type SharedChromeProbe } from './chrome-reuse.js';
+import { clearChromeMarks, learnSharedChrome, reuseSharedChrome, type ChromeReuse, type SharedChromeProbe } from './chrome-reuse.js';
 import { captureCollections } from './collection-capture.js';
 import { exploreComponents, popupComponents, type ComponentBaseline, type CapturedComponent } from './component-states.js';
 import { probePhoneOnlyChrome } from './device-mode-probe.js';
@@ -28,6 +28,8 @@ export interface PostBaselineState {
 	interactions?: InteractionStatesReport;
 	selectableStates: CapturedDialogInteraction[];
 	selectableFailed?: boolean;
+	/** Chrome probes that completed on this route; only complete probes teach later routes. */
+	chromeProbed: { dialogs?: boolean; phoneOnly?: boolean };
 	/** Set once the report has been merged into the route; expiry never merges it twice. */
 	promoted?: boolean;
 	skip: SkipSet;
@@ -54,9 +56,10 @@ export interface PostBaselineContext {
 }
 
 export function createPostBaselineState(): PostBaselineState {
-	return { excluded: { diagnostics: [] }, collections: [], components: [], galleryStates: [], selectableStates: [], skip: SkipSet.of() };
+	return { excluded: { diagnostics: [] }, collections: [], components: [], galleryStates: [], selectableStates: [], chromeProbed: {}, skip: SkipSet.of() };
 }
 
+const phoneOnlyChrome = ( c: PostBaselineContext ) => Boolean( c.isDesktop && c.reflowPhoneViewport && c.state.chrome?.unmatchedRoots?.length );
 const collectionSkip = ( s: PostBaselineState ) => s.collections.flatMap( component => component.collection?.controls ?? [] ).join( ',' ) || undefined;
 const step = ( value: Omit<CaptureStep<PostBaselineContext>, 'onFailure'> ): CaptureStep<PostBaselineContext> => ( { onFailure: 'best-effort', ...value } );
 /** Expiry stops browser work but retains the non-browser partial projection. */
@@ -91,7 +94,7 @@ export const postBaselineSteps: CaptureStep<PostBaselineContext>[] = [
 		if ( states?.toggles.length ) c.entry.scrollStates = states;
 	} } ),
 	step( { id: 'shared-chrome', bound: 'probe-budget', when: c => Boolean( c.sharedChrome ), run: async c => {
-		c.state.chrome = await reuseSharedChrome( c.page, c.sharedChrome! );
+		c.state.chrome = await reuseSharedChrome( c.page, c.sharedChrome!, { learn: true } );
 		c.entry.sharedChrome = c.state.chrome?.decision;
 	}, partial: ( c, error ) => {
 		if ( error !== undefined ) {
@@ -129,13 +132,22 @@ export const postBaselineSteps: CaptureStep<PostBaselineContext>[] = [
 			? await captureTriggeredDialogs( c.page, c.url, { skip, navigationSkip: SkipSet.of( c.state.excluded.skip, c.componentBaseline.skip ).selector() ?? '' } )
 			: await captureTriggeredDialogs( c.page, c.url );
 		if ( c.state.chrome?.states.length ) c.state.interactions.states.push( ...c.state.chrome.states );
+		c.state.chromeProbed.dialogs = true;
 	}, partial: c => {
 		c.state.interactions = { schema: 'blocks-engine-capture/interaction-states/v2', sourceUrl: c.url, viewport: { width: c.viewport.width, height: c.viewport.height }, capturedAt: new Date().toISOString(), states: [] };
 		if ( c.state.chrome?.states.length ) c.state.interactions.states.push( ...c.state.chrome.states );
 	} } ),
-	step( { id: 'shared-chrome', bound: 'probe-budget', guard: 'read-only', when: c => Boolean( c.isDesktop && c.reflowPhoneViewport && c.state.chrome?.unmatchedRoots?.length ), run: async c => {
+	step( { id: 'shared-chrome', bound: 'probe-budget', guard: 'read-only', when: phoneOnlyChrome, run: async c => {
 		const states = await probePhoneOnlyChrome( c.page, c.url, c.state.chrome!.unmatchedRoots!, c.reflowPhoneViewport! );
 		c.state.interactions?.states.push( ...states );
+		c.state.chromeProbed.phoneOnly = true;
+	} } ),
+	// Chrome no earlier evidence covered was just probed in place: later routes
+	// that render the same chrome reuse those outcomes instead of probing it again.
+	step( { id: 'shared-chrome', bound: 'probe-budget', guard: 'read-only', when: c => Boolean(
+		c.sharedChrome && c.state.chrome?.learn && c.state.interactions && c.state.chromeProbed.dialogs && ( c.state.chromeProbed.phoneOnly || ! phoneOnlyChrome( c ) )
+	), run: async c => {
+		await learnSharedChrome( c.page, c.sharedChrome!, c.page.url(), c.state.chrome!.learn!, c.state.interactions!.states );
 	} } ),
 	step( { id: 'dialogs', continuePhase: true, run: async c => {
 		const s = c.state;
