@@ -38,6 +38,7 @@ export const TEMPLATE_CLUSTER_LIMITS = {
  * `metrics.gate`; the loss-ledger codes live in capture.ts.
  */
 export type GateCode =
+	| 'runtime_media_unmapped' /** Adapter could not resolve member runtime media. */
 	| 'cluster_key_mismatch' /** H_M's fingerprint is not the cluster's key. */
 	| 'slot_anchor_unmapped' /** a slot has no matching anchor in `D_R`. */
 	| 'runtime_slot_content' /** a slot carries scripts, handlers or embeds capture never observed. */
@@ -535,6 +536,13 @@ export function deriveMemberDocument( input: {
 	repProcessedHtml: string;
 	/** The member's server HTML (`H_M`), of the same cluster key. */
 	memberServerHtml: string;
+	/**
+	 * The server pair the cluster was grouped by, when the slot pair is another
+	 * identity's documents (a source serving the phone its own server document).
+	 * Cluster identity is decided on this pair; slots come from the slot pair.
+	 * Defaults to `repServerHtml` / `memberServerHtml`.
+	 */
+	clusterKeyDocuments?: { repServerHtml: string; memberServerHtml: string };
 	baseUrl: string;
 	/**
 	 * Set only when `memberServerHtml` was synthesized from the representative's
@@ -543,6 +551,10 @@ export function deriveMemberDocument( input: {
 	 * member's body markup never decides template identity.
 	 */
 	contentSlotSelector?: string;
+	/** Adapter-declared opaque runtime islands; captured markup is retained. */
+	runtimeWidgetSelectors?: readonly string[];
+	/** The same adapter canonicalization already applied to captured documents. */
+	canonicalizeHtml?: ( html: string ) => string;
 	/** Adapter-declared per-member head elements (never executable scripts). */
 	memberHeadSlotSelector?: string;
 	/** The adapter's template normalization, the same one that grouped the cluster. */
@@ -554,7 +566,29 @@ export function deriveMemberDocument( input: {
 	 * the server diff never sees; the member shows its own there (#1813).
 	 */
 	featuredImages?: { representative?: string; member?: string };
+	memberRenderedHtml?: string;
+	rewriteDerivedMedia?: import('../adapters/page-actions.js').LiberationHooks['rewriteDerivedMedia'];
 } ): MemberDerivation {
+	if ( input.canonicalizeHtml ) {
+		const canonicalize = input.canonicalizeHtml;
+		input = {
+			...input,
+			repServerHtml: canonicalize( input.repServerHtml ),
+			memberServerHtml: canonicalize( input.memberServerHtml ),
+			...( input.clusterKeyDocuments ? { clusterKeyDocuments: {
+				repServerHtml: canonicalize( input.clusterKeyDocuments.repServerHtml ),
+				memberServerHtml: canonicalize( input.clusterKeyDocuments.memberServerHtml ),
+			} } : {} ),
+		};
+	}
+	const keyDocuments = input.clusterKeyDocuments ?? { repServerHtml: input.repServerHtml, memberServerHtml: input.memberServerHtml };
+	const finish = ( html: string, stats: SlotStats, unobservedSlots: number ): MemberDerivation => {
+		const derivedHtml = withMemberFeaturedImage( html, input.featuredImages );
+		const rewritten = input.rewriteDerivedMedia ? input.rewriteDerivedMedia( { ...input, derivedHtml } ) : derivedHtml;
+		return rewritten === undefined
+			? { ok: false, gate: { code: 'runtime_media_unmapped', reason: 'member runtime media unavailable or unresolved in light render' } }
+			: { ok: true, html: rewritten, stats, unobservedSlots };
+	};
 	const keyOf = ( html: string ): string => {
 		let normalized = input.contentSlotSelector ? withEmptySlot( html, input.contentSlotSelector ) : html;
 		if ( input.memberHeadSlotSelector ) {
@@ -564,11 +598,11 @@ export function deriveMemberDocument( input: {
 		}
 		return templateFingerprint( normalized, input.baseUrl, input.styleNormalization, input.templateIdentity ).key;
 	};
-	const clusterKey = keyOf( input.memberServerHtml );
+	const clusterKey = keyOf( keyDocuments.memberServerHtml );
 	// Every member of a cluster compares against the same representative key.
 	const repIdentity = JSON.stringify( [ input.baseUrl, input.contentSlotSelector, input.memberHeadSlotSelector ] );
-	if ( representativeKey?.html !== input.repServerHtml || representativeKey.identity !== repIdentity || representativeKey.normalization !== input.styleNormalization || representativeKey.templateIdentity !== input.templateIdentity ) {
-		representativeKey = { html: input.repServerHtml, identity: repIdentity, normalization: input.styleNormalization, templateIdentity: input.templateIdentity, key: keyOf( input.repServerHtml ) };
+	if ( representativeKey?.html !== keyDocuments.repServerHtml || representativeKey.identity !== repIdentity || representativeKey.normalization !== input.styleNormalization || representativeKey.templateIdentity !== input.templateIdentity ) {
+		representativeKey = { html: keyDocuments.repServerHtml, identity: repIdentity, normalization: input.styleNormalization, templateIdentity: input.templateIdentity, key: keyOf( keyDocuments.repServerHtml ) };
 	}
 	const repKey = representativeKey.key;
 	// The member fetched while the cluster was grouped re-checks its key against
@@ -586,6 +620,42 @@ export function deriveMemberDocument( input: {
 	if ( ! repBody || ! memberBody || ! processedBody ) {
 		return { ok: false, gate: { code: 'slot_anchor_unmapped', reason: 'the representative or member document has no body element' } };
 	}
+	// Make declared islands identical opaque shells for the existing slot walk.
+	// Restore the captured island even when an enclosing subtree is transplanted.
+	// Anchor identity, not selector order, pairs islands across documents.
+	const islands: Array< { marker: string; html: string } > = [];
+	const selector = input.runtimeWidgetSelectors?.join( ',' );
+	if ( selector ) {
+		const counts = anchorValueCounts( repBody );
+		const roots = repServer( selector ).toArray().filter( isElement ).filter( node => ! repServer( node ).parents( selector ).length );
+		for ( const root of roots ) {
+			const anchor = slotAnchor( root, repBody, counts );
+			const captured = resolveAnchor( processedBody, anchor, node => repProcessed( node ).is( selector ) );
+			const memberRoot = resolveAnchor( memberBody, anchor, node => member( node ).is( selector ) );
+			if ( ! captured || ! repProcessed( captured ).is( selector ) || ! memberRoot || ! member( memberRoot ).is( selector ) ) {
+				return { ok: false, gate: { code: 'slot_anchor_unmapped', reason: `declared runtime island at ${ describeAnchor( anchor ) } has no matching captured or member anchor` } };
+			}
+			const marker = `<!--blocks-engine-runtime-island-${ islands.length }-->`;
+			if ( [ input.repServerHtml, input.repProcessedHtml, input.memberServerHtml ].some( html => html.includes( marker ) ) ) {
+				return { ok: false, gate: { code: 'slot_anchor_unmapped', reason: 'runtime island marker collides with source content' } };
+			}
+			islands.push( { marker, html: repProcessed.html( captured ) } );
+			const shell = repServer( root ).clone().empty().append( marker );
+			repProcessed( captured ).replaceWith( repServer.html( shell ) );
+			member( memberRoot ).replaceWith( repServer.html( shell ) );
+			repServer( root ).empty().append( marker );
+		}
+	}
+	const restoreIslands = (): string => {
+		for ( const { marker, html } of islands ) {
+			const walk = ( node: Element ): void => {
+				if ( node.children.some( child => child.type === 'comment' && `<!--${ child.data }-->` === marker ) ) repProcessed( node ).replaceWith( html );
+				else for ( const child of node.children ) if ( isElement( child ) ) walk( child );
+			};
+			walk( processedBody );
+		}
+		return repProcessed.html();
+	};
 	const anchorCounts = anchorValueCounts( repBody );
 	const mountGate = runtimeMountGate( repBody, memberBody, processedBody, anchorCounts );
 	if ( mountGate ) return { ok: false, gate: mountGate };
@@ -594,7 +664,7 @@ export function deriveMemberDocument( input: {
 	if ( ! slots.length ) {
 		// Nothing to transplant: the member is the representative byte for byte
 		// in content. That is a legitimate derived member with zero slots.
-		return { ok: true, html: withMemberFeaturedImage( input.repProcessedHtml, input.featuredImages ), stats: { slots: 0, subtreeSlots: 0 }, unobservedSlots: 0 };
+		return finish( islands.length ? restoreIslands() : input.repProcessedHtml, { slots: 0, subtreeSlots: 0 }, 0 );
 	}
 	const mounts = hydratedMounts( repBody, processedBody, anchorCounts );
 	const located = slots.map( slot => ( { slot, anchor: slotAnchor( slot.repNode, repBody, anchorCounts ) } ) );
@@ -683,7 +753,7 @@ export function deriveMemberDocument( input: {
 		else repProcessed( 'head' ).append( replacements.map( node => member.html( node ) ).join( '' ) );
 		originals.remove();
 	}
-	return { ok: true, html: withMemberFeaturedImage( repProcessed.html(), input.featuredImages ), stats: { slots: slots.length, subtreeSlots }, unobservedSlots };
+	return finish( restoreIslands(), { slots: slots.length, subtreeSlots }, unobservedSlots );
 }
 
 /**

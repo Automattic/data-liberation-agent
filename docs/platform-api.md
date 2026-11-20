@@ -139,6 +139,18 @@ registerPlatform({
 });
 ```
 
+`liberation.runtimeWidgetSelectors` optionally declares platform-owned runtime
+islands for template-cluster derivation. Matching server islands must map to both
+the representative capture and member document through the existing slot anchors.
+Their contents are opaque to the slot walk; derived members retain captured
+markup even inside a replaced subtree. Declare only runtime-owned regions, never
+authored content. Undeclared changes, fingerprints and real-member verification
+remain strict. In particular, differing captured widget counts can still fail
+verification: this hook is not permission to ship another member's numbers.
+Derivation also applies the adapter's existing `canonicalizeHtml` to both server
+documents before comparing and mapping them, so capture-normalized control IDs
+have the same identity on both sides.
+
 - `registeredPlatforms()` — all platforms, registration order.
 - `findPlatform(id)` — exact-id lookup, never falls back.
 - `resolvePlatform(id)` — exact match, else the generic fallback.
