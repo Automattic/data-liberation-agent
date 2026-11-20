@@ -13,9 +13,11 @@
  * registered before the hold do not run: timeouts and frames are deferred until
  * release, interval ticks are skipped. Callbacks the source's own scripts
  * register during the hold (a component re-arming its autoplay interval after a
- * re-render or a mouseleave) are held too: a registration whose call stack runs
- * through a page script URL is source work. Probe code awaiting its own timer
- * has no such frame and runs normally. The source's state is never rewritten;
+ * re-render or a mouseleave) are held too: a registration whose outermost call
+ * stack frame carries a page script URL is source work. The full, unbounded
+ * stack is read; probe evaluations and init scripts have anonymous outermost
+ * frames and run normally, even through page-script pass-through wrappers.
+ * The source's state is never rewritten;
  * its clock is paused. In-flight CSS transitions are settled before a held
  * document is read or screenshotted, so a slide fading in paints its end state.
  *
@@ -85,14 +87,17 @@ export function observeMotionHold(): void {
 	// 0 while running; otherwise callbacks registered before this sequence are held.
 	let heldFrom = 0;
 	const held = ( registered: number ) => heldFrom !== 0 && registered < heldFrom;
-	// Page scripts carry their URL in stack frames; probe code evaluated through
-	// DevTools and init scripts are anonymous.
-	const sourceFrame = /^\s*at .*\b(?:https?|file):\/\//m;
+	// Only the outermost frame identifies the caller: page-script wrappers may
+	// sit between our wrapper and an anonymous DevTools evaluation or init script.
+	const sourceFrame = /^\s*at .*\b(?:https?|file):\/\//;
 	const fromSource = (): boolean => {
+		const previousLimit = NativeError.stackTraceLimit;
 		try {
+			NativeError.stackTraceLimit = Infinity;
 			const stack: unknown = new NativeError().stack;
-			return typeof stack === 'string' && sourceFrame.test( stack );
+			return typeof stack === 'string' && sourceFrame.test( stack.trimEnd().split( '\n' ).at( -1 ) ?? '' );
 		} catch { return false; }
+		finally { NativeError.stackTraceLimit = previousLimit; }
 	};
 	// A source registration during a hold is stamped as pre-existing, so it is held.
 	const stamp = () => heldFrom !== 0 && fromSource() ? 0 : ++sequence;
