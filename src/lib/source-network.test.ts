@@ -67,6 +67,51 @@ try {
 `;
 
 describe( 'Node source connection budget', () => {
+	it('keeps mixed browser/HTTP traffic below a learned ceiling and stops on a forced block', async () => {
+		const governorUrl = new URL('./source-request-governor.ts', import.meta.url).href;
+		const { stdout } = await child(`
+import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
+import { SourceRequestGovernor } from ${JSON.stringify(governorUrl)};
+let throttles = 0;
+let forceBlock = false;
+const arrivals = [];
+const server = createServer((req, res) => {
+  const now = Date.now();
+  arrivals.push(now);
+  const recent = arrivals.filter(time => now - time < 1000).length;
+  if (forceBlock || throttles >= 2) { res.writeHead(403); res.end(); }
+  else if (recent > 4) { throttles++; res.writeHead(429, { 'retry-after': '1' }); res.end(); }
+  else res.end('ok');
+});
+server.listen(0, '127.0.0.1');
+await once(server, 'listening');
+const origin = 'http://127.0.0.1:' + server.address().port;
+const governor = new SourceRequestGovernor(origin, { recoveryStep: 1 });
+try {
+  for (let i = 0; i < 5; i++) await governor.run(() => fetch(origin + '/' + i), { maxAttempts: 1 });
+  const ceiling = governor.stats().learnedRateCeiling;
+  assert.equal(ceiling, 2.5);
+  const start = arrivals.length;
+  await Promise.all(Array.from({length: 8}, (_, i) => governor.run(() => fetch(origin + '/next-' + i), { browser: i % 2 === 0 })));
+  assert.equal(throttles, 1);
+  const paced = arrivals.slice(start);
+  for (let i = 1; i < paced.length; i++) assert.ok(paced[i] - paced[i - 1] >= 1000 / ceiling - 15);
+  forceBlock = true;
+  await governor.run(() => fetch(origin + '/forced'));
+  assert.equal(governor.stats().stopReason, 'source_blocked_client');
+  const count = arrivals.length;
+  await assert.rejects(governor.run(() => fetch(origin + '/pending')), { code: 'source_blocked_client' });
+  assert.equal(arrivals.length, count);
+  console.log('paced and resumable');
+} finally {
+  server.closeAllConnections();
+  await new Promise(resolve => server.close(resolve));
+}
+`);
+		expect(stdout.trim()).toBe('paced and resumable');
+	});
 	it( 'fetches a local origin whose TCP connection takes more than 250 ms', async () => {
 		const { stdout } = await child( `
 const { sourceFetch: request } = await import(${ JSON.stringify( sourceFetchUrl ) });
@@ -77,7 +122,9 @@ ${ slowConnect }
 
 	it( 'the delayed-connect fixture fails with the unmodified Node default', async () => {
 		await expect( child( `const request = fetch;\n${ slowConnect }` ) ).rejects.toMatchObject( {
-			stderr: expect.stringContaining( 'ETIMEDOUT' ),
+			// Node 24 can hit the fixture's outer deadline before surfacing the
+			// per-address timeout. Both are a failed connection, never a response.
+			stderr: expect.stringMatching( /ETIMEDOUT|TimeoutError/ ),
 		} );
 	} );
 

@@ -5,9 +5,9 @@ import { expect, it } from 'vitest';
 import { SourceRequestGovernors } from '../source-request-governor.js';
 import { captureScreenshots } from './screenshotter.js';
 
-// Four small browser passes, normally ~30 seconds total.
+// Five small browser passes, normally ~75 seconds total.
 it( 'bounds requests after a persistent cross-route refusal, but preserves healthy and recovered coverage', async () => {
-	for ( const mode of [ 'healthy', 'blocked', 'burst', 'window' ] as const ) {
+	for ( const mode of [ 'healthy', 'blocked', 'denied', 'burst', 'window' ] as const ) {
 		let requests = 0;
 		let firstRefusal = 0;
 		let resets = 0;
@@ -15,6 +15,12 @@ it( 'bounds requests after a persistent cross-route refusal, but preserves healt
 		const server = createServer( ( request, response ) => {
 			if ( request.url?.includes( 'liberation-absent-' ) ) { response.writeHead( 404 ); response.end(); return; }
 			requests++;
+			if (mode === 'denied' && requests > 2) {
+				firstRefusal ||= requests;
+				response.writeHead(requests === 3 ? 429 : 403, { 'retry-after': '0' });
+				response.end();
+				return;
+			}
 			if ( mode !== 'healthy' && requests > 2 && ( mode === 'blocked' || (mode === 'burst' ? resets < 3 : !refusedAt || Date.now() - refusedAt < 4500) ) ) {
 				firstRefusal ||= requests;
 				refusedAt ||= Date.now();
@@ -38,12 +44,14 @@ it( 'bounds requests after a persistent cross-route refusal, but preserves healt
 				learnFluid: false, referenceWidths: [],
 			} );
 			process.stderr.write( JSON.stringify( { mode, requests, afterFirstRefusal: firstRefusal ? requests - firstRefusal + 1 : 0, captured: result.captured, wallMs: Date.now() - started } ) + '\n' );
-			if ( mode === 'blocked' ) {
+			if ( mode === 'blocked' || mode === 'denied' ) {
 				expect( result.routeDiagnostics ).toContainEqual( expect.objectContaining( {
 					code: 'source_blocked_client', requestsBeforeFirstRefusal: expect.any( Number ), firstRefusalAt: expect.any( String ),
 					reason: expect.stringContaining( 'retry later or from another network' ),
 				} ) );
 				expect( requests - firstRefusal + 1 ).toBeLessThanOrEqual( 10 );
+				expect(result.routeDiagnostics).toContainEqual(expect.objectContaining({ code: 'route_capture_pending', reason: expect.stringContaining('--resume') }));
+				expect(result.failed).toBeLessThan(8 - result.captured);
 			} else {
 				expect( result.captured ).toBe( 8 );
 				expect( result.routeDiagnostics ?? [] ).not.toContainEqual( expect.objectContaining( { code: 'source_blocked_client' } ) );

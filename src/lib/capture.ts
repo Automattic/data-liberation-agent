@@ -886,6 +886,9 @@ async function runCaptureWebsite(
 		routesDiscovered: screenshotResult.urls.length - ( screenshotResult.routeDiagnostics ?? [] ).filter( row => row.code === ROUTE_OMITTED_BY_BUDGET ).length,
 		routesCaptured: screenshotResult.captured + ( derivedTemplateClusters?.summary.derived ?? 0 ) + ( derivedTemplateClusters?.summary.httpAcquired ?? 0 ) + budgetHttp.acquired.length,
 		routesSkipped: screenshotResult.skipped,
+		routesPending: captureDiagnostics.filter(row => row.code === 'route_capture_pending').length,
+		sourceRequests: sourceGovernors.stats(),
+		...(blockedClient ? { resumable: true, stopReason: blockedClient.code } : {}),
 		routesFailed: screenshotResult.failed,
 		routesOmitted: budgetOmittedRoutes( captureDiagnostics ).length,
 		...( derivedTemplateClusters ? { routesDerived: derivedTemplateClusters.summary.derived } : {} ),
@@ -1007,6 +1010,7 @@ async function runCaptureWebsite(
 	const result: CaptureResult = {
 		captureReceiptPath,
 		outputDir,
+		...(blockedClient ? { resumable: true } : {}),
 		summary: { ...finalSummary, complete, entrypointCaptured: true },
 		complete,
 		entrypointCaptured: true,

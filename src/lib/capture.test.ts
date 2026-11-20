@@ -500,9 +500,10 @@ describe( 'captureWebsite completeness', () => {
 		const result = await captureWebsite( { url: sourceUrl, outputDir: root }, {
 			findAdapter: () => ( { id: 'generic', discover: async () => ( { urls: [] } ) } ),
 		} );
-		expect( result ).toMatchObject( { complete: false, entrypointCaptured: true } );
+		expect( result ).toMatchObject( { complete: false, entrypointCaptured: true, resumable: true } );
 		const receipt = JSON.parse( readFileSync( join( root, 'capture-receipt.json' ), 'utf8' ) );
 		expect( receipt.discoveryDiagnostics ).toContainEqual( expect.objectContaining( { code: 'source_blocked_client', requestsBeforeFirstRefusal: 10, firstRefusalAt: blocked.evidence.firstRefusalAt } ) );
+		expect(receipt.summary).toMatchObject({ complete: false, resumable: true, stopReason: 'source_blocked_client', sourceRequests: [expect.objectContaining({ stopReason: 'source_blocked_client' })] });
 	} );
 
 	it( 'counts a route saved with a failed stage as captured and a route export dropped as failed', async () => {
