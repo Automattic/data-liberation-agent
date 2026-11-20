@@ -522,7 +522,7 @@ async function runCaptureWebsite(
 	process.stderr.write( `[timing] discovery ${ Date.now() - phaseStartedAt }ms\n` );
 	// Structured content (#1701) only feeds template-cluster derivation.
 	const contentSource = templateClusters ? adapter.structuredContent : undefined;
-	const structuredContent = contentSource ? await contentSource.enumerate( sourceUrl, { governors: sourceGovernors } ) : undefined;
+	const structuredContent = contentSource ? await contentSource.enumerate( sourceUrl, { governors: sourceGovernors, inventory } ) : undefined;
 	const contentEntries = structuredContent?.entries ?? [];
 	if ( structuredContent ) process.stderr.write( `[timing] structured content ${ adapter.id }: ${ contentEntries.length } entries, ${ structuredContent.diagnostics.length } diagnostics, ${ Date.now() - phaseStartedAt }ms\n` );
 	inventory.diagnostics = [ ...scopeDiagnostics, ...( inventory.diagnostics ?? [] ), ...( structuredContent?.diagnostics ?? [] ) ];

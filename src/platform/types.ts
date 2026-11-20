@@ -161,8 +161,9 @@ export interface StructuredContentEnumeration {
  * verification member prove `bodyEquivalent` against their browser captures.
  */
 export interface StructuredContentSource {
-	/** Enumerate published content. Every source request goes through `governors`. */
-	enumerate( sourceUrl: string, options: { governors: import( '../lib/source-request-governor.js' ).SourceRequestGovernors } ): Promise< StructuredContentEnumeration >;
+	/** Enumerate published content, optionally reusing this run's discovery inventory.
+	 * Every new source request goes through `governors`. */
+	enumerate( sourceUrl: string, options: { governors: import( '../lib/source-request-governor.js' ).SourceRequestGovernors; inventory?: unknown } ): Promise< StructuredContentEnumeration >;
 	/** True only when the document's single content slot matches the entry. Fail closed. */
 	bodyEquivalent( html: string, entry: StructuredContentEntry ): boolean;
 	/** CSS selector of the single content slot `memberDocument` fills. When set, a
