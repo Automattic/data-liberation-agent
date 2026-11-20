@@ -56,6 +56,44 @@ describe( 'adapter-declared runtime widget islands', () => {
 	} );
 } );
 
+describe( 'per-device server documents (#2152)', () => {
+	// The phone identity is served its own document: a phone-only bar shifts
+	// the content wrapper's children and the phone layout has its own classes,
+	// so desktop-pair anchors resolve neither by position nor by descriptor.
+	const desktop = ( title: string, extra = '' ) => `<html><head><title>${ title }</title></head><body><div id="wrapper"><main class="desktop-layout"><h1>${ title }</h1><aside data-widget>Server</aside>${ extra }</main></div></body></html>`;
+	const phone = ( title: string, extra = '' ) => `<html><head><title>${ title }</title></head><body><div id="wrapper"><nav class="phone-bar"><span>Menu</span><div><div><div><p>Deep</p></div></div></div></nav><main class="phone-layout"><h1>${ title }</h1><aside data-widget>Server</aside>${ extra }</main></div></body></html>`;
+	const base = { baseUrl: 'https://fixture.test/first', runtimeWidgetSelectors: [ '[data-widget]' ] };
+	// Only the representative's phone document shows an update line: the phone
+	// pair alone would not share a template key.
+	const updated = '<p class="updated"><span>Updated</span></p>';
+	const phonePair = { repServerHtml: phone( 'First', updated ), memberServerHtml: phone( 'Second' ), repProcessedHtml: phone( 'First', updated ).replace( 'Server', 'Hydrated' ) };
+
+	it( 'cannot map a phone capture through the desktop server pair', () => {
+		expect( deriveMemberDocument( { ...base, ...phonePair, repServerHtml: desktop( 'First' ), memberServerHtml: desktop( 'Second' ) } ) ).toMatchObject( { ok: false, gate: { code: 'slot_anchor_unmapped' } } );
+	} );
+
+	it( 'derives the phone document from the phone pair while the desktop pair decides identity', () => {
+		const result = deriveMemberDocument( { ...base, ...phonePair, clusterKeyDocuments: { repServerHtml: desktop( 'First' ), memberServerHtml: desktop( 'Second' ) } } );
+		expect( result.ok ).toBe( true );
+		if ( ! result.ok ) return;
+		expect( result.html ).toContain( '<h1>Second</h1>' );
+		expect( result.html ).toContain( 'Hydrated' );
+		expect( result.html ).toContain( 'phone-bar' );
+		expect( result.html ).not.toContain( 'Updated' );
+		expect( deriveMemberDocument( { ...base, ...phonePair } ) ).toMatchObject( { ok: false, gate: { code: 'cluster_key_mismatch' } } );
+	} );
+
+	it( 'keeps the cluster key gate on the identity pair', () => {
+		const otherTemplate = desktop( 'Second' ).replace( '<main class="desktop-layout">', '<main class="desktop-layout"><section><div><form><input name="q"></form></div></section>' );
+		expect( deriveMemberDocument( { ...base, ...phonePair, clusterKeyDocuments: { repServerHtml: desktop( 'First' ), memberServerHtml: otherTemplate } } ) ).toMatchObject( { ok: false, gate: { code: 'cluster_key_mismatch' } } );
+	} );
+
+	it( 'keeps undeclared differences in the phone pair strict', () => {
+		const rewritten = { ...phonePair, repProcessedHtml: phonePair.repProcessedHtml.replace( '<h1>First</h1>', '<h1>Runtime rewrite</h1>' ) };
+		expect( deriveMemberDocument( { ...base, ...rewritten, clusterKeyDocuments: { repServerHtml: desktop( 'First' ), memberServerHtml: desktop( 'Second' ) } } ) ).toMatchObject( { ok: false, gate: { code: 'slot_anchor_unmapped' } } );
+	} );
+} );
+
 it('ignores only adapter-declared runtime state classes in the comparison skeleton', () => {
 	const page = (state: string) => `<body><header class="site-title ${state}">Title</header><main><div class="content ${state}">Same member</div></main></body>`;
 	const input = { baseUrl: 'https://fixture.example/post', derivedHtml: page('beforeReveal'), realHtml: page('revealed') };

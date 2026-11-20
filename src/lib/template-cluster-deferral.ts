@@ -36,6 +36,17 @@ export type MemberDocumentSource = 'server' | 'rendered';
 
 export type MemberDocument = { html: string } | { unavailable: string };
 
+/**
+ * A captured document profile's browser identity, for a light render of a
+ * member as that profile saw it (a phone render for a phone document).
+ * Omitted, a light render uses the source identity at desktop width.
+ */
+export interface RenderProfile {
+	id: string;
+	identity?: import('./screenshot/capture-profiles.js').ReplayBrowserIdentity;
+	viewport: { width: number; height: number };
+}
+
 type Group = Pick< TemplateGroup, 'size' | 'representative' | 'members' >;
 
 export interface TemplateClusterDeferralInput {
@@ -48,6 +59,10 @@ export interface TemplateClusterDeferralInput {
 	rewriteDerivedMedia?: import('../adapters/page-actions.js').LiberationHooks['rewriteDerivedMedia'];
 	/** No light render starts after this instant. */
 	deadline?: number;
+}
+
+function documentKey( url: string, source: MemberDocumentSource, profile: RenderProfile | undefined ): string {
+	return `${ source }${ source === 'rendered' && profile ? `:${ profile.id }` : '' } ${ normalizedUrl( url ) }`;
 }
 
 export class TemplateClusterDeferral {
@@ -113,16 +128,16 @@ export class TemplateClusterDeferral {
 	}
 
 	/** A member's slot document, memoized: post-capture derivation reuses the check's document. */
-	document( url: string, source: MemberDocumentSource ): Promise< MemberDocument > {
-		const key = `${ source } ${ normalizedUrl( url ) }`;
+	document( url: string, source: MemberDocumentSource, profile?: RenderProfile ): Promise< MemberDocument > {
+		const key = documentKey( url, source, profile );
 		let document = this.documents.get( key );
-		if ( ! document ) this.documents.set( key, document = source === 'server' ? this.fetch( url ) : this.render( url ) );
+		if ( ! document ) this.documents.set( key, document = source === 'server' ? this.fetch( url ) : this.render( url, profile ) );
 		return document;
 	}
 
 	/** Drop a consumed document. */
-	release( url: string, source: MemberDocumentSource ): void {
-		this.documents.delete( `${ source } ${ normalizedUrl( url ) }` );
+	release( url: string, source: MemberDocumentSource, profile?: RenderProfile ): void {
+		this.documents.delete( documentKey( url, source, profile ) );
 	}
 
 	/** Stop: no further render starts, running ones end with the browser. */
@@ -195,7 +210,7 @@ export class TemplateClusterDeferral {
 	 * that rewrite server content per member (a gallery counter, a status line
 	 * written from page data), which server HTML cannot carry.
 	 */
-	private async render( url: string ): Promise< MemberDocument > {
+	private async render( url: string, profile?: RenderProfile ): Promise< MemberDocument > {
 		const deadline = Math.min( this.input.deadline ?? Infinity, Date.now() + TEMPLATE_DEFERRAL_LIMITS.renderMs );
 		if ( this.closing || deadline <= Date.now() ) return { unavailable: 'light render budget exhausted' };
 		// A light render loads the member's full runtime and media beside the
@@ -213,7 +228,7 @@ export class TemplateClusterDeferral {
 			const browser = await withTimeout( this.browser, left(), 'light render browser startup' );
 			this.identity ??= sourceContextOptions( browser, this.input.sourceUrl, { publicUrlsOnly: true, governors: this.input.governors } );
 			const options = await withTimeout( this.identity, left(), 'light render source identity' );
-			context = await withTimeout( createSourceContext( browser, { ...options, viewport: { width: 1440, height: 900 } }, { governors: this.input.governors, sourceUrl: this.input.sourceUrl } ), left(), 'light render context', late => late.close() );
+			context = await withTimeout( createSourceContext( browser, { ...options, ...profile?.identity, viewport: profile?.viewport ?? { width: 1440, height: 900 } }, { governors: this.input.governors, sourceUrl: this.input.sourceUrl } ), left(), 'light render context', late => late.close() );
 			const page = await context.newPage();
 			const navigation = await navigateSourceDocument( page, url, { timeoutMs: left(), publicUrlsOnly: true, routeScope: this.input.routeScope } );
 			if ( navigation.boundary || navigation.redirectedTo ) return { unavailable: `navigation left the route (${ navigation.redirectedTo ?? 'external boundary' })` };
@@ -243,7 +258,7 @@ export class TemplateClusterDeferral {
 			return { unavailable: error instanceof Error ? error.message : String( error ) };
 		} finally {
 			await context?.close().catch( () => {} );
-			process.stderr.write( `[timing] template light-render ${ url } ${ Date.now() - startedAt }ms\n` );
+			process.stderr.write( `[timing] template light-render ${ url }${ profile ? ` ${ profile.id }` : '' } ${ Date.now() - startedAt }ms\n` );
 		}
 	}
 }
