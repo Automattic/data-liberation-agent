@@ -203,3 +203,34 @@ it( 'rewrites @font-face to the content-type name of a script-served font', () =
 		expect( css ).not.toContain( '.php' );
 	} finally { rmSync( root, { recursive: true, force: true } ); }
 } );
+
+
+it.each([
+ { contentType: 'text/css; charset=utf-8', rel: 'icon' },
+ { contentType: 'text/plain', rel: 'stylesheet' },
+])('exports a stylesheet despite a failed image classification: $contentType / $rel', ({ contentType, rel }) => {
+ const root = mkdtempSync(join(tmpdir(), 'portable-stylesheet-'));
+ try {
+  const websiteDir = join(root, 'website');
+  mkdirSync(join(root, 'resources'), { recursive: true });
+  const css = '.a{background-image:url("")} .dmform .dmform-field-error{display:none}';
+  writeFileSync(join(root, 'resources', 'w.css'), css);
+  const htmlPath = join(root, 'page.html');
+  // Even an erroneous non-stylesheet relationship cannot override captured CSS MIME evidence.
+  const link = `<link id="widgetCSS" rel="${rel}" href="/w.css">`;
+  writeFileSync(htmlPath, `${link}<div class="dmform"><span class="dmform-field-error">x</span></div>`);
+  const url = 'https://example.test/w.css';
+  const result = materializePortableResources({
+   sourceRoot: root, websiteDir, entries: [{ url: 'https://example.test/', htmlPath }],
+   resourceManifest: { version: 1, failures: [], resources: { [url]: { path: 'resources/w.css', contentType } } },
+   imageUrls: new Set([url]), mediaReplacements: new Map([[url, TRANSPARENT_IMAGE_DATA_URL], ['/w.css', TRANSPARENT_IMAGE_DATA_URL]]),
+   assetPathsByHash: new Map(), assetHashesByPath: new Map(), portablePathsBySource: new Map(),
+   embeddedSources: new Set(), projectEmbeddedHtml: html => html,
+  });
+  expect(readFileSync(htmlPath, 'utf8')).toContain(link);
+  expect(readFileSync(join(websiteDir, 'w.css'), 'utf8')).toBe(css);
+  expect(result.resourceReplacements.get(url)).toBe('/w.css');
+  expect(result.mediaReplacements.get(url)).toBe('/w.css');
+  expect(result.unresolvedDependencies).toEqual([]);
+ } finally { rmSync(root, { recursive: true, force: true }); }
+});

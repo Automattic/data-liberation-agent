@@ -502,9 +502,9 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
    // Deliberately lie about the format: metadata and filename must follow bytes.
    if (path === '/logo.webp') { response.writeHead(200, { 'content-type': 'image/jpeg' }); response.end(webp); }
    else if (path === '/_next/image' || path === '/preview.webp') { response.writeHead(200, { 'content-type': 'image/jpeg' }); response.end(jpeg); }
-   else if (path === '/hero.css') { response.writeHead(200, { 'content-type': 'text/css' }); response.end(`.hero{background-image:url('${proxy(203)}')}`); }
+   else if (path === '/hero.css') { response.writeHead(200, { 'content-type': 'text/css' }); response.end(`.hero{background-image:url('${proxy(203)}')}.a{background-image:url("")}.dmform .dmform-field-error{display:none}`); }
    else if (path === '/missing.webp') { response.writeHead(200, { 'content-type': 'image/webp' }); response.end('<html>placeholder</html>'); }
-   else { response.writeHead(200, { 'content-type': 'text/html' }); response.end(`<!doctype html><title>Next image fixture</title><link rel="stylesheet" href="/hero.css"><link rel="icon" href="${proxy(67)}"><link rel="apple-touch-icon" href="/logo.webp"><h1>Transparent logo</h1><nav><a href="/logo.webp"><img alt="Logo" src="${proxy(67)}" srcset="${proxy(203)} 203w, ${proxy(67)} 67w"></a></nav><img alt="Content logo" src="${proxy(67)}"><div class="hero" style="width:203px;height:90px;background-image:url('${proxy(67)}')"></div><img alt="Missing" src="/missing.webp">`); }
+   else { response.writeHead(200, { 'content-type': 'text/html' }); response.end(`<!doctype html><title>Next image fixture</title><link id="widgetCSS" rel="stylesheet" href="/hero.css"><link rel="icon" href="${proxy(67)}"><link rel="apple-touch-icon" href="/logo.webp"><h1>Transparent logo</h1><nav><a href="/logo.webp"><img alt="Logo" src="${proxy(67)}" srcset="${proxy(203)} 203w, ${proxy(67)} 67w"></a></nav><img alt="Content logo" src="${proxy(67)}"><div class="hero" style="width:203px;height:90px;background-image:url('${proxy(67)}')"></div><img alt="Missing" src="/missing.webp">`); }
   });
 
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
@@ -528,12 +528,14 @@ describe.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS))('Next.js-shaped public 
    expect(logo.references).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'CSS', document_url: `${url}hero.css` })]));
    const stylesheets = receipt.assets.filter((asset: any) => asset.path.endsWith('.css')).map((asset: any) => readFileSync(join(root, asset.path), 'utf8')).join('\n');
    expect(stylesheets).toContain('/media/logo.webp');
+   expect(stylesheets).toContain('.dmform .dmform-field-error{display:none}');
    expect(stylesheets).not.toContain('/_next/image');
    expect(readFileSync(join(root, images[0].path))).toEqual(webp);
    const html = readFileSync(join(root, 'website/index.html'), 'utf8');
    expect(html).not.toContain('/_next/image');
    expect(html).not.toContain(`${url}logo.webp`);
    expect(html).not.toContain('preview.webp');
+   expect(html).toMatch(/<link\b[^>]*id="widgetCSS"[^>]*href="[^"]+\.css"/);
    expect(html).toContain('src="/media/logo.webp"');
    expect(html).toContain('href="/media/logo.webp"');
    expect(html.replaceAll('&quot;', '"')).toMatch(/background-image:\s*url\(['"]?\/media\/logo.webp/);
@@ -554,4 +556,17 @@ it('skips a site builder default icon but keeps an owner-uploaded one', () => {
  const custom = 'https://static.wixstatic.com/media/c168cb_c777%7Emv2.png/v1/fill/w_192%2Ch_192/c168cb_c777%7Emv2.png';
  const records = collectImageAssets([{ url: 'https://ellenbauer37.wixsite.com/my-site-2', html: `<link rel="icon" sizes="192x192" href="https://www.wix.com/favicon.ico"><link rel="shortcut icon" href="https://www.wix.com/favicon.ico"><link rel="apple-touch-icon" href="https://static.parastorage.com/client/pfavico.ico"><link rel="icon" href="${custom}">` }]);
  expect(records.map(record => record.resolved_original)).toEqual([custom]);
+});
+
+
+it('ignores CSS empty, fragment and same-document image URLs while retaining external images', () => {
+ const records = collectImageAssets([{ url: 'https://example.test/w.css#capture', html: `<style>
+ .empty{background:url("")} .space{background:url("   ")}
+ .fragment{mask:url(" #mask ")} .self{background:url("w.css#image")}
+ .absolute{content:url("https://example.test/w.css")}
+ .query{background:url("w.css?image=1")} .real{background:url("image.png#crop")}
+ </style><div style="background:url('#inline')"></div>` }]);
+ expect(records.map(record => record.resolved_original).sort()).toEqual([
+  'https://example.test/image.png#crop', 'https://example.test/w.css?image=1',
+ ]);
 });
