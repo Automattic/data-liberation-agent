@@ -257,7 +257,12 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 		$( 'script,style,link,meta,title' ).remove();
 		$( '*' ).each( ( _, element ) => {
 			if ( element.type !== 'tag' ) return;
-			for ( const name of Object.keys( element.attribs ) ) if ( name.startsWith( 'data-blocks-engine-' ) ) delete element.attribs[ name ];
+			// Whitespace runs inside an attribute value are serialization, not
+			// content: a server can indent one embedded JSON value differently per route.
+			for ( const name of Object.keys( element.attribs ) ) {
+				if ( name.startsWith( 'data-blocks-engine-' ) ) delete element.attribs[ name ];
+				else element.attribs[ name ] = element.attribs[ name ].replace( /\s+/g, ' ' ).trim();
+			}
 			// Compare link targets, not their spelling: a default document and
 			// its directory are the same target, including for self-fragments.
 			if ( element.attribs.href !== undefined ) {
