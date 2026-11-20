@@ -30,8 +30,10 @@
  * only holds hidden (and the reverse) count as rotating too, so a carousel
  * slower than either page's own readings is still aligned. At any other width
  * such a swap is only a candidate, because responsive content legitimately
- * differs by width: the reference releases its page for a bounded window, and
- * only a candidate that changes on its own there is rotation and aligned.
+ * differs by width: a held width round trip first checks whether width alone
+ * explains the swap and it stays stable back at the cell. Unexplained candidates
+ * are watched unheld for a bounded window; only ones changing on their own are
+ * rotation and aligned.
  */
 import type { Page } from 'playwright';
 import { orElse } from '../failure-class.js';
@@ -43,7 +45,7 @@ const MOTION_ALIGN_POLL_MS = 100;
 /**
  * Upper bound for a reference cell at a width other than capture's to watch a
  * hidden/painted swap against capture change on its own before treating it as
- * responsive content. Only cells with such a candidate wait.
+ * responsive content. Only candidates not explained by a held width probe wait.
  */
 export const MOTION_CONFIRM_TIMEOUT_MS = 10_000;
 /** In-flight CSS transitions settle within this bound before tokens are read. */
@@ -331,6 +333,28 @@ export function motionDisagreement( captured: readonly string[], observed: reado
 }
 
 /**
+ * With timers held, width alone must reproduce capture's visibility and then
+ * restore the cell's visibility. A slide at the wrong moment stays wrong at
+ * capture's width, so it still needs the unheld rotation-confirmation window.
+ * Probe readings never enter temporal motion evidence: resizing is not rotation.
+ */
+async function responsiveSwaps( page: Page, captured: SourceMotion, cell: PaintReading, candidates: Iterable<string> ): Promise<string[]> {
+	const viewport = page.viewportSize();
+	if ( ! viewport || ! captured.width || viewport.width === captured.width ) return [];
+	let atCapture: PaintReading;
+	try {
+		await page.setViewportSize( { ...viewport, width: captured.width } );
+		atCapture = await readPaintState( page );
+	} finally {
+		await page.setViewportSize( viewport );
+	}
+	// A second cell reading proves the swap persists after restoring the width.
+	const restored = await readPaintState( page );
+	const visibility = ( reading: { painted: string[]; latent?: string[] }, token: string ) => reading.painted.includes( token ) ? 'painted' : reading.latent?.includes( token ) ? 'latent' : 'absent';
+	return [ ...candidates ].filter( token => visibility( atCapture, token ) === visibility( captured, token ) && visibility( restored, token ) === visibility( cell, token ) );
+}
+
+/**
  * One moment per route: the first profile to serialize a route sets it, and
  * later profiles of that route wait for the source to reach it before they
  * serialize, so an export that ships one document for every width still
@@ -375,13 +399,22 @@ export async function alignSourceMotion( page: Page, captured: SourceMotion | un
 	const confirmDeadline = start + Math.min( confirmMs, timeoutMs );
 	// Cross-width swaps against capture: rotation once one changes on its own.
 	const candidates = new Set<string>();
+	const responsive = new Set<string>();
+	let widthProbed = false;
 	const unconfirmed = () => candidates.size > 0 && ! [ ...candidates ].some( token => rotating.has( token ) );
 	let previous = earlier.at( -1 );
-	const observe = async (): Promise<string[]> => {
+	const observe = async ( held = false ): Promise<string[]> => {
 		const reading = await readPaintState( page );
 		if ( previous ) for ( const token of motionChanges( previous, reading.painted ) ) rotating.add( token );
 		if ( captured ) for ( const token of capturedSwaps( captured, reading ) ) rotating.add( token );
-		if ( captured ) for ( const token of swapCandidates( captured, reading ) ) candidates.add( token );
+		if ( captured ) for ( const token of swapCandidates( captured, reading ) ) if ( ! responsive.has( token ) ) candidates.add( token );
+		if ( held && captured && unconfirmed() && ! widthProbed ) {
+			widthProbed = true;
+			for ( const token of await responsiveSwaps( page, captured, reading, candidates ).catch( orElse( [] ) ) ) {
+				responsive.add( token );
+				candidates.delete( token );
+			}
+		}
 		previous = reading.painted;
 		return reading.painted;
 	};
@@ -393,7 +426,7 @@ export async function alignSourceMotion( page: Page, captured: SourceMotion | un
 			await settleTransitions( page );
 			return { held, disagreement: [], release: () => releaseSourceMotion( page ) };
 		}
-		const disagreement = motionDisagreement( captured.painted, await observe(), rotating );
+		const disagreement = motionDisagreement( captured.painted, await observe( held ), rotating );
 		if ( ! disagreement.length && held && unconfirmed() && Date.now() < confirmDeadline ) {
 			// Watch the candidates, unheld: rotation changes them on its own,
 			// responsive content never does and stays as this width renders it.
