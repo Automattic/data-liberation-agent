@@ -58,6 +58,25 @@ function round( value: number, places = 2 ): number {
 	return Math.round( value * factor ) / factor;
 }
 
+/**
+ * A short viewport band can follow a real fluid line while moving less than
+ * the constant tolerance. Require a meaningful, strictly monotone spread and
+ * a tight line fit so rounding wobble does not invent responsiveness.
+ */
+function linearTrend( ordered: readonly GeometrySample[] ): boolean {
+	if ( ordered.length < MIN_SAMPLES ) return false;
+	const values = ordered.map( ( sample ) => sample.value );
+	if ( Math.max( ...values ) - Math.min( ...values ) <= 0.5 ) return false;
+	const rising = values[ 1 ]! > values[ 0 ]!;
+	for ( let index = 1; index < values.length; index++ ) {
+		if ( rising ? values[ index ]! <= values[ index - 1 ]! : values[ index ]! >= values[ index - 1 ]! ) return false;
+	}
+	const line = leastSquaresLine( ordered );
+	return line !== null && ordered.every(
+		( sample ) => Math.abs( line.slope * sample.viewport + line.intercept - sample.value ) <= 0.25
+	);
+}
+
 function fits( samples: readonly GeometrySample[], predict: ( viewport: number ) => number ): boolean {
 	return samples.every( ( sample ) => Math.abs( predict( sample.viewport ) - sample.value ) <= TOLERANCE_PX );
 }
@@ -148,6 +167,16 @@ function learnContinuousModel( samples: readonly GeometrySample[] ): FluidModel 
 	// Constant: the element ignores viewport width.
 	const min = Math.min( ...values );
 	const max = Math.max( ...values );
+	// Preserve a short band's clear linear relationship before freezing it.
+	const trend = max - min <= TOLERANCE_PX && linearTrend( ordered ) ? leastSquaresLine( ordered ) : null;
+	if ( trend && trend.slope > 0 && trend.intercept >= 0 ) {
+		return {
+			kind: 'affine',
+			css: `calc(${ round( trend.slope * 100 ) }vw + ${ round( trend.intercept ) }px)`,
+			slope: trend.slope,
+			intercept: trend.intercept,
+		};
+	}
 	if ( max - min <= TOLERANCE_PX ) {
 		// Median, not the last sample: one rounding artifact should not become
 		// the value every width inherits.

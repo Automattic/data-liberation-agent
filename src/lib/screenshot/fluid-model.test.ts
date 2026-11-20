@@ -126,6 +126,29 @@ describe( 'learnFluidModel', () => {
 		expect( model ).toMatchObject( { kind: 'constant', css: '320px' } );
 	} );
 
+	it( 'learns a short collinear band within the constant tolerance', () => {
+		// A 4.8vw + 62px header offset moves only 1.5px across this band.
+		const model = learnFluidModel(
+			at( [
+				[ 768, 98.84375 ],
+				[ 769, 98.890625 ],
+				[ 775, 99.1875 ],
+				[ 783, 99.578125 ],
+				[ 791, 99.953125 ],
+				[ 799, 100.34375 ],
+			] )
+		);
+		expect( model.kind ).toBe( 'affine' );
+		if ( model.kind !== 'affine' ) return;
+		expect( Math.abs( model.slope * 768 + model.intercept - 98.84375 ) ).toBeLessThan( 0.25 );
+		expect( Math.abs( model.slope * 799 + model.intercept - 100.34375 ) ).toBeLessThan( 0.25 );
+	} );
+
+	it( 'keeps wobbling samples within tolerance constant', () => {
+		const model = learnFluidModel( at( [ [ 768, 99 ], [ 775, 99.75 ], [ 783, 99.25 ], [ 799, 100 ] ] ) );
+		expect( model ).toMatchObject( { kind: 'constant' } );
+	} );
+
 	it( 'learns a plain proportional element', () => {
 		const model = learnFluidModel(
 			at( [
