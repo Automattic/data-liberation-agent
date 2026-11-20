@@ -23,6 +23,8 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('publishes complete source-bound box t
 		function layout() { document.querySelector('#fluid-offset').style.inset = '200px auto auto ' + (innerWidth < 700 ? 20 : innerWidth * 0.1) + 'px'; }
 		addEventListener('resize', layout);
 		layout();
+		let columns;
+		addEventListener('resize', () => { clearTimeout(columns); columns = setTimeout(() => { document.querySelector('.grid').style.columnGap = innerWidth < 700 ? '30px' : ''; }, 250); });
 	</script></body></html>`;
 	const server = createServer((req, res) => {
 		if (req.url !== '/' && req.url !== '/other') { res.writeHead(404); res.end('Not found'); return; }
@@ -81,6 +83,8 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('publishes complete source-bound box t
 			}
 			const mobileGrid = tree.nodes[$('.grid').attr(NODE_ID_ATTRIBUTE)!].viewports.mobile;
 			expect(mobileGrid.used_styles['padding-top']).toBe('40px');
+			// A debounced resize handler's restyle has landed before the width is observed.
+			expect(mobileGrid.used_styles['column-gap']).toBe('30px');
 			files[entry.html] = html;
 			files[sidecar] = JSON.stringify(tree);
 		}
