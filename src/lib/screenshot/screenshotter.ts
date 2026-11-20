@@ -545,7 +545,9 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				const controls = document.documentElement.querySelectorAll( 'input, textarea, select' );
 				const copies = snapshot.querySelectorAll( 'input, textarea, select' );
 				controls.forEach( ( control, index ) => {
-					copies[ index ]!.setAttribute( controlAttribute, JSON.stringify( observeControl( control ) ) );
+					const state = observeControl( control );
+					if ( state ) copies[ index ]!.setAttribute( controlAttribute, JSON.stringify( state ) );
+					else copies[ index ]!.removeAttribute( controlAttribute );
 				} );
 				const portMaps = new Function( 'return (' + portMapsSource + ')' )() as typeof portRenderedGoogleMaps;
 				const clean = new Function( 'return (' + scaffoldingSource + ')' )() as typeof cleanPortableScaffolding;
