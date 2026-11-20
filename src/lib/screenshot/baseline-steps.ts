@@ -386,11 +386,13 @@ export function baselineSteps(
 ): CaptureStep<{ page: Page }>[] {
 	const { page, viewport, plan, url, slug, evaluateTimeoutMs, screenshotTimeoutMs, outputDir, entry, responsiveImages, resourceStore, mobileHeights, shouldAnalyze, aggregator } = args;
 	const { serverHtml, navigationUrl, sourcePolicy } = sourceLoad;
+	// Runtime layout rewrites need mid-width evidence; the box-tree contract allows up to 8 viewports.
 	const boxViewports = () => Object.fromEntries( [
 		{ id: 'desktop', width: 1440, height: 900 },
+		{ id: 'tablet', width: 768, height: 1024 },
 		{ id: 'mobile', width: 390, height: 844 },
 		...( args.consentViewports ?? [] ), viewport,
-	].filter( item => item.id === 'desktop' || item.id === 'mobile' ).map( item => [ item.id!, { width: item.width, height: item.height } ] ) );
+	].filter( item => item.id === 'desktop' || item.id === 'tablet' || item.id === 'mobile' ).map( item => [ item.id!, { width: item.width, height: item.height } ] ) );
 	const isDesktop = viewport.id === 'desktop';
 	const isMobile = viewport.id === 'mobile';
 	const canonicalize = ( html: string ) => args.canonicalizeHtml ? args.canonicalizeHtml( html ) : html;

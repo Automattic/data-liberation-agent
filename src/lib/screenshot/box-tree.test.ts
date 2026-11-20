@@ -53,16 +53,16 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('publishes complete source-bound box t
 			for (const element of learnedStyles) {
 				expect(tree.nodes[$(element).attr(NODE_ID_ATTRIBUTE)!]).toBeDefined();
 			}
-			expect(Object.keys(tree.viewports).sort()).toEqual(['desktop', 'mobile']);
+			expect(Object.keys(tree.viewports).sort()).toEqual(['desktop', 'mobile', 'tablet']);
 			const ids = $('*').toArray().map(element => $(element).attr(NODE_ID_ATTRIBUTE));
 			expect(new Set(ids).size).toBe(ids.length);
 			expect(ids).not.toContain(undefined);
 			expect(Object.keys(tree.nodes).sort()).toEqual(ids.sort());
 			$('*').each((_index, element) => {
 				const node = tree.nodes[$(element).attr(NODE_ID_ATTRIBUTE)!];
-				expect(Object.keys(node.viewports).sort()).toEqual(['desktop', 'mobile']);
+				expect(Object.keys(node.viewports).sort()).toEqual(['desktop', 'mobile', 'tablet']);
 				expect(node.children).toEqual($(element).children().toArray().map(child => $(child).attr(NODE_ID_ATTRIBUTE)));
-				for (const viewport of ['desktop', 'mobile']) {
+				for (const viewport of ['desktop', 'tablet', 'mobile']) {
 					expect(Object.keys(node.viewports[viewport].used_styles).sort()).toEqual([...BOX_TREE_STYLES].sort());
 					expect(node.viewports[viewport].border_box.width).toBeGreaterThanOrEqual(0);
 				}
