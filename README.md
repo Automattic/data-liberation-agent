@@ -103,6 +103,7 @@ Naming an unknown target lists the registered ones.
 | Medium | Author/publication-scoped capture from the owner root |
 | Next.js | Generic discovery + framework route-announcer cleanup |
 | Shopify | Ready |
+| BigCommerce (Stencil) | Ready |
 | Soloist | Tenant-scoped authored links + Next page metadata discovery |
 | atom.bio | Tenant-scoped profile discovery |
 | Odoo | Generic discovery; application routes excluded |

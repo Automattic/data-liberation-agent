@@ -1,0 +1,16 @@
+{
+  "documents": {
+    "/": "<!doctype html><html><head><title>Example storefront</title><script src=\"https://cdn11.bigcommerce.com/s-example/stencil/theme.js\"></script></head><body class=\"default\"><script>var BCData = {}; window.stencil = {};</script><header><nav><a href=\"/about/\">About</a></nav><a href=\"/cart.php\">Cart</a><a href=\"/login.php?action=login\">Sign in</a></header><main data-content-region=\"home\"><a href=\"/catalog/\">Catalog</a></main></body></html>",
+    "/about/": "<body class=\"page\"><main data-content-region=\"page_builder_content\"><h1>About this example</h1></main></body>",
+    "/catalog/": "<body class=\"category\"><main><h1>Catalog</h1><a href=\"/sample/\">Sample</a></main></body>",
+    "/more/": "<body class=\"category\"><main><h1>More items</h1></main></body>",
+    "/sample/": "<body class=\"product\"><main><h1>Sample item</h1><form action=\"/cart.php\"><button>Buy</button></form></main></body>",
+    "/another/": "<body class=\"product\"><main><h1>Another item</h1><a href=\"/cart.php?action=add&amp;product_id=2\">Buy</a></main></body>"
+  },
+  "sitemaps": {
+    "/xmlsitemap.php": "<sitemapindex><sitemap><loc>https://example.com/xmlsitemap.php?type=products</loc></sitemap><sitemap><loc>https://example.com/xmlsitemap.php?type=categories</loc></sitemap><sitemap><loc>https://example.com/xmlsitemap.php?type=pages</loc></sitemap></sitemapindex>",
+    "/xmlsitemap.php?type=pages": "<urlset><url><loc>https://example.com/</loc></url><url><loc>https://example.com/about/</loc></url></urlset>",
+    "/xmlsitemap.php?type=categories": "<urlset><url><loc>https://example.com/catalog/</loc></url><url><loc>https://example.com/more/</loc></url></urlset>",
+    "/xmlsitemap.php?type=products": "<urlset><url><loc>https://example.com/sample/</loc></url><url><loc>https://example.com/another/</loc></url></urlset>"
+  }
+}
