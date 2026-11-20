@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { selectRouteBudget, spreadSample } from './route-budget.js';
+import { rankTemplateClusterRoutes, templateVerificationMember, selectRouteBudget, spreadSample } from './route-budget.js';
 import type { SafeFetchResult } from './media-fetch/safe-fetch.js';
 import {
 	buildTemplateGroups,
+	extendTemplateGroups,
 	progressiveOrder,
 	templateFingerprint,
 	templateRepresentatives,
@@ -98,6 +99,32 @@ function fixtureFetch( options: { delay?: ( url: string ) => number } = {} ) {
 }
 
 const fingerprint = ( path: string ) => templateFingerprint( PAGES.get( `${ ORIGIN }${ path }` )!(), `${ ORIGIN }${ path }` );
+
+it( 'excludes frontier collection aliases without extra requests and keeps a captured non-query verifier', async () => {
+	const index = `${ ORIGIN }/collection`;
+	const captured = `${ index }/category/Focus`;
+	const variants = [ `${ index }?author=someone`, `${ index }?offset=20` ];
+	const requested: string[] = [];
+	const fetch = async ( url: string ) => {
+		requested.push( url );
+		return response( url, 200, `<link rel="canonical" href="${ index }"><main><article>Collection</article></main>` );
+	};
+	const dependencies = { fetch: fetch as never };
+	const report = await buildTemplateGroups( { sourceUrl: index, urls: [ index, captured ] }, dependencies );
+	const initial = rankTemplateClusterRoutes( [ index, captured ], index, report.groups, new Set() );
+	await extendTemplateGroups( report, { sourceUrl: index, urls: variants }, true, dependencies );
+	expect( report.frontier?.canonicalAliases ).toEqual( variants.map( url => ( { url, canonicalUrl: index } ) ) );
+	expect( report.groups[ 0 ]!.members ).toEqual( [ index, captured ] );
+	expect( requested ).toEqual( [ index, captured, ...variants ] );
+	const group = report.groups[ 0 ]!;
+	// Even an uncertain query rendition or a lexically earlier late member
+	// cannot replace the already admitted seed or become the verifier.
+	group.members.push( `${ index }?filter=unique`, `${ index }/aaa` );
+	group.size = group.members.length;
+	expect( rankTemplateClusterRoutes( group.members, index, report.groups, new Set() ).slice( 0, 2 ) ).toEqual( initial );
+	expect( templateVerificationMember( group.members, index, url => url === captured || url.includes( '?' ) ) ).toBe( captured );
+	expect( templateVerificationMember( group.members, index, url => url.includes( '?' ) ) ).toBeUndefined();
+} );
 
 describe( 'templateFingerprint', () => {
 	it( 'groups pages of one template regardless of text, content counts and per-page classes', () => {

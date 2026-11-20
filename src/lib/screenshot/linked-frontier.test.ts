@@ -27,6 +27,17 @@ it('merges slash identities while preserving query, depth and time boundaries', 
 	]);
 });
 
+it('registers frontier canonical aliases before admission without spending a page', () => {
+	const frontier = new LinkedFrontier({maxPages: 1}, 0);
+	const canonicalUrl = 'https://source.test/collection';
+	expect(frontier.admit(canonicalUrl, 0, 0)).toBe(true);
+	const aliases = ['?author=someone', '?offset=20'].map(query => ({url: canonicalUrl + query, canonicalUrl}));
+	frontier.registerAliases(aliases);
+	for (const {url} of aliases) expect(frontier.admit(url, 1, 0)).toBe(false);
+	expect([...frontier.required]).toEqual([canonicalUrl]);
+	expect(frontier.coverage().aliasedTo).toEqual(aliases);
+});
+
 it('allows alias identity replacement only for the redirecting owner', () => {
 	const frontier = new LinkedFrontier({ capturePageLimit: 2 }, 0);
 	const owner = 'https://source.test/a%3A.html';

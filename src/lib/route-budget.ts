@@ -78,6 +78,11 @@ export function dedupeRouteInventory( urls: readonly string[] ): string[] {
 	} );
 }
 
+/** Discovery order keeps the verifier seed stable when frontier members append. */
+export function templateVerificationMember( members: readonly string[], representative: string, eligible: ( url: string ) => boolean = () => true ): string | undefined {
+	return members.find( url => url !== representative && ! new URL( url ).search && eligible( url ) );
+}
+
 /** Cluster admission order, shared by initial selection and rendered-nav promotion. */
 export function rankTemplateClusterRoutes(
 	routes: readonly string[],
@@ -91,7 +96,7 @@ export function rankTemplateClusterRoutes(
 	const singletons = new Set( groups.filter( group => group.size < 2 ).map( group => normalizedUrl( group.representative ) ) );
 	for ( const group of [ ...groups ].filter( group => group.size >= 2 ).sort( ( a, b ) => b.size - a.size ) ) {
 		for ( const member of group.members ) clustered.add( normalizedUrl( member ) );
-		const verifier = group.members.filter( url => url !== group.representative ).sort( ( a, b ) => a.localeCompare( b ) )[ 0 ];
+		const verifier = templateVerificationMember( group.members, group.representative );
 		for ( const url of [ group.representative, ...( verifier ? [ verifier ] : [] ) ] ) seeds.set( normalizedUrl( url ), seeds.size );
 	}
 	const entryKey = normalizedUrl( entrypoint );
