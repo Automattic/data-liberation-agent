@@ -10,7 +10,7 @@ import { installReadOnlyProbeGuard, lockMainFrameNavigation } from './probe-guar
 import { canonicalizeInteractionReport } from './canonicalize-interaction-report.js';
 import { probeDeviceMode, checkRouteDeviceMode, type DeviceComparisonArgs } from './device-mode-probe.js';
 import { probeSharedChrome } from './chrome-reuse.js';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { incompleteDeviceDocument } from '../responsive-assembly.js';
 import { join } from 'node:path';
 import { resolveDocumentReferences } from '../document-resource-base.js';
@@ -18,6 +18,7 @@ import { parseSrcset, isSrcsetShaped } from '../srcset.js';
 import { SOURCE_SUBFRAME_RUNTIME_ERROR, watchSourceRuntimeErrors } from '../source-readiness.js';
 import { forgetSourceDocument, getSourceResponse } from '../browser-kit/source-traffic.js';
 import { SourceRequestGovernors } from '../source-request-governor.js';
+import { STYLESHEET_LOAD_FAILURE, observeStylesheetLoadErrors, trackStylesheetLoads, stylesheetLoadFailure } from './stylesheet-load.js';
 import { connectBrowser, createSourceContext, sourceContextOptions } from '../browser-kit/index.js';
 import { classifyUrl, type UrlType } from '../extraction/sitemap.js';
 import { navigateSourceDocument, inspectSourceDocument, boundaryIdentity, SOURCE_LINK_PROBE_REQUEST_MS, SOURCE_NAVIGATION_LIMITS } from '../source-navigation.js';
@@ -1764,7 +1765,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					await context.addInitScript( observeRuntimeStyleWrites );
 					await context.addInitScript( observeViewportWork );
 					await context.addInitScript( observeMotionHold );
+					await context.addInitScript( observeStylesheetLoadErrors );
 					const page = await context.newPage();
+					trackStylesheetLoads( page );
 					await opts.initScript?.( page ).catch( orElse( undefined ) );
 					errorGuard = guardPageErrors( page, reason => {
 						profileDiagnostics.push( { code: PAGE_ERROR_STORM, reason } );
@@ -1848,6 +1851,10 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							...( opts.canonicalizeHtml ? { canonicalizeHtml: opts.canonicalizeHtml } : {} ),
 							...( opts.probeExclusions ? { probeExclusions: opts.probeExclusions } : {} ),
 						} );
+						const stylesheetFailure = await stylesheetLoadFailure( page );
+						if ( stylesheetFailure && ! profileFailures.some( failure => failure.error === stylesheetFailure ) ) {
+							profileFailures.push( { url, viewport: viewport.id, stage: 'content', error: stylesheetFailure, timestamp: capturedAt(), attempt: 1 } );
+						}
 					} finally {
 						phases.enter( 'record' );
 						// HTML and successful interaction evidence precede the final cleanup
@@ -1920,12 +1927,21 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				// Deadline/teardown disconnects are intentional, not crashes. A late
 				// observer must never resurrect the browser after capture returned.
 				if ( routeRetired( url ) ) return undefined;
+				if ( profileFailures.slice( failuresBefore ).some( failure => failure.error.startsWith( STYLESHEET_LOAD_FAILURE ) ) ) {
+					for ( const path of Object.values( vpPlan.paths ) ) rmSync( path, { force: true } );
+					for ( const key of Object.keys( profileEntry ) ) delete ( profileEntry as unknown as Record<string, unknown> )[ key ];
+					Object.assign( profileEntry, { slug, capturedAt: capturedAt() } );
+				}
 				const failed = profileFailures.length > failuresBefore;
 				if ( ! failed || crashRetry || errorGuard?.stopped() ) break;
 				if ( attemptBrowser.isConnected() ) {
 					const shellCrashed = profileFailures.slice( failuresBefore ).some( failure => failure.error.startsWith( CLIENT_ERROR_SHELL_FAILURE ) );
-					if ( ! rendererCrashed && ! shellCrashed ) break;
-					sendLog( server, `[retry] ${ rendererCrashed ? 'renderer crashed' : CLIENT_ERROR_SHELL_FAILURE } for ${ url } (${ viewport.id }); using a fresh context` );
+					const stylesheetFailed = profileFailures.slice( failuresBefore ).some( failure => failure.error.startsWith( STYLESHEET_LOAD_FAILURE ) );
+					if ( ! rendererCrashed && ! shellCrashed && ! stylesheetFailed ) break;
+					// The source governor retains Retry-After admission deadlines. Add
+					// the normal first-attempt backoff for failures it does not pace.
+					if ( stylesheetFailed ) await new Promise( resolve => setTimeout( resolve, 1000 ) );
+					sendLog( server, `[retry] ${ stylesheetFailed ? STYLESHEET_LOAD_FAILURE : rendererCrashed ? 'renderer crashed' : CLIENT_ERROR_SHELL_FAILURE } for ${ url } (${ viewport.id }); using a fresh context` );
 				} else if ( ! ( await replaceCrashedBrowser( attemptBrowser ) ) ) break;
 				profileFailures.length = failuresBefore;
 				profileEntry.blockLosses = undefined;
@@ -2023,6 +2039,17 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		if ( routeBudget && ! routeBudget.commit( url ) ) return;
 		if ( ! routeDeadlines.commit( url ) ) return;
 		partialRouteCommits.delete( url );
+		// One failed device document invalidates the route, not merely that
+		// profile. No styled sibling may make an unproven route exportable.
+		if ( urlFailures.some( failure => failure.error.startsWith( STYLESHEET_LOAD_FAILURE ) ) ) {
+			for ( const viewport of routeProfiles ) {
+				for ( const path of Object.values( profilePlan( viewport ).paths ) ) rmSync( path, { force: true } );
+			}
+			rmSync( join( opts.outputDir, 'box-tree', `${ slug }.json` ), { force: true } );
+			rmSync( join( opts.outputDir, 'box-tree', `${ slug }.mobile.json` ), { force: true } );
+			for ( const key of Object.keys( entry ) ) delete ( entry as unknown as Record<string, unknown> )[ key ];
+			Object.assign( entry, { slug, capturedAt: capturedAt() } );
+		}
 		for ( const f of urlFailures ) {
 			await manifest.recordFailure( f );
 		}

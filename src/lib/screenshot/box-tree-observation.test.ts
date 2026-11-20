@@ -2,6 +2,7 @@ import { chromium } from 'playwright';
 import { expect, it } from 'vitest';
 import { bindBoxTree, bindBoxTreeEvidence, BOX_TREE_STYLES, captureBoxTree, describeBoxTreeMismatch, stampNodeIds, type BoxTree, type BoxTreeMismatch, type BoxTreeObservation } from './box-tree.js';
 import { capturePageHtml } from './screenshotter.js';
+import { observeStylesheetLoadErrors } from './stylesheet-load.js';
 
 it('uses paint longhands without shorthand aliases', () => {
 	expect(BOX_TREE_STYLES).toEqual(expect.arrayContaining(['background-color', 'background-image', 'mask-image', 'mask-mode']));
@@ -103,6 +104,12 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('binds a node the source runtime inser
 		await page.evaluate(() => { document.querySelector<HTMLLinkElement>('link')!.sheet!.disabled = true; });
 		await capturePageHtml(page, [], undefined, observed => { observation = observed; });
 		expect(observation).toMatchObject({ mismatch: { kind: 'stylesheet', detail: expect.stringContaining('author stylesheet not applied') } });
+		// A failed load must be rejected even if the browser exposes a sheet.
+		await page.addInitScript(observeStylesheetLoadErrors);
+		await page.goto('data:text/html,<!doctype html><link rel="stylesheet" href="data:text/css,header{position:fixed}"><header>Fixed</header>');
+		await page.evaluate(() => document.querySelector('link')!.dispatchEvent(new Event('error')));
+		await capturePageHtml(page, [], undefined, observed => { observation = observed; });
+		expect(observation).toMatchObject({ mismatch: { kind: 'stylesheet' } });
 	} finally {
 		await browser.close();
 	}
