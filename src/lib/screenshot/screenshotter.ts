@@ -258,6 +258,9 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 			const repairShorthandVarCollapse = new Function( 'return (' + factorySrc + ')' )()();
 			const sheets = new Set( [ ...document.styleSheets, ...document.adoptedStyleSheets ] );
 			for ( const sheet of sheets ) {
+				// Replacing an inactive owner's text can activate it and change the
+				// selected titled set. Serialize only the applied CSSOM state.
+				if ( sheet.disabled ) continue;
 				const owner = sheet.ownerNode;
 				if ( owner instanceof HTMLLinkElement ) continue;
 				let cssText = '';
@@ -322,8 +325,14 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 		// The installed source cleanup sweeps first, in this same task: the
 		// settle and media waits above give the source time to mount a widget
 		// after the last sweep, and no source script runs between these two.
-		const result = await page.evaluate( ( { boxTreeSource, boxTreeProperties, captureBoxes, stampSource, nodeIdAttribute, observeControlSource, controlAttribute, portMapsSource, mapHostSource, iframeEvidenceAttributes, scaffoldingSource, shadowSource, parseSrcsetSource, srcsetShapedSource, initialScrollClassAttribute } ) => {
+		const result = await page.evaluate( async ( { boxTreeSource, boxTreeProperties, captureBoxes, stampSource, nodeIdAttribute, observeControlSource, controlAttribute, portMapsSource, mapHostSource, iframeEvidenceAttributes, scaffoldingSource, shadowSource, parseSrcsetSource, srcsetShapedSource, initialScrollClassAttribute } ) => {
 			( window as unknown as { __dlaCleanup?: { sweep: () => void } } ).__dlaCleanup?.sweep();
+			// Independent computed-style sentinels from the styled baseline, before
+			// any serialization-only DOM trials. Never validate evidence against itself.
+			const sentinelProperties = [ 'position', 'display', 'font-family', 'margin-top' ];
+			const sentinels = captureBoxes ? [ document.body, document.querySelector( 'header,[role="banner"]' ) ].filter( ( node ): node is HTMLElement => node instanceof HTMLElement ).map( element => ( {
+				element, styles: sentinelProperties.map( property => getComputedStyle( element ).getPropertyValue( property ) ),
+			} ) ) : [];
 			const box = ( node: Element | null ) => {
 				const bounds = node?.getBoundingClientRect();
 				return bounds ? `${ bounds.x },${ bounds.y },${ bounds.width },${ bounds.height }` : '';
@@ -570,7 +579,25 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 					const misplaced = Array.from( head.children ).filter( element => ! headTags.has( element.localName ) );
 					body.prepend( ...misplaced );
 				}
-				const boxNodes = captureBoxes ? (new Function('return (' + boxTreeSource + ')')() as typeof observeBoxTree)(snapshot, boxTreeProperties, nodeIdAttribute) : undefined;
+				const observe = new Function('return (' + boxTreeSource + ')')() as typeof observeBoxTree;
+				const checkedObservation = (): import('./box-tree.js').BoxTreeObservation => {
+					const observed = observe(snapshot, boxTreeProperties, nodeIdAttribute);
+					if ('mismatch' in observed) return observed;
+					for (const { element, styles } of sentinels) {
+						const id = element.getAttribute(nodeIdAttribute)!;
+						const evidence = observed.nodes[id]?.viewports.capture.used_styles;
+						const changed = sentinelProperties.find((property, index) => evidence && evidence[property] !== styles[index]);
+						if (changed) return { mismatch: { kind: 'stylesheet', id, path: element.localName, detail: `computed-style sentinel mismatch: ${changed}` } };
+					}
+					return observed;
+				};
+				let boxNodes = captureBoxes ? checkedObservation() : undefined;
+				if (boxNodes && 'mismatch' in boxNodes && boxNodes.mismatch.kind === 'stylesheet') {
+					// One bounded re-observation lets a reinserted link finish applying,
+					// without enabling alternate sets or changing authored sheet state.
+					await new Promise(resolve => setTimeout(resolve, 250));
+					boxNodes = checkedObservation();
+				}
 				return { html: `<!DOCTYPE html>${ snapshot.outerHTML }`, boxNodes, findings, omittedStyles: ( window as typeof window & { __dlaOmittedRuntimeStyles?: Array<{ bytes: number; rules: number }> } ).__dlaOmittedRuntimeStyles ?? [] };
 			} finally {
 				restoreParagraphDescendants();
