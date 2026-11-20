@@ -14,7 +14,17 @@ it('uses declared prices, never a lower compare-at value, and omits unrepresenta
 		{ variants: [{ available: true, option1: 'Small' }] },
 		{ variants: [{ price: 'free', available: true, option1: 'Small' }] },
 		{ variants: [{ price: '12.00', option1: 'Small' }] },
-		{ variants: [{ price: '12.00', available: true, option1: 'Unknown' }] },
+		{ variants: [product().variants[0], { price: '12.00', available: true, option1: 'Unknown' }] },
 		{ variants: [product().variants[0], product().variants[0]] },
 	]) expect(shopifyProductRow({ ...product(), ...change })).toBeUndefined();
+});
+
+it('maps any single-variant product as simple and keeps Unicode handles (#2141)', () => {
+	for (const [name, value] of [['Title', 'Default'], ['Title', 'Default Title'], ['Título', 'Predeterminado']]) {
+		const row = shopifyProductRow({ handle: 'miniestufа-electrica-portatil-redondo', title: 'Miniestufa', body_html: '', options: [{ name, values: [value] }],
+			variants: [{ price: '20.00', available: true, sku: 'MINI-1', option1: value }] });
+		expect(row).toMatchObject({ slug: 'miniestufа-electrica-portatil-redondo', sku: 'MINI-1', regular_price: '20.00', stock_status: 'instock' });
+		expect(row).not.toHaveProperty('variants');
+	}
+	for (const handle of ['a/b', '..', 'a b']) expect(shopifyProductRow({ ...product(), handle })).toBeUndefined();
 });

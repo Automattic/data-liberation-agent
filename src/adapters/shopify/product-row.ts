@@ -1,14 +1,17 @@
 import type { ProductRow, ProductVariant } from '../../lib/product-row.js';
 
 const decimal = (value: unknown): value is string => typeof value === 'string' && /^\d+(?:\.\d{1,2})?$/.test(value) && Number.isFinite(Number(value));
+/** Shopify handles may be Unicode; reject only what cannot be one path segment. */
+const safeHandle = (value: unknown): value is string => typeof value === 'string' && value.trim() === value && value !== '' && value !== '.' && value !== '..' && !/[\s\p{C}/\\?#%]/u.test(value);
 const token = (value: string) => value.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
 /** Fail closed rather than inventing a slug, price, availability or option identity. */
 export function shopifyProductRow(product: Record<string, any>): ProductRow | undefined {
-	if (typeof product.handle !== 'string' || !/^[a-z0-9][a-z0-9-]*$/i.test(product.handle) || typeof product.title !== 'string' || !product.title.trim() || !Array.isArray(product.variants) || !product.variants.length) return undefined;
+	if (!safeHandle(product.handle) || typeof product.title !== 'string' || !product.title.trim() || !Array.isArray(product.variants) || !product.variants.length) return undefined;
 	const options = product.options;
 	if (!Array.isArray(options) || !options.length || options.length > 3) return undefined;
-	const simple = options.length === 1 && options[0]?.name === 'Title' && options[0]?.values?.length === 1 && options[0].values[0] === 'Default Title';
+	// One variant is a simple product whatever its placeholder option is called (#2141).
+	const simple = product.variants.length === 1;
 	const combinations = new Set<string>();
 	const variants: ProductVariant[] = [];
 	for (const variant of product.variants) {
