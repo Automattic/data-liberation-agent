@@ -2,7 +2,7 @@ import type { Page } from 'playwright';
 import { documentRequestUrl } from './url/route-key.js';
 import { detectHosts, hostResidue } from '../platform/host.js';
 
-export const CLEANUP_SCHEMA = 'blocks-engine-capture/source-cleanup/v9';
+export const CLEANUP_SCHEMA = 'blocks-engine-capture/source-cleanup/v10';
 export const CLEANUP_CATEGORIES = ['advertisement', 'source-attribution', 'provider-service', 'tracking'] as const;
 export type CleanupCategory = typeof CLEANUP_CATEGORIES[number];
 export interface CleanupRule {
@@ -24,6 +24,8 @@ export interface CleanupRule {
   builderChrome?: boolean;
   /** Browser-measured invisible/tiny images without authored link or alt content. */
   trackingImage?: boolean;
+  /** Browser-measured rendered frames of at most 1×1 px loading a network source. */
+  trackingFrame?: boolean;
   /** Adapter-owned brand spelling for plain-text footer credit removal. */
   creditText?: string;
   /** Custom properties this chrome publishes its own height into, so the space
@@ -124,8 +126,17 @@ const TRACKING_IMAGE_RULE: CleanupRule = {
   evidence: 'Loaded image of at most 8×8 px, rendered at most 1×1 px or not rendered, outside a link, without alt or a lazy-load source',
 };
 
+/** Third-party SDKs (a consent manager's offscreen frame) inject a rendered
+ *  1×1 frame. Cleanup removes their loader script, so the frame is all that
+ *  is left of them. Frames that are not rendered (a hidden tab) keep their
+ *  content, and frames of real size are embeds. */
+const TRACKING_FRAME_RULE: CleanupRule = {
+  id: 'tracking-frame', category: 'tracking', selector: 'iframe[src]', trackingFrame: true,
+  evidence: 'Rendered frame loading a network source, at most 1×1 px',
+};
+
 export function cleanupPolicy(rules: CleanupRule[] = []): CleanupPolicy {
-  return { schema: CLEANUP_SCHEMA, rules: [...AD_RULES, CAPTCHA_WIDGET_RULE, TRACKING_IMAGE_RULE, ...rules, BUILDER_CHROME_RULE],
+  return { schema: CLEANUP_SCHEMA, rules: [...AD_RULES, CAPTCHA_WIDGET_RULE, TRACKING_IMAGE_RULE, TRACKING_FRAME_RULE, ...rules, BUILDER_CHROME_RULE],
     promotion: { ...PROMOTION_PATTERNS }, builderChrome: { ...BUILDER_CHROME_PATTERNS } };
 }
 
@@ -371,6 +382,12 @@ export function installCleanupInPage(args: { policy: CleanupPolicy; recovered?: 
       if ([...image.getAttributeNames()].some(name => /^(?:srcset|data-(?:src|srcset|lazy.*|original))$/i.test(name))) return false;
       const rect = image.getBoundingClientRect();
       return (rect.width <= 1 && rect.height <= 1) || !image.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
+    }
+    if (rule.trackingFrame) {
+      const frame = node as HTMLIFrameElement;
+      if (node.tagName !== 'IFRAME' || !/^https?:$/i.test(new URL(frame.src || 'about:blank', location.href).protocol)) return false;
+      // The content box: a frame's default border adds 4 px to its outer box.
+      return frame.clientWidth <= 1 && frame.clientHeight <= 1 && frame.checkVisibility({ checkOpacity: false, checkVisibilityCSS: true });
     }
     if (rule.hosts || rule.pathPrefixes) {
       let url: URL;
