@@ -111,14 +111,15 @@ export function installAccessGatePlaceholder( args: { route: string; gateTitle: 
 	// not the page's name. Every navigation link to the route (desktop and
 	// mobile menus) is marked current, as the source marks an ordinary route.
 	const navigation = 'nav a[href],[role="navigation"] a[href],header a[href]';
-	const routeLinks = [ ...document.querySelectorAll< HTMLAnchorElement >( navigation ) ].filter( ( link ) => {
+	const namesRoute = ( link: HTMLAnchorElement ) => {
 		try {
 			const target = new URL( link.href, location.href );
 			return target.origin === route.origin && normalize( target.pathname ) === normalize( route.pathname );
 		} catch {
 			return false;
 		}
-	} );
+	};
+	const routeLinks = [ ...document.querySelectorAll< HTMLAnchorElement >( navigation ) ].filter( namesRoute );
 	let label = '';
 	for ( const link of routeLinks ) {
 		const text = ( link.textContent ?? '' ).replace( /\s+/g, ' ' ).trim();
@@ -131,7 +132,39 @@ export function installAccessGatePlaceholder( args: { route: string; gateTitle: 
 		const segment = decodeURIComponent( normalize( route.pathname ).split( '/' ).pop() ?? '' );
 		label = segment.replace( /[-_]+/g, ' ' ).replace( /\b\w/g, ( letter ) => letter.toUpperCase() ).trim() || args.gateTitle;
 	}
-	for ( const link of document.querySelectorAll( `${ navigation.split( ',' ).map( ( scope ) => `${ scope }[aria-current]` ).join( ',' ) }` ) ) link.removeAttribute( 'aria-current' );
+	// The shell marks its own route current, and not only with aria-current: a
+	// builder also flags the item's link or wrappers with a state class
+	// (`menu__item--selected`, `is-active`) or attribute (`data-selected`) that
+	// its stylesheet paints. Left on the shell's item, the placeholder claims the
+	// root page is being served, so that item is captured (and later rebuilt)
+	// in the shell's current presentation on a route it does not name. Every
+	// navigation item that does not name the route is put at rest: its link and
+	// the wrappers it alone fills (up to the first ancestor holding another
+	// navigation link) lose their current-state markers.
+	const currentToken = /(?:^|[^a-z0-9])(?:current|active|selected)(?:[^a-z0-9]|$)/i;
+	const stateAttributes = [ 'aria-current', 'data-selected', 'data-active', 'data-current' ];
+	const restingItems = () => {
+		// Read afresh: the shell's runtime can re-render its menus.
+		const navigationLinks = [ ...document.querySelectorAll< HTMLAnchorElement >( navigation ) ];
+		const marked: Element[] = [];
+		for ( const link of navigationLinks ) {
+			if ( namesRoute( link ) ) continue;
+			for ( let element: Element | null = link; element && element !== document.body; element = element.parentElement ) {
+				if ( element !== link && navigationLinks.some( ( other ) => other !== link && element!.contains( other ) ) ) break;
+				if ( [ ...element.classList ].some( ( name ) => currentToken.test( name ) ) || stateAttributes.some( ( name ) => element!.hasAttribute( name ) && 'false' !== element!.getAttribute( name ) ) ) marked.push( element );
+			}
+		}
+		return marked;
+	};
+	const rest = () => {
+		const marked = restingItems();
+		for ( const element of marked ) {
+			for ( const name of [ ...element.classList ] ) if ( currentToken.test( name ) ) element.classList.remove( name );
+			for ( const name of stateAttributes ) if ( element.hasAttribute( name ) && 'false' !== element.getAttribute( name ) ) element.removeAttribute( name );
+		}
+		return marked.length;
+	};
+	rest();
 	for ( const link of routeLinks ) link.setAttribute( 'aria-current', 'page' );
 	// A gate titled with the page name already ("News | Site") is not prefixed again.
 	const title = ! args.gateTitle || args.gateTitle === label ? label
@@ -191,12 +224,15 @@ export function installAccessGatePlaceholder( args: { route: string; gateTitle: 
 	let repairs = 0;
 	const displaced = () => {
 		const root = document.querySelector( 'main' ) ?? document.querySelector( '[role="main"]' );
-		return ! root || root.childNodes.length !== 1 || root.firstChild !== section || document.title !== title;
+		return ! root || root.childNodes.length !== 1 || root.firstChild !== section || document.title !== title || restingItems().length > 0;
 	};
 	const reassert = () => {
 		const root = contentRoot();
 		if ( root.childNodes.length !== 1 || root.firstChild !== section ) root.replaceChildren( section );
 		if ( document.title !== title ) document.title = title;
+		// The shell's router still believes it serves the root page and can
+		// re-mark that item current when it re-renders its menu.
+		rest();
 		return section.isConnected;
 	};
 	const observer = new MutationObserver( () => {
@@ -207,7 +243,7 @@ export function installAccessGatePlaceholder( args: { route: string; gateTitle: 
 		}
 		reassert();
 	} );
-	observer.observe( document.documentElement, { childList: true, subtree: true } );
+	observer.observe( document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: [ 'class', ...stateAttributes ] } );
 	host.__dlaAccessGate = { observer, reassert };
 	return { label, title };
 }

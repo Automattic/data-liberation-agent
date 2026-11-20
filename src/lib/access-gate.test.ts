@@ -202,3 +202,30 @@ it( 'keeps the note when the shell runtime re-renders its content root after the
 	expect( html ).toContain( 'id="SITE_FOOTER"' );
 	expect( html ).toMatch( /<title>Dues \| Owner HOA<\/title>/ );
 }, 240_000 );
+
+it( 'puts the shell’s own current menu item at rest on the placeholder route, including builder state markers', async () => {
+	// The shell's menu marks its own route current three ways, as Wix does: a
+	// state class and a data attribute on the item's wrapper (both painted by
+	// its stylesheet) and aria-current on the link. Its runtime re-marks the
+	// item when it re-renders the menu after load.
+	const selectedHome = '<div class="item menu__item--selected" data-selected="true" data-part="menu-item-content"><a href="/" aria-current="page">Home</a></div>';
+	const restingDues = '<div class="item" data-part="menu-item-content"><a href="/dues">Dues</a></div>';
+	const markedShell = shell( 'Home | Owner HOA', `<h1>Welcome neighbours</h1><p>${ 'Owner home content. '.repeat( 20 ) }</p>`,
+		`addEventListener('load',()=>setTimeout(()=>{const i=document.querySelector('nav .item');i.classList.add('menu__item--selected');i.setAttribute('data-selected','true');i.querySelector('a').setAttribute('aria-current','page')},2500));` )
+		.replace( '<nav><a href="/">Home</a> <a href="/dues">Dues</a></nav>', `<nav class="menu">${ selectedHome }${ restingDues }</nav>` )
+		.replace( '</style>', '.menu .item a{font-size:20px}.menu .menu__item--selected a{font-size:6px}.menu [data-selected] a{color:red}</style>' );
+	const { result, entry, html } = await captureGated( { ...pages, '/': markedShell }, '/dues' );
+	expect( result.failed ).toBe( 0 );
+	expect( entry.accessGate ).toMatchObject( { provider: 'Wix', label: 'Dues' } );
+	const home = html.match( /<div[^>]*>\s*<a href="\/"[^>]*>Home<\/a>/ )?.[ 0 ] ?? '';
+	expect( home ).toContain( 'Home' );
+	// The root page is not the one served: its item carries no current state.
+	expect( home ).not.toContain( 'menu__item--selected' );
+	expect( home ).not.toContain( 'data-selected' );
+	expect( home ).not.toContain( 'aria-current' );
+	// The page's own entry is the current one.
+	expect( html ).toMatch( /<a href="\/dues"[^>]*aria-current="page"[^>]*>Dues<\/a>/ );
+	// Unrelated wrappers keep their identity.
+	expect( home ).toContain( 'class="item"' );
+	expect( html ).toContain( '<nav class="menu"' );
+}, 240_000 );
