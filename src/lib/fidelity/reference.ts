@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, renameSync, rmSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import type { BrowserContext, Page, Request, Response } from 'playwright';
 import { installProbeIntrinsics } from '../browser-kit/probe-intrinsics.js';
@@ -15,17 +15,38 @@ import type { CleanupPolicy } from '../source-cleanup.js';
 import { captureFullPageScreenshot, captureViewportScreenshot } from './viewport-screenshot.js';
 import { navigateSourceDocument, storeExternalBoundary, boundaryIdentity, type ExternalBoundary } from '../source-navigation.js';
 import { lockMainFrameNavigation } from '../screenshot/probe-guards.js';
-import { replayBrowserIdentity, type CaptureProfile } from '../screenshot/capture-profiles.js';
+import { publicCaptureProfile, replayBrowserIdentity, type CaptureProfile } from '../screenshot/capture-profiles.js';
 import { observeViewportEntrances, collectViewportEntranceStartup } from '../viewport-entrances.js';
 import { watchSourceRuntimeErrors } from '../source-readiness.js';
-import { alignSourceMotion, MOTION_ALIGN_TIMEOUT_MS, observeMotionHold, readPaintedTokens, recordedSourceMotion } from '../screenshot/motion-hold.js';
+import { alignSourceMotion, MOTION_ALIGN_TIMEOUT_MS, observeMotionHold, readPaintedTokens, recordedSourceMotion, type SourceMotion } from '../screenshot/motion-hold.js';
 
 /** Upper bound for in-flight source images to settle before the reference is frozen. */
 const MEDIA_READY_TIMEOUT_MS = 10_000;
 /** Upper bound for images whose successful response is still streaming its body. */
 const MEDIA_STREAM_TIMEOUT_MS = 60_000;
 
+export interface ReferenceHandoff {
+	schema: 'data-liberation/reference-stage/v1';
+	status: 'pending' | 'complete';
+	captureId: string;
+	sourceUrl: string;
+	sourceUrls: string[];
+	adapterId?: string;
+	/** Origins the capture's caller vouched for; the deferred stage of that capture inherits them. */
+	trustedOrigins?: string[];
+	options: Pick<ReferenceCollectorOptions, 'routeScope' | 'publicUrlsOnly' | 'cleanupPolicy' | 'removeSelectors' | 'clientErrorShellSelectors' | 'referenceSample'>;
+	sampledUrls: string[];
+	cells: ReferenceCell[];
+	jobs: Array<{ url: string; device: string; errors: string[]; browserProfile?: ReferenceEntry['browserProfile']; profile: CaptureProfile; boundary?: ExternalBoundary; motion?: SourceMotion }>;
+	entries: ReferenceEntry[];
+	receipt?: ReferenceArtifact;
+}
+
 export interface ReferenceCollectorOptions {
+	defer?: boolean;
+	adapterId?: string;
+	trustedOrigins?: string[];
+	handoff?: ReferenceHandoff;
 	initializePage?: (page: Page) => Promise<void>;
 	routeScope?: import('../../platform/types.js').SiteRouteScope;
 	publicUrlsOnly?: boolean;
@@ -101,9 +122,20 @@ export function readReferenceArtifact( directory: string, artifact: ReferenceArt
 
 /** A single capture invocation owns this collector. Resume never invents evidence for skipped sessions. */
 export function createReferenceCollector( directory: string, sourceUrl: string, sourceUrls: string[], options: ReferenceCollectorOptions = {} ) {
-	const captureId = randomUUID();
-	const entries: ReferenceEntry[] = [];
-	const cells = new Map<string, ReferenceCell>();
+	const captureId = options.handoff?.captureId ?? randomUUID();
+	const entries: ReferenceEntry[] = options.handoff?.entries ?? [];
+	const cells = new Map<string, ReferenceCell>( ( options.handoff?.cells ?? [] ).map( cell => [ JSON.stringify( cell ), cell ] ) );
+	const jobs: ReferenceHandoff['jobs'] = options.handoff?.jobs ?? [];
+	const checkpoint = ( receipt?: ReferenceArtifact ): void => {
+		const state: ReferenceHandoff = {
+			schema: 'data-liberation/reference-stage/v1', status: 'pending', captureId, sourceUrl, sourceUrls,
+			adapterId: options.adapterId, trustedOrigins: options.trustedOrigins, options: { routeScope: options.routeScope, publicUrlsOnly: options.publicUrlsOnly,
+				cleanupPolicy: options.cleanupPolicy, removeSelectors: options.removeSelectors, clientErrorShellSelectors: options.clientErrorShellSelectors, referenceSample: sampleLimit },
+			sampledUrls: [ ...sampledUrls ], cells: [ ...cells.values() ], jobs, entries, receipt: receipt ?? options.handoff?.receipt,
+		};
+		writeFileSync( join( directory, 'reference-stage.json.tmp' ), `${ JSON.stringify( state, null, 2 ) }\n` );
+		renameSync( join( directory, 'reference-stage.json.tmp' ), join( directory, 'reference-stage.json' ) );
+	};
 	// Bounded sample: the entrypoint plus an even spread over the remaining
 	// initial routes (spreadSample, entrypoint first), decided once here so the
 	// choice is deterministic and holds whenever a route's capture runs. Routes
@@ -111,7 +143,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 	// Unbounded (default) admits every route, including later discoveries.
 	const sampleLimit = options.referenceSample;
 	if ( sampleLimit !== undefined && ( ! Number.isInteger( sampleLimit ) || sampleLimit < 1 ) ) throw new Error( 'referenceSample must be a positive integer' );
-	const sampledUrls = new Set( sampleLimit === undefined ? [] : spreadSample( [ ...new Set( [ sourceUrl, ...sourceUrls ] ) ], sampleLimit ) );
+	const sampledUrls = new Set( options.handoff?.sampledUrls ?? ( sampleLimit === undefined ? [] : spreadSample( [ ...new Set( [ sourceUrl, ...sourceUrls ] ) ], sampleLimit ) ) );
 	const inSample = ( url: string ): boolean => sampleLimit === undefined || sampledUrls.has( url );
 	const declare = ( url: string, profile: CaptureProfile ): void => {
 		if ( ! inSample( url ) ) return;
@@ -151,7 +183,17 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 			if ( ! inSample( url ) ) return;
 			const recipe = profile ?? { id: device, width: page.viewportSize()?.width ?? 1440, height: 900 };
 			declare( url, recipe );
-			const referenceCells = [ ...cells.values() ].filter( cell => cell.sourceUrl === url && cell.profile === device );
+			// A resumed stage keeps its ready cells and replaces only the rest.
+			const sameCell = ( entry: ReferenceEntry, cell: ReferenceCell ) => entry.sourceUrl === cell.sourceUrl && entry.profile === cell.profile && entry.viewport === cell.viewport;
+			const referenceCells = [ ...cells.values() ].filter( cell => cell.sourceUrl === url && cell.profile === device && ! ( options.handoff && entries.some( entry => entry.readiness.ready && sameCell( entry, cell ) ) ) );
+			if ( options.handoff ) for ( let index = entries.length - 1; index >= 0; index-- ) {
+				if ( referenceCells.some( cell => sameCell( entries[ index ], cell ) ) ) entries.splice( index, 1 );
+			}
+			if ( options.defer ) {
+				jobs.push( { url, device, errors: [ ...errors ], browserProfile, profile: publicCaptureProfile( recipe ), boundary: expectedBoundary, motion: recordedSourceMotion( page ) } );
+				checkpoint();
+				return;
+			}
 			const sourceContext = page.context();
 			const browser = sourceContext.browser();
 			// Capture resolves the preset before applying explicit context overrides.
@@ -375,7 +417,13 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 			if ( supportsSiblingPages ) await Promise.all( referenceCells.map( observeCell ) );
 			else for ( const cell of referenceCells ) await observeCell( cell );
 		},
+		checkpoint,
 		finalize( receiptPath: string ): string {
+			if ( options.defer ) {
+				checkpoint( { path: relative( directory, receiptPath ), sha256: digest( readFileSync( receiptPath ) ) } );
+				rmSync( join( directory, 'fidelity-reference.json' ), { force: true } );
+				return join( directory, 'reference-stage.json' );
+			}
 			const coveragePath = join(directory, 'linked-page-coverage.json');
 			if (existsSync(coveragePath)) {
 				const coverage = JSON.parse(readFileSync(coveragePath, 'utf8')) as {requiredUrls: string[]};

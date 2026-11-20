@@ -47,6 +47,7 @@ export interface LiberateOptions {
 	 * scope. Default: the homepage only; 'all' freezes every route.
 	 */
 	referenceSample?: number | 'all';
+	deferReference?: boolean;
 	/** Capture time budget in ms until export must begin; see `CaptureOptions.timeBudgetMs`. Default: 17 minutes unless routeLimit is explicit. */
 	timeBudgetMs?: number;
 	/** Milliseconds of the time budget reserved per started route for downstream work; see `CaptureOptions.routeReserveMs`. No effect without a time budget. Default: 0. */
@@ -103,6 +104,7 @@ export async function liberateSite( options: LiberateOptions ): Promise< Liberat
 		captureImages: options.screenshots,
 		learnFluid: options.learnFluid !== false,
 		referenceSample: options.referenceSample,
+		deferReference: options.deferReference,
 		timeBudgetMs: options.timeBudgetMs,
 		routeReserveMs: options.routeReserveMs,
 		routeDeadlineMs: options.routeDeadlineMs,
