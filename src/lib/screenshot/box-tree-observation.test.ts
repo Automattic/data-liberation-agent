@@ -97,6 +97,12 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('binds a node the source runtime inser
 		const tree = await captureBoxTree(page, html, { mobile: { width: 390, height: 844 } }, { name: 'mobile', nodes }, mismatch => { unproven = mismatch; });
 		expect(unproven).toBeUndefined();
 		expect(bindBoxTree(html, tree)).toEqual(tree);
+		// A fetched-but-disabled preferred sheet is not a resource failure.
+		// It must not turn browser defaults into exportable layout evidence.
+		await page.setContent('<!doctype html><link rel="stylesheet" title="theme" href="data:text/css,header{position:fixed}"><header>Fixed</header>');
+		await page.evaluate(() => { document.querySelector<HTMLLinkElement>('link')!.sheet!.disabled = true; });
+		await capturePageHtml(page, [], undefined, observed => { observation = observed; });
+		expect(observation).toMatchObject({ mismatch: { kind: 'stylesheet', detail: expect.stringContaining('author stylesheet not applied') } });
 	} finally {
 		await browser.close();
 	}

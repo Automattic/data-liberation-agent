@@ -7,6 +7,12 @@ export interface RenderedDocumentUrl {
 	baseUrl: string;
 }
 
+/** The URL a document's relative references name: its authored `<base href>`, or the document URL. */
+export function authoredBaseUrl( html: string, documentUrl: string ): string {
+	const href = /<base(?:\s|>)/i.test( html ) ? cheerio.load( html )( 'base[href]' ).first().attr( 'href' ) : undefined;
+	try { return href === undefined ? documentUrl : new URL( href, documentUrl ).href; } catch { return documentUrl; }
+}
+
 /** Resolve source references before removing <base> or combining viewport documents. */
 export function resolveDocumentReferences( html: string, documentUrl: string, browserBaseUrl?: string ): string {
 	// Legacy captures without browser metadata or an authored base already use

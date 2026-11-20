@@ -30,6 +30,8 @@ it.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.e
 			if ( progress.phase === 'finalizing' && progress.current ) elapsed = 100_000;
 		},
 		captureImages: false, learnFluid: false, deviceMode: 'reflow-only' as const,
+		// The fixture's pages share one template; this test covers checkpoints, not derivation.
+		templateClusters: false,
 	};
 	const deps = { findAdapter: () => ( { id: 'checkpoint-fixture', detect: () => true,
 		discover: async () => ( { urls: [ 'one/', 'two/', 'three/' ].map( path => ( { url: new URL( path, url ).href } ) ) } ),

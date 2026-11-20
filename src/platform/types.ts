@@ -132,6 +132,8 @@ export interface PlatformEntryResolver {
 
 /** One content item a platform publishes as structured data. */
 export interface StructuredContentEntry {
+	/** Optional provider-neutral generic/products/v1 data; image URLs are localized by capture/export. */
+	product?: import('../lib/product-row.js').ProductRow;
 	permalink: string;
 	/** Source slug from the permalink; the export keeps it as the item's slug. */
 	slug: string;
@@ -159,8 +161,9 @@ export interface StructuredContentEnumeration {
  * verification member prove `bodyEquivalent` against their browser captures.
  */
 export interface StructuredContentSource {
-	/** Enumerate published content. Every source request goes through `governors`. */
-	enumerate( sourceUrl: string, options: { governors: import( '../lib/source-request-governor.js' ).SourceRequestGovernors } ): Promise< StructuredContentEnumeration >;
+	/** Enumerate published content, optionally reusing this run's discovery inventory.
+	 * Every new source request goes through `governors`. */
+	enumerate( sourceUrl: string, options: { governors: import( '../lib/source-request-governor.js' ).SourceRequestGovernors; inventory?: unknown } ): Promise< StructuredContentEnumeration >;
 	/** True only when the document's single content slot matches the entry. Fail closed. */
 	bodyEquivalent( html: string, entry: StructuredContentEntry ): boolean;
 	/** CSS selector of the single content slot `memberDocument` fills. When set, a

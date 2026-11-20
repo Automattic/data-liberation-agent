@@ -10,7 +10,7 @@ import { BOX_TREE_SCHEMA, BOX_TREE_STYLES, NODE_ID_ATTRIBUTE } from './box-tree.
 
 // One public capture (~20 seconds). Optional consumer checkout enables the actual PHP intake assertion.
 it.skipIf(process.env.SKIP_BROWSER_TESTS)('publishes complete source-bound box trees for builder routes', async () => {
-	const fixture = `<!doctype html><html><head><meta charset="utf-8"><title>Builder</title><style>
+	const fixture = `<!doctype html><html><head><meta charset="utf-8"><title>Builder</title><link rel="stylesheet" title="wsite-theme-css" href="/theme.css"><style>
 		.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;position:relative}
 		img{width:100px;height:80px;mask:linear-gradient(black,transparent)}
 		h1{color:rgb(12,34,56);font-family:serif;font-size:32px;font-weight:700;letter-spacing:2px}
@@ -19,7 +19,7 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('publishes complete source-bound box t
 		.overlay{position:absolute;top:10px;right:4px;background:red;background-position:20% 30%;background-size:12px 14px}
 		.grid{padding-top:4px;transition:padding-top 2s linear}
 		@media(max-width:600px){.grid{grid-template-columns:1fr;padding-top:40px}}
-	</style></head><body><main><div><div><div class="grid"><div><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E"></div><div><h1>Builder</h1></div><span class="overlay">Overlay</span></div></div></div></main><a href="/other">Other</a><div id="fluid-offset" style="position:absolute;top:200px">Fluid</div><script>
+	</style></head><body><header>Fixed header</header><main><div><div><div class="grid"><div><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E"></div><div><h1>Builder</h1></div><span class="overlay">Overlay</span></div></div></div></main><a href="/other">Other</a><div id="fluid-offset" style="position:absolute;top:200px">Fluid</div><script>
 		function layout() { document.querySelector('#fluid-offset').style.inset = '200px auto auto ' + (innerWidth < 700 ? 20 : innerWidth * 0.1) + 'px'; }
 		addEventListener('resize', layout);
 		layout();
@@ -27,6 +27,7 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('publishes complete source-bound box t
 		addEventListener('resize', () => { clearTimeout(columns); columns = setTimeout(() => { document.querySelector('.grid').style.columnGap = innerWidth < 700 ? '30px' : ''; }, 250); });
 	</script></body></html>`;
 	const server = createServer((req, res) => {
+		if (req.url === '/theme.css') { res.setHeader('Content-Type', 'text/css'); res.end('header{position:fixed;height:120px}'); return; }
 		if (req.url !== '/' && req.url !== '/other') { res.writeHead(404); res.end('Not found'); return; }
 		res.setHeader('Content-Type', 'text/html'); res.end(fixture);
 	});
@@ -70,6 +71,7 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('publishes complete source-bound box t
 				}
 			});
 			for (const viewport of ['desktop', 'mobile']) {
+				expect(tree.nodes[$('header').attr(NODE_ID_ATTRIBUTE)!].viewports[viewport].used_styles.position).toBe('fixed');
 				const heading = tree.nodes[$('h1').attr(NODE_ID_ATTRIBUTE)!].viewports[viewport];
 				expect(heading.used_styles).toMatchObject({ color: 'rgb(12, 34, 56)', 'font-size': '32px', 'font-weight': '700', 'letter-spacing': '2px' });
 				expect(heading.pseudo.before.content).toBe('"★"');

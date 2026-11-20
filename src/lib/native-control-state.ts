@@ -16,6 +16,9 @@ export const NATIVE_CONTROL_STATE_ATTRIBUTE = 'data-blocks-engine-capture-native
 /** Closure-free browser primitive, also used by capture's serialization task. */
 export function observeNativeControlState( control: Element ): NativeControlState | null {
 	if ( ! ( control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement || control instanceof HTMLSelectElement ) ) return null;
+	// Raw capture has provenance stamps; portable HTML has the stable owner key.
+	// Keep the rendered embed as reference, not as replayable native controls.
+	if ( control.closest( '[data-blocks-engine-capture-runtime-owner],[data-blocks-engine-capture-runtime-owner-script]' ) ) return null;
 	const style = getComputedStyle( control );
 	// Observe the live cascade, including author stylesheets and hidden ancestors.
 	const rendering: { rendered?: false } = style.display === 'none' || style.visibility === 'hidden' ||

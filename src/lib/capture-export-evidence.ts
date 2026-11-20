@@ -56,7 +56,7 @@ export interface CaptureEvidenceInput {
 		discoveryDiagnostics?: ReadonlyArray< RouteDiagnostic >;
 	};
 	capture: {
-		entries: Readonly< Record< string, Pick< ManifestEntry, 'cleanup' | 'redirectedTo' | 'externalRedirect' | 'sourceOutcomes' | 'nativeViewTimelines' | 'dismissed' | 'scriptedLinks' | 'sourceDeadFragments' > > >;
+		entries: Readonly< Record< string, Pick< ManifestEntry, 'cleanup' | 'redirectedTo' | 'externalRedirect' | 'sourceOutcomes' | 'nativeViewTimelines' | 'dismissed' | 'scriptedLinks' | 'sourceDeadFragments' | 'profiles' > > >;
 		absentRoutes: ReadonlySet< string >;
 		interactivity: ReadonlyArray< SourceInteractivityPage >;
 		http?: { acquisition: unknown; diagnostics: ReadonlyArray< { code: string; url: string; reason: string } > };
@@ -598,6 +598,7 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 		switchWidthSource: deviceSelections.length && ! switchWidths.length ? 'not-applicable' : widthSelections.length === switchWidths.length && widthSelections.length > 0 ? 'observed' : switchWidths.length > 0 ? 'detected' : 'default',
 		breakpoints: observedBreakpoints,
 		learned: { applied: learnedApplied, frozen: learnedFrozen, routes: routes.filter( entry => entry.fluidGeometry ).length, documents: fluidReports.length },
+		mobileRedirects: routes.flatMap( route => Object.values( capture.entries[ route.url ]?.profiles ?? {} ).flatMap( profile => ( profile.diagnostics ?? [] ).flatMap( diagnostic => diagnostic.mobileRedirect ? [ diagnostic.mobileRedirect ] : [] ) ) ),
 		// Keyed by exported file, so offline callers need no source URL mapping.
 		sourceDeadFragments: routes.map( route => ( {
 			path: route.path.replace( /^website\//, '' ),

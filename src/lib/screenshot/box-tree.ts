@@ -50,7 +50,7 @@ export type BoxTree = {
 /** The first node at which saved bytes and observed topology disagree. */
 export type BoxTreeMismatch = {
 	/** missing: saved node absent from the live tree; extra: bound bytes hold a node the tree never observed; moved: an observed node sits under another parent or position. */
-	kind: 'missing' | 'extra' | 'moved' | 'duplicate' | 'unstamped' | 'unobservable' | 'oversized';
+	kind: 'missing' | 'extra' | 'moved' | 'duplicate' | 'unstamped' | 'unobservable' | 'oversized' | 'stylesheet';
 	id?: string;
 	parent?: string;
 	path: string;
@@ -74,6 +74,24 @@ export function observeBoxTree(snapshot: Element, properties: readonly string[],
 		}
 		return parts.join('>');
 	};
+	// A successful response is not proof of application: reinsertion can leave
+	// a link loading, and titled alternate sets can leave it inactive. Do not
+	// read cssRules here: cross-origin sheets are valid, but opaque.
+	const sheets = new Set(Array.from(document.styleSheets));
+	for (const saved of snapshot.querySelectorAll<HTMLLinkElement>('link[rel~="stylesheet" i][href]')) {
+		const id = saved.getAttribute(attribute);
+		if (id && !Array.from(document.querySelectorAll('link')).some(link => link.getAttribute(attribute) === id)) return {
+			mismatch: { kind: 'stylesheet', id, path: 'html>head>link', detail: 'saved author stylesheet missing from observed document' },
+		};
+	}
+	for (const link of document.querySelectorAll<HTMLLinkElement>('link[rel~="stylesheet" i][href]')) {
+		if (link.hasAttribute('disabled') || (link.media && !matchMedia(link.media).matches)) continue;
+		// Unselected alternate sets are intentionally inactive.
+		if (link.relList.contains('alternate') && (!link.sheet || link.sheet.disabled)) continue;
+		if (!link.sheet || !sheets.has(link.sheet) || link.sheet.disabled) return {
+			mismatch: { kind: 'stylesheet', path: 'html>head>link', detail: `author stylesheet not applied: ${link.href}` },
+		};
+	}
 	const retained = [snapshot, ...snapshot.querySelectorAll('*')];
 	const live = new Map(Array.from(document.querySelectorAll('*'), element => [element.getAttribute(attribute), element]));
 	const nodes: BoxTree['nodes'] = {};
@@ -220,7 +238,7 @@ export async function captureBoxTree(page: Page, html: string, viewports: BoxTre
 			if (name === initial?.name) continue;
 			await page.setViewportSize(size);
 			await page.evaluate(settleResize, RESIZE_SETTLE);
-			const observations = await page.evaluate(({ attribute, properties, topology, html, observerSource }) => {
+			const readObservation = () => page.evaluate(({ attribute, properties, topology, html, observerSource }) => {
 				// A visitor loading at this width sees the end state, not a resize transition mid-flight.
 				for (const animation of document.getAnimations()) if (animation instanceof CSSTransition) animation.finish();
 				const live = new Map(Array.from(document.querySelectorAll('*'), element => [element.getAttribute(attribute), element]));
@@ -235,8 +253,18 @@ export async function captureBoxTree(page: Page, html: string, viewports: BoxTre
 				// would resolve built-ins from the source page's mutable globals.
 				const observe = new Function(`return (${observerSource})`)() as typeof observeBoxTree;
 				const observed = observe(new DOMParser().parseFromString(html, 'text/html').documentElement, properties, attribute);
-				return 'nodes' in observed ? Object.fromEntries(Object.entries(observed.nodes).map(([id, node]) => [id, node.viewports.capture])) : undefined;
+				return 'mismatch' in observed ? observed : { observations: Object.fromEntries(Object.entries(observed.nodes).map(([id, node]) => [id, node.viewports.capture])) };
 			}, { attribute: NODE_ID_ATTRIBUTE, properties: BOX_TREE_STYLES, topology: nodes, html, observerSource: observeBoxTree.toString() });
+			let reading = await readObservation();
+			if (reading && 'mismatch' in reading && reading.mismatch.kind === 'stylesheet') {
+				await page.waitForTimeout(250);
+				reading = await readObservation();
+			}
+			if (reading && 'mismatch' in reading && reading.mismatch.kind === 'stylesheet') {
+				onUnproven?.(reading.mismatch);
+				return;
+			}
+			const observations = reading && 'observations' in reading ? reading.observations : undefined;
 			if (!observations) {
 				if (!initial && size.width === original?.width && size.height === original?.height) return;
 				continue;

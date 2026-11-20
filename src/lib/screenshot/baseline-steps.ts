@@ -252,6 +252,12 @@ async function captureLayoutGeometry( page: Page, viewport: Viewport ): Promise<
 					break;
 				}
 				const target = wrapper.firstElementChild;
+				// Moving a stylesheet owner disconnects/reloads its sheet and can
+				// reset a titled preferred set. Restoring DOM order is not enough.
+				if ( wrapper.querySelector( 'style,link[rel~="stylesheet" i]' ) ) {
+					omit( 'stylesheet_owner' );
+					continue;
+				}
 				if (
 					!target ||
 					wrapper.children.length !== 1 ||

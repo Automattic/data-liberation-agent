@@ -110,6 +110,7 @@ export interface ManifestEntry {
 }
 
 export interface ProfileDiagnostic {
+  mobileRedirect?: import('../mobile-redirect.js').MobileRedirect;
   code: string;
   reason: string;
 }
@@ -188,6 +189,11 @@ export class ManifestQueue {
   /** Lookup an existing entry by URL (used to reuse slug on resume). */
   getEntry(url: string): ManifestEntry | undefined {
     return this.manifest.entries[url];
+  }
+
+  /** URLs with a manifest entry. */
+  urls(): string[] {
+    return Object.keys(this.manifest.entries);
   }
 
   /** Claim a slug through the serialization chain. */

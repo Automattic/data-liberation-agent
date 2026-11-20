@@ -5,52 +5,40 @@ import { extractNavLinks } from '../../lib/html-extract/index.js';
 import { extractSiteMetadata } from '../site-metadata.js';
 import type { InventoryUrl } from '../shared.js';
 import type { NavLink } from '../../lib/html-extract/index.js';
-import type { SquarespaceInventory } from './types.js';
+import type { SquarespaceInventory, SqsJsonResponse } from './types.js';
 import { fetchSqsJson } from './content.js';
 
 const MAX_ARCHIVE_PAGES = 200;
-const BLOG_PREFIXES = ['/blog', '/journal', '/news', '/posts', '/stories'];
+
+// Run-local probe reuse without putting feed bodies into serialized inventory.
+const collectionProbes = new WeakMap<object, Map<string, SqsJsonResponse | null>>();
+export function discoveredCollectionProbes(inventory: unknown): ReadonlyMap<string, SqsJsonResponse | null> | undefined {
+  return inventory && typeof inventory === 'object' ? collectionProbes.get(inventory) : undefined;
+}
 
 interface ArchivePage {
   items?: Array<{ urlId?: string; fullUrl?: string; addedOn?: number | string } | null>;
   pagination?: { nextPageOffset?: number | string };
 }
 
-function blogPrefixes(urls: InventoryUrl[]): string[] {
-  const datePrefixes = new Map<string, number>();
-  const conventions = new Set<string>();
-  const datePath = /^(\/[^/]+(?:\/[^/]+)*?)\/\d{4}\/\d{1,2}\/\d{1,2}\/[^/]+\/?$/;
-
-  for (const { url } of urls) {
-    let path: string;
-    try {
-      path = new URL(url).pathname;
-    } catch {
-      continue;
-    }
-
-    const match = datePath.exec(path);
-    if (match) {
-      const prefix = match[1];
-      datePrefixes.set(prefix, (datePrefixes.get(prefix) || 0) + 1);
-      continue;
-    }
-    for (const prefix of BLOG_PREFIXES) {
-      if (path === prefix || path.startsWith(`${prefix}/`)) {
-        conventions.add(prefix);
-        break;
-      }
+function collectionRoots(siteUrl: string, urls: string[]): string[] {
+  const origin = new URL(siteUrl).origin;
+  const roots = new Set<string>();
+  for (const url of urls) {
+    let candidate: URL;
+    try { candidate = new URL(url, siteUrl); } catch { continue; }
+    if (candidate.origin !== origin || candidate.username || candidate.password) continue;
+    const segments = candidate.pathname.split('/').filter(Boolean);
+    // Top-level destinations and every parent of an item route, including
+    // nested collections and date-based archives. Never expand from feed items.
+    for (let length = 1; length <= Math.max(1, segments.length - 1); length++) {
+      roots.add(`/${segments.slice(0, length).join('/')}`);
     }
   }
-
-  const detected = [...datePrefixes.entries()]
-    .filter(([, count]) => count >= 2)
-    .sort((a, b) => b[1] - a[1])
-    .map(([prefix]) => prefix);
-  return [...new Set([...detected, ...conventions])];
+  return [...roots];
 }
 
-async function discoverArchiveUrls(siteUrl: string, prefix: string): Promise<string[]> {
+async function discoverArchiveUrls(siteUrl: string, prefix: string, firstPage: ArchivePage): Promise<string[]> {
   const origin = new URL(siteUrl).origin;
   const urls: string[] = [];
   const seenUrlIds = new Set<string>();
@@ -59,26 +47,13 @@ async function discoverArchiveUrls(siteUrl: string, prefix: string): Promise<str
 
   for (let page = 0; page < MAX_ARCHIVE_PAGES; page++) {
     const archiveUrl = new URL(prefix, origin);
-    archiveUrl.searchParams.set('format', 'json-pretty');
+    archiveUrl.searchParams.set('format', 'json');
     if (offset !== undefined) archiveUrl.searchParams.set('offset', String(offset));
 
-    let response: Response;
-    try {
-      response = await fetch(archiveUrl, {
-        signal: AbortSignal.timeout(15_000),
-        headers: { 'User-Agent': SOURCE_USER_AGENT },
-      });
-    } catch {
-      break;
-    }
-    if (!response.ok) break;
-
-    let archive: ArchivePage | null;
-    try {
-      archive = await response.json() as ArchivePage;
-    } catch {
-      break;
-    }
+    // The detection probe is page one, not a second request for the same root.
+    const archive: ArchivePage | null = page === 0
+      ? firstPage
+      : await fetchSqsJson(archiveUrl.href);
     if (!archive || !Array.isArray(archive.items) || archive.items.length === 0) break;
 
     for (const item of archive.items) {
@@ -172,20 +147,6 @@ export async function discover(url: string, opts: Record<string, unknown>): Prom
     counts['homepage'] = 1;
   }
 
-  // Squarespace blog listings expose a compact paginated feed which can recover
-  // recently published posts before the sitemap catches up. It is discovery-only:
-  // captured pages remain the portable artifact contract.
-  const knownUrls = new Set(inventoryUrls.map(({ url: discoveredUrl }) => discoveredUrl));
-  for (const prefix of blogPrefixes(inventoryUrls)) {
-    const archiveUrls = await discoverArchiveUrls(url, prefix);
-    for (const archiveUrl of archiveUrls) {
-      if (knownUrls.has(archiveUrl)) continue;
-      knownUrls.add(archiveUrl);
-      inventoryUrls.push({ url: archiveUrl, type: 'post' });
-      counts.post = (counts.post || 0) + 1;
-    }
-  }
-
   // A sitemap is not a complete route list: pages linked from the homepage,
   // including its primary navigation, can be missing from it. Queue those
   // same-origin page links as generic discovery does, skipping any that match
@@ -200,6 +161,39 @@ export async function discover(url: string, opts: Record<string, unknown>): Prom
     counts[type] = (counts[type] || 0) + 1;
   }
 
+  // Ask the source which roots are collections instead of guessing from names.
+  // Snapshot the candidates so pagination cannot grow the probe frontier.
+  const collections: NonNullable<SquarespaceInventory['collections']> = [];
+  const probes = new Map<string, SqsJsonResponse | null>([[url, siteJson]]);
+  const roots = collectionRoots(url, [url, ...inventoryUrls.map(({ url }) => url), ...navigation.map(({ href }) => href)]);
+  for (const root of roots) {
+    const collectionUrl = new URL(root, url).href;
+    const firstPage = routeKey(collectionUrl) === routeKey(url)
+      ? siteJson
+      : await fetchSqsJson(collectionUrl);
+    probes.set(collectionUrl, firstPage);
+    if (!firstPage?.collection || typeof firstPage.collection !== 'object' || !Array.isArray(firstPage.items)) continue;
+    // A sitemap containing collection members already supplies route discovery.
+    // Leave the full feed walk to structured-content enumeration in that case.
+    const listedItems = sitemapUrls.filter(item => new URL(item).pathname.startsWith(`${root}/`));
+    const archiveUrls = listedItems.length ? listedItems : await discoverArchiveUrls(url, root, firstPage);
+    collections.push({
+      url: collectionUrl,
+      type: firstPage.collection.type,
+      typeName: firstPage.collection.typeName,
+      itemCount: archiveUrls.length,
+    });
+    for (const archiveUrl of archiveUrls) {
+      const key = routeKey(archiveUrl);
+      if (knownRoutes.has(key)) continue;
+      knownRoutes.add(key);
+      const type = firstPage.collection.type === 1 || firstPage.collection.typeName === 'blog'
+        ? 'post' : classifyUrl(archiveUrl);
+      inventoryUrls.push({ url: archiveUrl, type });
+      counts[type] = (counts[type] || 0) + 1;
+    }
+  }
+
   const inventory: SquarespaceInventory = {
     siteUrl: url,
     discoveredAt: new Date().toISOString(),
@@ -211,7 +205,9 @@ export async function discover(url: string, opts: Record<string, unknown>): Prom
     counts,
     urls: inventoryUrls,
     diagnostics: sitemap.diagnostics,
+    collections,
   };
 
+  collectionProbes.set(inventory, probes);
   return inventory;
 }

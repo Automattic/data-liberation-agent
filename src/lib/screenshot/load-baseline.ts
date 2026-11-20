@@ -133,6 +133,7 @@ export async function loadSourceBaseline( args: SourceLoadInput ): Promise<Sourc
 			}
 			// The document arrived; capture's own bounded readiness takes over
 			// from here, so a pending subresource is evidence, not a failure.
+			for ( const redirect of navigation.mobileRedirects ?? [] ) args.diagnostics?.push( { code: 'source_mobile_redirect', reason: `Classified inline-script mobile redirect from ${ redirect.source } at ${ redirect.viewport.width }px to ${ redirect.target } (${ redirect.trigger.condition }); navigation held to retain source HTML and box-tree`, mobileRedirect: redirect } );
 			if ( navigation.scriptNavigationUrl ) args.diagnostics?.push( { code: SOURCE_SCRIPT_NAVIGATION, reason: `source script navigated the delivered document to ${ navigation.scriptNavigationUrl }; replayed as the same route's reload` } );
 			if ( navigation.loadIncomplete ) args.diagnostics?.push( { code: SOURCE_LOAD_INCOMPLETE, reason: `load event did not fire within the ${ budgetMs }ms navigation budget; subresources were still pending` } );
 			if ( navigation.subresourceLoss ) args.diagnostics?.push( { code: 'source_subresource_loss', reason: 'Reset or throttled subresource loads remained after bounded document recovery' } );

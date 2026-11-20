@@ -1,5 +1,17 @@
 import { expect, it } from 'vitest';
 import { structuredContentIndex } from './content-index.js';
+import type { StructuredContentEntry } from '../platform/types.js';
+
+it('omits unresolved catalog images with diagnostics and retains products outside route coverage', () => {
+	const entry: StructuredContentEntry = { permalink: 'https://shop.test/products/cup', slug: 'cup', title: 'Cup', kind: 'page', contentHtml: '', published: '', updated: '', author: '', terms: [],
+		product: { name: 'Cup', slug: 'cup', regular_price: '9.00', stock_status: 'instock', images: [{ src: 'https://cdn.test/cup.jpg', alt: 'Cup' }] } };
+	const diagnostics: string[] = [];
+	const content = structuredContentIndex([entry], [], { termName: () => undefined, termArchiveUrl: () => '' }, 'https://shop.test/', new Map(), url => diagnostics.push(url));
+	expect(content.products).toEqual([{ name: 'Cup', slug: 'cup', regular_price: '9.00', stock_status: 'instock' }]);
+	expect(content.posts).toEqual([]);
+	expect(diagnostics).toEqual(['https://cdn.test/cup.jpg']);
+	expect(structuredContentIndex([], [], { termName: () => undefined, termArchiveUrl: () => '' }, 'https://shop.test/')).not.toHaveProperty('products');
+});
 
 it( 'prefers the canonical captured archive over a query variant for the same term', () => {
 	const sourceUrl = 'https://example.test/';

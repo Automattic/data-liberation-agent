@@ -41,7 +41,10 @@ export async function resolveProbeExclusions(
 	page: Page,
 	exclusions: readonly ProbeExclusion[] | undefined
 ): Promise< { skip?: string; diagnostics: ProfileDiagnostic[] } > {
-	if ( ! exclusions?.length ) return { diagnostics: [] };
+	const runtimeRoots = '[data-blocks-engine-capture-runtime-owner], [data-blocks-engine-capture-runtime-owner-script]';
+	const hasRuntimeOwner = await page.locator( runtimeRoots ).count() > 0;
+	const runtimeSkip = hasRuntimeOwner ? `:is(${ runtimeRoots }), :is(${ runtimeRoots }) *` : undefined;
+	if ( ! exclusions?.length ) return { ...( runtimeSkip ? { skip: runtimeSkip } : {} ), diagnostics: [] };
 	const counts = await page.evaluate(
 		( selectors: string[] ) => selectors.map( ( selector ) => {
 			try {
@@ -53,7 +56,7 @@ export async function resolveProbeExclusions(
 		exclusions.map( ( exclusion ) => exclusion.selector )
 	);
 	const present = exclusions.filter( ( _, index ) => ( counts[ index ] ?? 0 ) > 0 );
-	const skip = probeExclusionSkip( present );
+	const skip = combineSkips( runtimeSkip, probeExclusionSkip( present ) );
 	return {
 		...( skip ? { skip } : {} ),
 		diagnostics: present.map( ( exclusion ) => ( {

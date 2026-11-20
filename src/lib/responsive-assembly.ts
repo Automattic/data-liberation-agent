@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mergeViewportEntranceStates, VIEWPORT_ENTRANCE_ATTRIBUTE } from './viewport-entrances.js';
 import * as cheerio from 'cheerio';
-import { readDocument } from './parsed-documents.js';
+import { ownDocument, readDocument } from './parsed-documents.js';
 import postcss from 'postcss';
 import selectorParser from 'postcss-selector-parser';
 import type { AnyNode, Element } from 'domhandler';
@@ -204,7 +204,9 @@ export const DEFAULT_SWITCH_WIDTH = 767;
  * not read them as one.
  */
 const CORRESPONDENCE_ATTRIBUTES = [ 'data-blocks-engine-capture-geometry-id', 'data-blocks-engine-capture-responsive-source' ];
-const STRUCTURAL_SIGNATURE_ATTRIBUTES = new Set( [ 'id', 'href', 'name', 'type', 'for', 'action' ] );
+const RUNTIME_OWNER_ATTRIBUTES = [ 'data-blocks-engine-capture-runtime-owner', 'data-blocks-engine-capture-runtime-owner-script' ];
+const RUNTIME_OWNER_SELECTOR = RUNTIME_OWNER_ATTRIBUTES.map( attribute => `[${ attribute }]` ).join( ',' );
+const STRUCTURAL_SIGNATURE_ATTRIBUTES = new Set( [ 'id', 'href', 'name', 'type', 'for', 'action', ...RUNTIME_OWNER_ATTRIBUTES ] );
 
 function childNodes( node: AnyNode ): AnyNode[] {
 	return 'children' in node ? node.children : [];
@@ -308,8 +310,9 @@ function mobileBodyClassGatesDesktopCss(
  * responsive reconciliation would need to relocate those declarations.
  */
 function requiresNativeInlineCascade( desktopHtml: string, mobileHtml: string ): boolean {
-	const desktop = readDocument( desktopHtml );
-	const mobile = readDocument( mobileHtml );
+	const desktop = ownDocument( desktopHtml );
+	const mobile = ownDocument( mobileHtml );
+	for ( const $ of [ desktop, mobile ] ) $( RUNTIME_OWNER_SELECTOR ).empty();
 	const inlineStyles = ( $: cheerio.CheerioAPI ) => $( 'body [style],body[style]' )
 		.map( ( _, element ) => $( element ).attr( 'style' ) ?? '' ).get();
 	if ( JSON.stringify( inlineStyles( desktop ) ) === JSON.stringify( inlineStyles( mobile ) ) ) return false;
@@ -1046,6 +1049,7 @@ function equivalentInlineProjection(
 	const $m = cheerio.load( `<body>${ mobileBody }</body>` );
 	const transparent = ( $: cheerio.CheerioAPI, node: AnyNode ): boolean => {
 		if ( ! isElementNode( node ) ) return true;
+		if ( $( node ).is( RUNTIME_OWNER_SELECTOR ) ) return false;
 		if ( SIGNATURE_TRANSPARENT_TAGS.has( node.tagName ) ) return true;
 		const id = $( node ).attr( 'id' );
 		if ( id && isYuiRuntimeId( id ) ) return true;
@@ -1127,6 +1131,9 @@ function equivalentInlineProjection(
 			projected = true;
 		}
 		if ( projected ) projectedElements++;
+		// Keep the desktop rendering once as an inert visual reference. The
+		// embed's private controls are not responsive layout counterparts.
+		if ( d.is( RUNTIME_OWNER_SELECTOR ) && m.is( RUNTIME_OWNER_SELECTOR ) ) return;
 		const desktopChildren = visibleChildren( $d, d.get( 0 ) as Element );
 		const mobileChildren = visibleChildren( $m, m.get( 0 ) as Element );
 		if ( desktopChildren.length !== mobileChildren.length ) {
@@ -2638,6 +2645,17 @@ function responsiveBodySignature( body: string, stylesHtml: string ): string {
 	// correspondence so each viewport keeps its captured classes.
 	const styledClasses = new Set( [ ...styleBlocks( stylesHtml ).join( '' ).matchAll( /\.(-?[_a-zA-Z][\w-]*)/g ) ].map( match => match[ 1 ] as string ) );
 	const $ = cheerio.load( `<body>${ body }</body>` );
+	// Keep each owner at its authored position, but none of its private tree.
+	$( RUNTIME_OWNER_SELECTOR ).each( ( _, element ) => {
+		if ( ! isElementNode( element ) ) return;
+		const node = $( element );
+		const identity = RUNTIME_OWNER_ATTRIBUTES.map( attribute => node.attr( attribute ) ?? '' );
+		node.empty();
+		for ( const attribute of Object.keys( element.attribs ) ) node.removeAttr( attribute );
+		for ( const [ index, attribute ] of RUNTIME_OWNER_ATTRIBUTES.entries() ) {
+			if ( identity[ index ] ) node.attr( attribute, identity[ index ] );
+		}
+	} );
 	$( 'script,style,noscript,iframe' ).remove();
 	// Consent managers lay out their own chrome per viewport; it is not the page.
 	$( 'body *' )
