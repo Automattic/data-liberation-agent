@@ -15,6 +15,19 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.39.0] - 2026-11-20
+
+### Added
+- add Stencil discovery and template-aware route admission
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- tolerate fluid-fit noise and preserve head metadata during capture
+- alias byte-identical directory index documents before capture
+- make Wix members-gate placeholders deterministic
+
 ## [0.38.6] - 2026-11-20
 
 ### Changed
