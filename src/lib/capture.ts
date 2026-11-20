@@ -314,7 +314,8 @@ export async function downloadCaptureSectionMedia(
 	outputDir: string,
 	urls: string[],
 	deadline?: number,
-	resolveImageOriginal?: import('../platform/types.js').Platform['resolveImageOriginal']
+	resolveImageOriginal?: import('../platform/types.js').Platform['resolveImageOriginal'],
+	catalogImages: string[] = [],
 ): Promise< number > {
 	const pageRoutes = new Set(
 		urls.flatMap( ( url ) => {
@@ -325,7 +326,7 @@ export async function downloadCaptureSectionMedia(
 			}
 		} )
 	);
-	const sectionUrls: string[] = [];
+	const sectionUrls: string[] = [...catalogImages];
 	for ( const store of [
 		SectionSpecsStore.load( outputDir ),
 		SectionSpecsStore.loadMobile( outputDir ),
@@ -376,6 +377,8 @@ export async function downloadCaptureSectionMedia(
 		}
 	}
 	function* imageDocuments() {
+		// Catalog references share asset verification, reuse and source governance with page images.
+		if (catalogImages.length) yield { url: urls[0]!, html: catalogImages.map(src => `<img src="${src.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}">`).join('') };
 		for ( const document of documents ) {
 			const text = readFileSync( document.path, 'utf8' );
 			yield { url: document.url, html: document.css ? `<style>${ text }</style>` : text };
@@ -744,7 +747,7 @@ async function runCaptureWebsite(
 	);
 	progress( { phase: 'media', current: screenshotResult.captured, total: screenshotResult.urls.length } );
 	const mediaStartedAt = Date.now();
-	const downloadedSectionMedia = sourceGovernors.forOrigin( sourceUrl ).blockedClient ? 0 : await downloadCaptureSectionMedia( outputDir, screenshotResult.urls, timeBudget?.abandonAt, adapter.resolveImageOriginal?.bind( adapter ) );
+	const downloadedSectionMedia = sourceGovernors.forOrigin( sourceUrl ).blockedClient ? 0 : await downloadCaptureSectionMedia( outputDir, screenshotResult.urls, timeBudget?.abandonAt, adapter.resolveImageOriginal?.bind( adapter ), contentEntries.flatMap(entry => entry.product?.images?.map(image => image.src) ?? []) );
 	process.stderr.write(
 		`[timing] section-media ${ Date.now() - mediaStartedAt }ms (${ downloadedSectionMedia } downloaded)\n`
 	);
