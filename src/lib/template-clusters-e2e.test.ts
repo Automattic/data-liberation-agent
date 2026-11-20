@@ -174,6 +174,45 @@ describe( 'template-cluster derivation e2e (#784 phase 1)', () => {
 		}
 	}, 240_000 );
 
+	it( 'wires the representative\'s site-chrome dropdown on a derived member', async () => {
+		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
+		const outputDir = mkdtempSync( join( parent, 'template-clusters-chrome-' ) );
+		const url = `${ BASE }:${ port }/`;
+		const origin = new URL( url ).origin;
+		const memberUrl = `${ origin }/post-4/`;
+		const originals = new Map( rendered );
+		// A header dropdown a source script opens: capture observes it on
+		// browser routes, and a derived member shares the same header.
+		const dropdown = '<button class="topics" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="topics-panel">Topics</button><div id="topics-panel" class="topics-panel" hidden><a href="/post-1/">Gardening</a><a href="/post-2/">Cooking</a></div>';
+		const script = '<script>document.querySelector(".topics").addEventListener("click",e=>{const b=e.currentTarget,p=document.getElementById("topics-panel");p.hidden=!p.hidden;b.setAttribute("aria-expanded",String(!p.hidden));});</script>';
+		for ( const [ path, html ] of originals ) if ( html.includes( '</nav>' ) ) rendered.set( path, html.replace( '</nav>', `</nav>${ dropdown }` ).replace( '</body>', `${ script }</body>` ) );
+		const deferralSpy = vi.spyOn( TemplateClusterDeferral.prototype, 'defers' ).mockReturnValue( false );
+		const admits = RouteTimeBudget.prototype.admits;
+		const admissionSpy = vi.spyOn( RouteTimeBudget.prototype, 'admits' ).mockImplementation( function ( this: RouteTimeBudget, candidate, concurrency ) {
+			return candidate !== memberUrl && admits.call( this, candidate, concurrency );
+		} );
+		try {
+			await captureWebsite( { url, outputDir, templateClusters: true, timeBudgetMs: 600_000 }, {
+				findAdapter: () => ( { id: 'neutral-chrome', detect: () => true, discover: async () => ( { urls: sitemapPaths.map( path => ( { url: `${ origin }${ path }`, type: 'page' } ) ) } ) } ),
+			} );
+			const receipt = JSON.parse( readFileSync( join( outputDir, 'template-clusters.json' ), 'utf8' ) ) as { clusters: Array<{ derived: Array<{ url: string }> }> };
+			expect( receipt.clusters.flatMap( cluster => cluster.derived.map( member => member.url ) ) ).toContain( memberUrl );
+			const header = ( path: string ) => {
+				const $ = cheerio.load( readFileSync( join( outputDir, 'website', path, 'index.html' ), 'utf8' ) );
+				const trigger = $( 'header .topics' );
+				return { trigger: trigger.attr( 'data-blocks-engine-capture-dialog-trigger' ) !== undefined, links: $( 'header a' ).map( ( _, link ) => $( link ).text() ).get() };
+			};
+			const captured = header( 'post-1' );
+			expect( captured.trigger ).toBe( true );
+			expect( header( 'post-4' ) ).toEqual( captured );
+		} finally {
+			admissionSpy.mockRestore();
+			deferralSpy.mockRestore();
+			rendered = originals;
+			rmSync( outputDir, { recursive: true, force: true } );
+		}
+	}, 240_000 );
+
 	it( 'derives a crawl-only frontier member omitted by the time budget (#1477)', async () => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const outputDir = mkdtempSync( join( parent, 'template-clusters-frontier-' ) );
