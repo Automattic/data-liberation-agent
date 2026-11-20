@@ -161,6 +161,27 @@ describe('orchestrated HTTP review capture', () => {
 			vi.mocked(safeFetch).mockImplementation(originalFetch);
 		}
 	});
+	it('collapses a canonical alias whose attribute values differ only by whitespace', async () => {
+		const { captureWebsite: capture } = await import('../index.js');
+		const outputDir = directory();
+		const alias = `${url}home`;
+		const originalFetch = vi.mocked(safeFetch).getMockImplementation()!;
+		vi.mocked(safeFetch).mockImplementation(async target => ({
+			finalUrl: target, status: 200,
+			headers: new Headers({ 'content-type': 'text/html' }),
+			body: Buffer.from(`<html><head><title>Home</title><link rel="canonical" href="${url}"></head><body><header data-styles="{\n${target === url ? '          ' : ''}&quot;layout&quot;: &quot;center&quot;\n}"><a href="/">Home</a></header><main><h1>Welcome</h1></main></body></html>`),
+		}));
+		const platform = adapter();
+		platform.discover = async () => ({ urls: [url, alias].map(url => ({ url })) });
+		try {
+			const result = await capture({ url, outputDir, acquisition: 'http' }, { findAdapter: () => platform });
+			const receipt = JSON.parse(readFileSync(result.captureReceiptPath, 'utf8'));
+			expect(receipt.routes.map((route: { url: string }) => route.url)).toEqual([url]);
+			expect(receipt.duplicateRoutes.map((route: { url: string }) => route.url)).toEqual([alias]);
+		} finally {
+			vi.mocked(safeFetch).mockImplementation(originalFetch);
+		}
+	});
 	it('keeps distinct rendered routes when an SPA shell gives both the homepage canonical', async () => {
 		const { captureWebsite: capture } = await import('../index.js');
 		const outputDir = directory();
