@@ -897,19 +897,24 @@ describe( 'captureWebsite route selection', () => {
 		expect( JSON.parse( readFileSync( result.captureReceiptPath, 'utf8' ) ).templateClustersDecision ).toEqual( { enabled: false, source: 'explicit' } );
 	} );
 
-	it( 'uses BigCommerce template declarations for a small default route budget', async () => {
+	it.each( [
+		{ templateClusters: false, paths: [ '', 'about/', 'sample/', 'catalog/' ] },
+		{ templateClusters: undefined, paths: [ '', 'sample/', 'another/', 'catalog/' ] },
+	] )( 'uses BigCommerce template declarations for a small route budget with clusters=$templateClusters', async ( { templateClusters, paths } ) => {
 		const { bigcommerceAdapter } = await import( '../adapters/bigcommerce/index.js' );
 		const fixture = JSON.parse( readFileSync( new URL( '../adapters/bigcommerce/fixture.json', import.meta.url ), 'utf8' ) );
 		vi.mocked( safeFetch ).mockImplementation( async ( url: string ) => ( {
 			finalUrl: url, status: 200, headers: new Headers( { 'content-type': 'text/html' } ),
 			body: Buffer.from( fixture.documents[ new URL( url ).pathname ] ?? '' ),
 		} ) );
-		await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 4 }, {
+		// Explicit false keeps navigation-first coverage; default cluster ranking
+		// reserves both a product representative and its verifier.
+		await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 4, templateClusters }, {
 			findAdapter: () => ( { ...bigcommerceAdapter, discover: async () => ( {
 				urls: [ '/sample/', '/another/', '/catalog/', '/more/', '/about/', '/cart.php', '/login.php?action=login' ].map( path => ( { url: new URL( path, sourceUrl ).href } ) ),
 			} ) } ),
 		} );
-		expect( capturedUrls() ).toEqual( [ sourceUrl, `${ sourceUrl }about/`, `${ sourceUrl }sample/`, `${ sourceUrl }catalog/` ] );
+		expect( capturedUrls() ).toEqual( paths.map( path => `${ sourceUrl }${ path }` ) );
 	} );
 
 	it( 'spends the budget on one route per template first with template-coverage', async () => {

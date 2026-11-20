@@ -782,6 +782,8 @@ async function runCaptureWebsite(
 				governors: sourceGovernors,
 				styleNormalization: adapter.templateStyleNormalization,
 				templateIdentity: adapter.templateIdentity,
+				runtimeWidgetSelectors: adapter.liberation?.runtimeWidgetSelectors,
+				canonicalizeHtml: adapter.liberation?.canonicalizeHtml?.bind( adapter.liberation ),
 				runtimeStateClasses: adapter.runtimeStateClasses,
 				maxTotalBytes: options.maxTotalBytes,
 				resolveImageOriginal: adapter.resolveImageOriginal?.bind( adapter ),
@@ -1197,6 +1199,8 @@ export async function deriveTemplateClusterMembers( input: {
 	report: import('./template-groups.js').TemplateGroupsReport;
 	routeScope?: import('../platform/types.js').SiteRouteScope;
 	timeBudgetMs?: number;
+	runtimeWidgetSelectors?: readonly string[];
+	canonicalizeHtml?: ( html: string ) => string;
 	/** Runtime-render stage budget; defaults to `runtimeRenderBudgetMs( timeBudgetMs )`. */
 	runtimeRenderBudgetMs?: number;
 	frontierUrls: string[];
@@ -1213,8 +1217,9 @@ export async function deriveTemplateClusterMembers( input: {
 	/** The browser pass's deferral: its light renders verify and supply clusters whose runtime rewrites server content. */
 	deferral?: import('./template-cluster-deferral.js').TemplateClusterDeferral;
 } ): Promise< TemplateClusterDerivation > {
-	const { deriveMemberDocument, compareDerivedWithCapture, TEMPLATE_CLUSTER_LIMITS, writeTemplateClusters, TEMPLATE_CLUSTERS_FILE } =
+	const { deriveMemberDocument: derive, compareDerivedWithCapture, TEMPLATE_CLUSTER_LIMITS, writeTemplateClusters, TEMPLATE_CLUSTERS_FILE } =
 		await import( './template-clusters.js' );
+	const deriveMemberDocument: typeof derive = options => derive( { ...options, runtimeWidgetSelectors: input.runtimeWidgetSelectors, canonicalizeHtml: input.canonicalizeHtml } );
 	const { templateClusterUnits } = await import( './template-groups.js' );
 	const memberShape = structuredMemberShape( input.contentSource, input.contentEntries );
 	// Derivation documents go through the run's source governors, as grouping
