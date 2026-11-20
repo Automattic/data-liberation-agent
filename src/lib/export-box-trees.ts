@@ -5,6 +5,7 @@ import * as cheerio from 'cheerio';
 import type { Element } from 'domhandler';
 import { BOX_TREE_SCHEMA, NODE_ID_ATTRIBUTE, type BoxTree } from './screenshot/box-tree.js';
 import { resolvePage } from './site-includes.js';
+import { rewriteCssUrlReferences } from './srcset.js';
 import type { WebsiteInventory } from './website-inventory.js';
 
 const DEVICE_DOCUMENT_WRAPPERS = '.data-blocks-engine-capture-mobile-document, .data-blocks-engine-capture-middle-document';
@@ -102,6 +103,49 @@ export function compactBoxTree(tree: ExportBoxTree): CompactExportBoxTree {
 		nodes[id] = { ...node, viewports };
 	}
 	return { ...tree, schema: EXPORT_BOX_TREE_SCHEMA, styles, nodes };
+}
+
+/** Maps one captured `url(...)` token, as seen by the route at `documentUrl`, to its exported URL. */
+export type BoxTreeUrlLocalizer = (url: string, documentUrl: string) => string;
+
+/**
+ * Computed styles name the live source URLs the browser resolved. Route every
+ * `url(...)` in each node and pseudo observation (styles and pseudo `content`)
+ * through the export's portable-reference resolution, so the sidecar names the
+ * same website-local files as the page and its CSS. Unmapped URLs keep their value.
+ * Runs before compaction, so styles that become identical are stored once.
+ */
+export function localizeBoxTreeUrls<T extends BoxTree>(tree: T, documentUrl: string, localize: BoxTreeUrlLocalizer): T {
+	const values = new Map<string, string>();
+	const value = (text: string): string => {
+		if (!/url\(/i.test(text)) return text;
+		let local = values.get(text);
+		if (local === undefined) values.set(text, local = rewriteCssUrlReferences(text, url => localize(url, documentUrl)));
+		return local;
+	};
+	const styles = new Map<Record<string, string>, Record<string, string>>();
+	const used = (record: Record<string, string>): Record<string, string> => {
+		let local = styles.get(record);
+		if (!local) styles.set(record, local = Object.fromEntries(Object.entries(record).map(([property, text]) => [property, value(text)])));
+		return local;
+	};
+	const nodes: BoxTree['nodes'] = {};
+	for (const [id, node] of Object.entries(tree.nodes)) {
+		const viewports: BoxTree['nodes'][string]['viewports'] = {};
+		for (const [name, observation] of Object.entries(node.viewports)) {
+			const local: BoxObservation = { ...observation, used_styles: used(observation.used_styles) };
+			if (observation.pseudo) {
+				local.pseudo = {};
+				for (const side of ['before', 'after'] as const) {
+					const pseudo = observation.pseudo[side];
+					if (pseudo) local.pseudo[side] = { ...pseudo, content: value(pseudo.content), used_styles: used(pseudo.used_styles) };
+				}
+			}
+			viewports[name] = local;
+		}
+		nodes[id] = { ...node, viewports };
+	}
+	return { ...tree, nodes };
 }
 
 const sha256 = (bytes: Buffer | string): string => createHash('sha256').update(bytes).digest('hex');
@@ -242,7 +286,7 @@ export function graftPhoneFragmentObservations(tree: BoxTree, html: string, mobi
  * (`website/about/index.html`), the virtual root importers address artifact files by.
  * Returns the capture-root paths written.
  */
-export function writeExportBoxTrees(captureRoot: string, websiteDir: string, pages: Array<{ sourcePath: string; mobileSourcePath?: string; path: string }>, inventory: WebsiteInventory, excludedBoxTrees: ReadonlyMap<string, number> = new Map(), maxFileBytes = MAX_BOX_TREE_FILE_BYTES): string[] {
+export function writeExportBoxTrees(captureRoot: string, websiteDir: string, pages: Array<{ sourcePath: string; mobileSourcePath?: string; path: string; url?: string }>, inventory: WebsiteInventory, excludedBoxTrees: ReadonlyMap<string, number> = new Map(), maxFileBytes = MAX_BOX_TREE_FILE_BYTES, localizeUrl?: BoxTreeUrlLocalizer): string[] {
 	const directory = join(captureRoot, 'box-tree');
 	if (!existsSync(directory)) return [];
 	const sources = new Map<string, string>();
@@ -287,7 +331,8 @@ export function writeExportBoxTrees(captureRoot: string, websiteDir: string, pag
 		const includes: Record<string, string> = {};
 		for (const part of resolved.files.filter(path => path !== resolve(file)).map(path => relative(resolve(websiteDir), path).split('\\').join('/')).sort())
 			includes[`website/${part}`] = sha256(readFileSync(join(websiteDir, part)));
-		const tree = projectExportBoxTree(resolved.html, captured, `website/${page.path}`, bytes, includes);
+		const projected = projectExportBoxTree(resolved.html, captured, `website/${page.path}`, bytes, includes);
+		const tree = localizeUrl && page.url ? localizeBoxTreeUrls(projected, page.url, localizeUrl) : projected;
 		// A captured resource must never be overwritten by generated evidence.
 		if (existsSync(join(websiteDir, path))) continue;
 		const content = JSON.stringify(compactBoxTree(tree)) + '\n';

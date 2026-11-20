@@ -24,7 +24,8 @@ import {
 } from './screenshot/resource-capture.js';
 import { galleryFrameMediaUrls } from './screenshot/gallery-capture.js';
 import { materializePortableMedia } from './portable-media.js';
-import { omitDegenerateReplacements, preparePortableReplacements } from './portable-references.js';
+import { omitDegenerateReplacements, preparePortableReplacements, preparePortableUrlResolver } from './portable-references.js';
+import { portableAssetUrl } from './portable-assets.js';
 import { materializePortableResources } from './portable-resources.js';
 import { assetExceedsFileLimit, DEFAULT_MAX_FILE_BYTES, validateMaxFileBytes } from './export-file-limit.js';
 import { assetExceedsTotalBudget, emptyExportBudgetExclusions, planExportBudget, redundantRenditionDropped, resolveExportTotalBudget, type DroppableAsset, type ExportBudgetExclusions, type ExportTotalBudget } from './export-total-budget.js';
@@ -494,10 +495,22 @@ function buildExportCapture(
 	extractSharedChrome( websiteDir, routes.map( route => route.path.replace( /^website\//, '' ) ), inventory );
 	// Box-tree evidence binds the final page bytes and the shared parts they include.
 	// The sidecars are website files only; they are deliberately not receipt reports.
+	// Their computed `url(...)` values resolve through the same media and resource
+	// maps as the pages, then the source-URL map that carries hash-alias collapse.
+	const resolveMediaUrl = preparePortableUrlResolver( mediaReplacements );
+	const resolveResourceUrl = preparePortableUrlResolver( resourceReplacements );
+	const localizeBoxTreeUrl = ( url: string, documentUrl: string ): string => {
+		const local = resolveMediaUrl( url, documentUrl ) ?? resolveResourceUrl( url, documentUrl );
+		if ( local !== undefined ) return local;
+		let absolute: string;
+		try { absolute = new URL( url, documentUrl ).href; } catch { return url; }
+		const path = portablePathsBySource.get( absolute );
+		return path?.startsWith( 'website/' ) ? portableAssetUrl( path.slice( 'website/'.length ) ) : url;
+	};
 	writeExportBoxTrees( outputDir, websiteDir, retainedEntries.flatMap( entry => {
 		const sourcePath = capture.entries[ entry.url ]?.html;
-		return sourcePath ? [ { sourcePath, mobileSourcePath: capture.entries[ entry.url ]?.mobileHtml, path: routePathOf( entry.url ) } ] : [];
-	} ), inventory, exclusions.boxTrees );
+		return sourcePath ? [ { sourcePath, mobileSourcePath: capture.entries[ entry.url ]?.mobileHtml, path: routePathOf( entry.url ), url: entry.url } ] : [];
+	} ), inventory, exclusions.boxTrees, undefined, localizeBoxTreeUrl );
 	// Media and page resources are the assets export can leave out; generated
 	// stylesheets only shrink with the routes that need them.
 	const droppable = new Map< string, string[] >();
