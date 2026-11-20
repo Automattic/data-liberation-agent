@@ -527,7 +527,7 @@ describe( 'captureWebsite completeness', () => {
 			if ( documents.desktop?.includes( 'Dropped' ) ) throw new Error( 'cannot export page' );
 			return undefined;
 		};
-		const result = await captureWebsite( { url: sourceUrl, outputDir: root }, {
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root, templateClusters: false }, {
 			findAdapter: () => ( {
 				id: 'generic', platform: 'generic', liberation: { documentSelection },
 				discover: async () => ( { urls: [ degraded, dropped ].map( url => ( { url, type: 'page' } ) ) } ), extract: async () => ( { title: '', content: '' } ),
@@ -567,7 +567,7 @@ describe( 'captureWebsite completeness', () => {
 			urls: urls.filter( url => url !== offOrigin ), captured: 1, skipped: 0, failed: 0, durationMs: 1,
 			routeDiagnostics: [ { code: 'route_off_origin', url: offOrigin, reason: 'discovered URL is outside the entry origin https://example.com', unit: 'route', severity: 'warning' } ],
 		} ) );
-		const result = await captureWebsite( { url: sourceUrl, outputDir: root }, {
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root, templateClusters: false }, {
 			findAdapter: () => ( {
 				id: 'generic', platform: 'generic',
 				discover: async () => ( { urls: [ { url: offOrigin, type: 'page' } ] } ), extract: async () => ( { title: '', content: '' } ),
@@ -593,7 +593,7 @@ describe( 'captureWebsite completeness', () => {
 			version: 1, entries: { [ sourceUrl ]: {}, [ other ]: { html: 'html/other.html' } },
 		} ) );
 		writeFileSync( join( root, 'screenshots', 'failures.json' ), JSON.stringify( [ { url: sourceUrl, viewport: 'desktop', stage: 'goto', error: 'HTTP 403', attempt: 1 } ] ) );
-		await expect( captureWebsite( { url: sourceUrl, outputDir: root }, {
+		await expect( captureWebsite( { url: sourceUrl, outputDir: root, templateClusters: false }, {
 			findAdapter: () => ( { id: 'generic', platform: 'generic', discover: async () => ( { urls: [ { url: other, type: 'page' } ] } ), extract: async () => ( { title: '', content: '' } ) } ),
 		} ) ).rejects.toThrow( `Source homepage ${ sourceUrl } was not captured: desktop/goto: HTTP 403` );
 	} );
@@ -610,7 +610,7 @@ describe( 'captureWebsite completeness', () => {
 				diagnostics: unscheduled.map( url => ( { code: 'linked_page_budget_exhausted', url, reason: 'maxPages=2 exhausted; 2 addresses scheduled' } ) ),
 			},
 		} as Awaited< ReturnType< typeof captureScreenshotsMock > > );
-		const result = await captureWebsite( { url: sourceUrl, outputDir: root }, {
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root, templateClusters: false }, {
 			findAdapter: () => ( { id: 'generic', platform: 'generic', discover: async () => ( { urls: [] } ), extract: async () => ( { title: '', content: '' } ) } ),
 		} );
 		const { routesDiscovered, routesCaptured, routesSkipped, routesFailed } = result.summary;
@@ -757,7 +757,7 @@ describe( 'captureWebsite route budget', () => {
 				diagnostics: [ linked, store[ 1 ]! ].map( url => ( { code: 'route_omitted_by_budget', url, reason: 'Outside the route budget of 3 routes' } ) ),
 			},
 		} ) as Awaited< ReturnType< typeof captureScreenshotsMock > > );
-		const result = await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 3 }, storeAdapter() );
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root, templateClusters: false, routeLimit: 3 }, storeAdapter() );
 		expect( capturedUrls() ).toHaveLength( 3 );
 		expect( result.summary ).toMatchObject( { routesDiscovered: 3, routesCaptured: 3, routesFailed: 0, routesOmitted: store.length + 1 - 3 + 1 } );
 		expect( result.discoveryDiagnostics.filter( row => row.url === store[ 1 ] ) ).toHaveLength( 1 );
@@ -777,7 +777,7 @@ describe( 'captureWebsite route budget', () => {
 				diagnostics: [ { code: 'route_excluded_action_url', url: 'https://example.com/?add-to-cart=12', reason: 'State-changing action URL (query add-to-cart)' } ],
 			},
 		} ) as Awaited< ReturnType< typeof captureScreenshotsMock > > );
-		const result = await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 4, strict: true }, {
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root, templateClusters: false, routeLimit: 4, strict: true }, {
 			findAdapter: () => ( {
 				id: 'generic', platform: 'generic',
 				discover: async () => ( { urls: [ ...actions, ...pages, actions[ 0 ]! ].map( url => ( { url, type: 'page' } ) ) } ),
@@ -803,7 +803,7 @@ describe( 'captureWebsite route budget', () => {
 		for ( const directory of [ 'html', 'screenshots' ] ) mkdirSync( join( root, directory ), { recursive: true } );
 		writeFileSync( join( root, 'html', 'home.html' ), '<h1>Home</h1><a href="/?add-to-cart=12">Add to cart</a>' );
 		writeFileSync( join( root, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries: { [ sourceUrl ]: { html: 'html/home.html' } } } ) );
-		const result = await captureWebsite( { url: sourceUrl, outputDir: root, strict: true }, {
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root, templateClusters: false, strict: true }, {
 			findAdapter: () => ( {
 				id: 'generic', platform: 'generic',
 				discover: async () => ( { urls: [ { url: action, type: 'page' } ] } ),
@@ -829,7 +829,7 @@ describe( 'captureWebsite route budget', () => {
 		writeFileSync( join( root, 'screenshots', 'manifest.json' ), JSON.stringify( {
 			version: 1, entries: { [ sourceUrl ]: { html: 'html/home.html' }, [ kept ]: { html: 'html/kept.html' } },
 		} ) );
-		const result = await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 2, strict: true }, {
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root, templateClusters: false, routeLimit: 2, strict: true }, {
 			findAdapter: () => ( {
 				id: 'generic', platform: 'generic',
 				discover: async () => ( { urls: [ omitted, kept ].map( url => ( { url, type: 'page' } ) ) } ),
@@ -872,26 +872,13 @@ describe( 'captureWebsite route selection', () => {
 		} ),
 	} );
 	const capturedUrls = () => ( captureScreenshotsMock.mock.calls.at( -1 )![ 0 ] as { urls: string[] } ).urls;
-	beforeEach( () => vi.mocked( safeFetch ).mockClear() );
+	beforeEach( () => { vi.mocked( safeFetch ).mockClear(); buildTemplateGroupsMock.mockClear(); } );
 	afterEach( () => {
 		captureScreenshotsMock.mockClear();
 		vi.mocked( safeFetch ).mockReset();
 		vi.mocked( safeFetch ).mockImplementation( async ( url: string ) => ( { finalUrl: url, status: 200 } ) as Awaited< ReturnType< typeof safeFetch > > );
 		buildTemplateGroupsMock.mockClear();
 		rmSync( root, { recursive: true, force: true } );
-	} );
-
-	it( 'keeps discovery order by default: no grouping fetches, no report, the same selection', async () => {
-		serveHtml();
-		const result = await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 6 }, adapter() );
-		// Only the entrypoint request capture always made.
-		expect( vi.mocked( safeFetch ) ).toHaveBeenCalledTimes( 1 );
-		expect( buildTemplateGroupsMock ).not.toHaveBeenCalled();
-		expect( capturedUrls() ).toEqual( spreadSample( [ sourceUrl, ...inventory ], 6 ) );
-		expect( existsSync( join( root, 'template-groups.json' ) ) ).toBe( false );
-		expect( JSON.parse( readFileSync( result.captureReceiptPath, 'utf8' ) ).templateGroups ).toBeUndefined();
-		expect( JSON.parse( readFileSync( result.captureReceiptPath, 'utf8' ) ).templateClustersDecision ).toEqual( { enabled: false, source: 'default' } );
-		expect( result.discoveryDiagnostics.some( row => row.code === 'template_grouping_unavailable' ) ).toBe( false );
 	} );
 
 	it.each( [ true, false ] )( 'explicit false disables clusters with structured content=%s', async ( structured ) => {
@@ -927,7 +914,7 @@ describe( 'captureWebsite route selection', () => {
 
 	it( 'spends the budget on one route per template first with template-coverage', async () => {
 		serveHtml();
-		const result = await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 6, routeSelection: 'template-coverage' }, adapter() );
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root, templateClusters: false, routeLimit: 6, routeSelection: 'template-coverage' }, adapter() );
 		// Entrypoint, then representatives by group size (posts, listings, then one-offs in inventory order).
 		expect( capturedUrls() ).toEqual( [ sourceUrl, posts[ 0 ], listings[ 0 ], ...oneOffs ] );
 		const report = JSON.parse( readFileSync( join( root, 'template-groups.json' ), 'utf8' ) );
@@ -947,7 +934,7 @@ describe( 'captureWebsite route selection', () => {
 
 	it( 'groups the whole inventory when the route limit is all', async () => {
 		serveHtml();
-		await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 'all', routeSelection: 'template-coverage' }, adapter() );
+		await captureWebsite( { url: sourceUrl, outputDir: root, templateClusters: false, routeLimit: 'all', routeSelection: 'template-coverage' }, adapter() );
 		expect( buildTemplateGroupsMock.mock.calls.at( -1 )![ 0 ] ).toMatchObject( { limits: { maxRoutes: 'all' } } );
 		const report = JSON.parse( readFileSync( join( root, 'template-groups.json' ), 'utf8' ) );
 		expect( report ).toMatchObject( { limits: { maxRoutes: 'all' }, throttle: { events: 0 }, coverage: { routes: inventory.length + 1, fingerprinted: inventory.length + 1 } } );
@@ -965,7 +952,7 @@ describe( 'captureWebsite route selection', () => {
 	it( 'never fails the capture when grouping fails: one finding, discovery-order selection', async () => {
 		serveHtml();
 		buildTemplateGroupsMock.mockRejectedValueOnce( new Error( 'grouping exploded' ) );
-		const result = await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 6, routeSelection: 'template-coverage', strict: true }, adapter() );
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root, templateClusters: false, routeLimit: 6, routeSelection: 'template-coverage', strict: true }, adapter() );
 		expect( capturedUrls() ).toEqual( spreadSample( [ sourceUrl, ...inventory ], 6 ) );
 		expect( result.discoveryDiagnostics.filter( row => row.code === 'template_grouping_unavailable' ) ).toEqual( [ {
 			code: 'template_grouping_unavailable', url: sourceUrl,
@@ -981,7 +968,7 @@ describe( 'captureWebsite route selection', () => {
 			if ( url !== sourceUrl ) throw new Error( 'network down' );
 			return { finalUrl: url, status: 200, headers: new Headers( { 'content-type': 'text/html' } ), body: Buffer.from( html( url ) ) };
 		} );
-		const result = await captureWebsite( { url: sourceUrl, outputDir: root, routeLimit: 6, routeSelection: 'template-coverage' }, adapter() );
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root, templateClusters: false, routeLimit: 6, routeSelection: 'template-coverage' }, adapter() );
 		expect( capturedUrls() ).toEqual( spreadSample( [ sourceUrl, ...inventory ], 6 ) );
 		expect( JSON.parse( readFileSync( join( root, 'template-groups.json' ), 'utf8' ) ).coverage ).toEqual( { routes: inventory.length + 1, fingerprinted: 1, unfingerprinted: inventory.length, groups: 1, singletons: 1 } );
 		expect( result.summary.routesFailed ).toBe( 0 );
@@ -1023,7 +1010,7 @@ describe( 'captureWebsite route selection', () => {
 			} ),
 		} );
 		expect( JSON.parse( readFileSync( join( root, 'capture-receipt.json' ), 'utf8' ) ).templateClustersDecision ).toEqual( {
-			enabled: true, source: templateClusters === true ? 'explicit' : 'adapter-structured-content',
+			enabled: true, source: templateClusters === true ? 'explicit' : 'default',
 		} );
 		// Entrypoint, the posts representative and its verification member.
 		expect( capturedUrls() ).toEqual( [ sourceUrl, posts[ 0 ], posts[ 1 ] ] );

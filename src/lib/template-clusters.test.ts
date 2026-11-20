@@ -244,6 +244,16 @@ describe( 'template-clusters (phase 1 transplant, #784)', () => {
 		expect( result.html ).toContain( '<aside>Runtime-added chrome</aside>' );
 	} );
 
+	it( 'carries the member\'s aria-current page state in a shared section nav (#784)', () => {
+		const page = ( current: string ) => `<html><head><title>Room</title></head><body><nav class="rooms">${ [ 'lighting', 'balcony' ].map( room => `<a href="/house/${ room }/"${ room === current ? ' aria-current="page"' : '' }>${ room }</a>` ).join( '' ) }</nav><main><p>${ current } room</p></main></body></html>`;
+		const repServerHtml = page( 'lighting' );
+		const result = deriveMemberDocument( { repServerHtml, repProcessedHtml: repServerHtml, memberServerHtml: page( 'balcony' ), baseUrl: BASE } );
+		expect( result.ok ).toBe( true );
+		if ( ! result.ok ) return;
+		expect( result.html ).toContain( '<a href="/house/balcony/" aria-current="page">' );
+		expect( result.html ).toContain( '<a href="/house/lighting/">' );
+	} );
+
 	it.each( [
 		[ 'text', '<p>Member article</p>' ],
 		[ 'subtree', '<p>Member article</p><p>Another paragraph</p>' ],
