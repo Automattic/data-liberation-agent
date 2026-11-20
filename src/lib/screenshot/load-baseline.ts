@@ -21,6 +21,7 @@ import { markInitialScrollClasses } from './initial-document.js';
 import { sameOriginPageAnchors } from './unscheduled-anchors.js';
 import { ROUTE_ALIAS_CANONICAL, queryOnlyCanonicalTarget } from '../route-aliases.js';
 import { orElse } from '../failure-class.js';
+import { stylesheetLoadFailure } from './stylesheet-load.js';
 
 export async function renderedQueryAlias( page: Page, url: string, scope: ScreenshotOpts['routeScope'] ): Promise< string | undefined > {
 	const canonical = await page.evaluate( () => ( document.querySelector( 'link[rel~="canonical" i][href]' ) as HTMLLinkElement | null )?.href ).catch( orElse( undefined ) );
@@ -333,6 +334,13 @@ export async function loadSourceBaseline( args: SourceLoadInput ): Promise<Sourc
 		prepare: args.prepareCapture,
 		ctx: { url, viewport: viewport.id, serverHtml },
 	} );
+
+	const stylesheetFailure = await stylesheetLoadFailure( page );
+	if ( stylesheetFailure ) {
+		fail( 'content', stylesheetFailure );
+		await releaseBaselineNavigation();
+		return undefined;
+	}
 
 	return { serverHtml, navigationUrl, sourcePolicy, get externalNavigation() { return externalNavigation; }, releaseBaselineNavigation };
 }

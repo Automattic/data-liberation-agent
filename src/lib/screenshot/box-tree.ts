@@ -88,7 +88,8 @@ export function observeBoxTree(snapshot: Element, properties: readonly string[],
 		if (link.hasAttribute('disabled') || (link.media && !matchMedia(link.media).matches)) continue;
 		// Unselected alternate sets are intentionally inactive.
 		if (link.relList.contains('alternate') && (!link.sheet || link.sheet.disabled)) continue;
-		if (!link.sheet || !sheets.has(link.sheet) || link.sheet.disabled) return {
+		const failed = (globalThis as typeof globalThis & { __captureFailedStylesheets?: WeakSet<HTMLLinkElement> }).__captureFailedStylesheets?.has(link);
+		if (failed || !link.sheet || !sheets.has(link.sheet) || link.sheet.disabled) return {
 			mismatch: { kind: 'stylesheet', path: 'html>head>link', detail: `author stylesheet not applied: ${link.href}` },
 		};
 	}
