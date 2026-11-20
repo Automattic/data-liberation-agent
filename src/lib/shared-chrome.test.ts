@@ -1,8 +1,10 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { extractSharedChrome } from './shared-chrome.js';
+import * as siteIncludes from './site-includes.js';
+import { readResolvedPage } from './site-includes.js';
 
 it( 'keeps case-variant seminar documents intact on either filesystem', () => {
 	const root = mkdtempSync( join( tmpdir(), 'liberation-chrome-case-' ) );
@@ -118,4 +120,32 @@ it( 'still shares a header that is byte-identical on every route', () => {
 		}
 		expect( readFileSync( join( root, 'parts', parts[ 0 ] ), 'utf8' ) ).toContain( 'header-nav-item--active' );
 	} finally { rmSync( root, { recursive: true, force: true } ); }
+} );
+
+it( 'parses each document version at most twice across sharing passes', () => {
+	const root = mkdtempSync( join( tmpdir(), 'liberation-chrome-passes-' ) );
+	const parses = vi.spyOn( siteIncludes, 'parseLocatedStructure' );
+	try {
+		// The footer is shared first; the headers differ by title but share a large
+		// nav, which a later descendant pass factors out. The plain page has no
+		// chrome and stays unchanged through every pass.
+		const nav = `<nav>${ Array.from( { length: 30 }, ( _, i ) => `<a href="/${ i }">Link ${ i }</a>` ).join( '' ) }</nav>`;
+		const footer = `<footer>${ 'Shared footer '.repeat( 40 ) }</footer>`;
+		const pages = [ 'index.html', 'about.html', 'contact.html' ];
+		for ( const [ i, path ] of pages.entries() ) writeFileSync( join( root, path ), `<!doctype html><html><body><header><h2>Title ${ i }</h2>${ nav }</header><main>Page ${ i }</main>${ footer }</body></html>` );
+		writeFileSync( join( root, 'plain.html' ), `<!doctype html><html><body><main>${ 'Plain '.repeat( 40 ) }</main></body></html>` );
+		const expanded = [ ...pages, 'plain.html' ].map( path => readFileSync( join( root, path ), 'utf8' ) );
+		extractSharedChrome( root, [ ...pages, 'plain.html' ] );
+		const parts = readdirSync( join( root, 'parts' ) );
+		expect( parts.some( name => name.startsWith( 'footer-' ) ) ).toBe( true );
+		// The nav was factored out of headers that are not identical themselves.
+		expect( parts.filter( name => name.startsWith( 'header-' ) ) ).toHaveLength( 1 );
+		for ( const [ i, path ] of [ ...pages, 'plain.html' ].entries() ) expect( readResolvedPage( root, join( root, path ) ) ).toBe( expanded[ i ] );
+		const perVersion = new Map< string, number >();
+		for ( const [ html ] of parses.mock.calls ) perVersion.set( html, ( perVersion.get( html ) ?? 0 ) + 1 );
+		expect( Math.max( ...perVersion.values() ) ).toBeLessThanOrEqual( 2 );
+	} finally {
+		parses.mockRestore();
+		rmSync( root, { recursive: true, force: true } );
+	}
 } );

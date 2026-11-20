@@ -32,19 +32,87 @@ export function routeNeutralFragment( fragment: string ): string {
 
 /** Only exact, site-level semantic landmarks are shared; authored bytes survive. */
 export function extractSharedChrome( root: string, routePaths: string[], inventory?: WebsiteInventory ): void {
-	const sources = new Set( [ ...routePaths, ...shareChrome( root, routePaths, false, inventory ) ] );
+	const index: ChromeIndex = new Map();
+	const sources = new Set( [ ...routePaths, ...shareChrome( root, routePaths, false, inventory, index ) ] );
 	// Route-current links can vary while the brand, menus and footer content
 	// remain identical. Factor common subtrees from the actual source owners,
 	// including the parts just created, rather than freezing or stripping state.
+	// Each pass rewrites only the few documents it shares from; every unchanged
+	// document answers from the index instead of being parsed again.
 	for ( let pass = 0; pass < 16; pass++ ) {
-		for ( const path of sources ) for ( const reference of includeReferences( readFileSync( join( root, path ), 'utf8' ) ) ) sources.add( reference.path.slice( 1 ) );
-		const added = shareChrome( root, [ ...sources ], true, inventory );
+		for ( const path of sources ) for ( const reference of indexedIncludes( root, path, index ) ) sources.add( reference.path.slice( 1 ) );
+		const added = shareChrome( root, [ ...sources ], true, inventory, index );
 		if ( ! added.length ) break;
 		for ( const path of added ) sources.add( path );
 	}
 }
 
-function shareChrome( root: string, paths: string[], descendants: boolean, inventory?: WebsiteInventory ): string[] {
+/** One shareable region of a source document, without its sliced bytes. */
+interface ChromeCandidate extends HtmlRange { id: string; key: string }
+/** Per source path: derived structure for one exact document version (by digest). */
+type ChromeIndex = Map< string, { digest: string; includes?: Array< HtmlRange & { path: string } >; candidates: Map< boolean, ChromeCandidate[] > } >;
+
+function indexEntry( index: ChromeIndex, path: string, html: string ) {
+	const digest = createHash( 'sha256' ).update( html ).digest( 'hex' );
+	let entry = index.get( path );
+	if ( entry?.digest !== digest ) index.set( path, entry = { digest, candidates: new Map() } );
+	return entry;
+}
+
+function indexedIncludes( root: string, path: string, index: ChromeIndex ): Array< HtmlRange & { path: string } > {
+	const html = readFileSync( join( root, path ), 'utf8' );
+	const entry = indexEntry( index, path, html );
+	if ( ! entry.includes ) {
+		const $ = parseLocatedStructure( html );
+		entry.includes = includeReferences( html, $ );
+		// The next shareChrome pass reads this same document for its descendants.
+		if ( ! entry.candidates.has( true ) ) entry.candidates.set( true, chromeCandidates( html, path, true, $ ) );
+	}
+	return entry.includes;
+}
+
+function chromeCandidates( html: string, path: string, descendants: boolean, $ = parseLocatedStructure( html ) ): ChromeCandidate[] {
+	const candidates: ChromeCandidate[] = [];
+	const partRole = /^parts\/(header|footer)-[a-f0-9]+\.html$/.exec( path )?.[ 1 ];
+	$( descendants ? '*' : 'header,footer,[role="banner"],[role="contentinfo"]' ).each( ( _index, node ) => {
+		if ( descendants && 'name' in node && [ 'script', 'style', 'template' ].includes( node.name ) ) return;
+		let landmark: Element | undefined;
+		let candidate: AnyNode | null = node;
+		while ( candidate && candidate.type !== 'root' ) {
+			if ( 'name' in candidate ) {
+				const element = candidate as Element;
+				if ( [ 'script', 'style', 'template', 'main', 'article', 'section' ].includes( element.name ) ) return;
+				if ( [ 'header', 'footer' ].includes( element.name ) || [ 'banner', 'contentinfo' ].includes( element.attribs.role ) ) {
+					landmark = element;
+					break;
+				}
+			}
+			candidate = candidate.parent;
+		}
+		if ( ! landmark && ! partRole ) return;
+		const role = landmark ? ( landmark.name === 'header' || landmark.attribs.role === 'banner' ? 'header' : 'footer' ) : partRole;
+		// Ordinary root wrappers (including responsive document scopes) are neutral.
+		let parent: AnyNode | null = landmark?.parent ?? null;
+		while ( parent && parent.type !== 'root' ) {
+			if ( 'name' in parent ) {
+				const element = parent as Element;
+				if ( ! [ 'html', 'body', 'div' ].includes( element.name ) ||
+					( element.attribs.role && ! [ 'generic', 'group', 'presentation', 'none' ].includes( element.attribs.role ) ) ) return;
+			}
+			parent = parent.parent;
+		}
+		const range = sourceRange( node );
+		// Implied/unclosed elements have no reliable byte-preserving end tag.
+		if ( ! range || !( node as Element & { sourceCodeLocation?: { endTag?: unknown } } ).sourceCodeLocation?.endTag ) return;
+		const fragment = html.slice( range.start, range.end );
+		const id = `${ role }-${ createHash( 'sha256' ).update( fragment ).digest( 'hex' ) }`;
+		const key = `${ role }-${ createHash( 'sha256' ).update( routeNeutralFragment( fragment ) ).digest( 'hex' ) }`;
+		candidates.push( { ...range, id, key } );
+	} );
+	return candidates;
+}
+
+function shareChrome( root: string, paths: string[], descendants: boolean, inventory: WebsiteInventory | undefined, index: ChromeIndex ): string[] {
 	const partsDir = join( root, 'parts' );
 	if ( existsSync( partsDir ) && ( lstatSync( partsDir ).isSymbolicLink() || ! lstatSync( partsDir ).isDirectory() ) ) return [];
 	// Candidate landmarks overlap, often deeply. Retaining every candidate's
@@ -61,46 +129,15 @@ function shareChrome( root: string, paths: string[], descendants: boolean, inven
 		if ( physicalPaths.has( identity ) ) continue;
 		physicalPaths.add( identity );
 		const html = readFileSync( join( root, path ), 'utf8' );
-		const $ = parseLocatedStructure( html );
-		const partRole = /^parts\/(header|footer)-[a-f0-9]+\.html$/.exec( path )?.[ 1 ];
-		$( descendants ? '*' : 'header,footer,[role="banner"],[role="contentinfo"]' ).each( ( _index, node ) => {
-			if ( descendants && 'name' in node && [ 'script', 'style', 'template' ].includes( node.name ) ) return;
-			let landmark: Element | undefined;
-			let candidate: AnyNode | null = node;
-			while ( candidate && candidate.type !== 'root' ) {
-				if ( 'name' in candidate ) {
-					const element = candidate as Element;
-					if ( [ 'script', 'style', 'template', 'main', 'article', 'section' ].includes( element.name ) ) return;
-					if ( [ 'header', 'footer' ].includes( element.name ) || [ 'banner', 'contentinfo' ].includes( element.attribs.role ) ) {
-						landmark = element;
-						break;
-					}
-				}
-				candidate = candidate.parent;
-			}
-			if ( ! landmark && ! partRole ) return;
-			const role = landmark ? ( landmark.name === 'header' || landmark.attribs.role === 'banner' ? 'header' : 'footer' ) : partRole;
-			// Ordinary root wrappers (including responsive document scopes) are neutral.
-			let parent: AnyNode | null = landmark?.parent ?? null;
-			while ( parent && parent.type !== 'root' ) {
-				if ( 'name' in parent ) {
-					const element = parent as Element;
-					if ( ! [ 'html', 'body', 'div' ].includes( element.name ) ||
-						( element.attribs.role && ! [ 'generic', 'group', 'presentation', 'none' ].includes( element.attribs.role ) ) ) return;
-				}
-				parent = parent.parent;
-			}
-			const range = sourceRange( node );
-			// Implied/unclosed elements have no reliable byte-preserving end tag.
-			if ( ! range || !( node as Element & { sourceCodeLocation?: { endTag?: unknown } } ).sourceCodeLocation?.endTag ) return;
-			const fragment = html.slice( range.start, range.end );
-			const id = `${ role }-${ createHash( 'sha256' ).update( fragment ).digest( 'hex' ) }`;
-			const key = `${ role }-${ createHash( 'sha256' ).update( routeNeutralFragment( fragment ) ).digest( 'hex' ) }`;
-			const group = groups.get( key ) ?? { id, length: range.end - range.start, exact: new Set(), occurrences: [] };
+		const entry = indexEntry( index, path, html );
+		let candidates = entry.candidates.get( descendants );
+		if ( ! candidates ) entry.candidates.set( descendants, candidates = chromeCandidates( html, path, descendants ) );
+		for ( const { id, key, start, end } of candidates ) {
+			const group = groups.get( key ) ?? { id, length: end - start, exact: new Set(), occurrences: [] };
 			group.exact.add( id );
-			group.occurrences.push( { ...range, path } );
+			group.occurrences.push( { start, end, path } );
 			groups.set( key, group );
-		} );
+		}
 	}
 	const replacements = new Map< string, Array< HtmlRange & { include: string; digest: string } > >();
 	const created: string[] = [];
