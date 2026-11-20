@@ -50,6 +50,9 @@ export function cleanPortableScaffolding(source: Document, snapshot: HTMLElement
   try {
   for (const node of roots.reverse()) {
     const copy = copyOf.get(node)!;
+    // Unwrapping disconnects descendants, including sheet owners. A restored
+    // link can still be loading (or have changed its preferred titled set).
+    if (node.querySelector('style,link[rel~="stylesheet" i]')) continue;
     if (!snapshot.contains(copy) || node.hasAttribute('role') || node.children.length !== 1 || Array.from(node.childNodes).some(child => child.nodeType === Node.TEXT_NODE && child.textContent?.trim())) continue;
     if (originals.some(other => other.getAttribute('href') === `#${node.id}` || other.getAttribute('aria-controls')?.split(/\s+/).includes(node.id))) continue;
     const style = getComputedStyle(node);
