@@ -16,6 +16,7 @@ vi.mock('../browser-kit/browser-kit.js', async importOriginal => {
 });
 import { captureScreenshots } from './screenshotter.js';
 import { exportWebsiteCapture } from '../capture-export.js';
+import { documentsDiffer } from '../responsive-assembly.js';
 
 // One two-profile Chromium capture, approximately 15s. Different loopback
 // hostnames and ports exercise differing runtime script origins; no vendor signatures.
@@ -116,6 +117,12 @@ it('marks a cross-origin in-flow embed form with inert provenance, not same-orig
 		const form = document.createElement('form'); form.id = '${id}';
 		const header = document.createElement('header'); header.textContent = 'Contact form'; form.appendChild(header);
 		for (let index = 0; index < 4; index++) { const input = document.createElement('input'); input.type = 'text'; form.appendChild(input); }
+		// Only the third-party embed changes its private tree by device.
+		if ('${id}' === 'vendor-form' && /Mobile/.test(navigator.userAgent)) {
+			const fieldset = document.createElement('fieldset');
+			for (const input of form.querySelectorAll('input')) fieldset.appendChild(input);
+			form.appendChild(fieldset);
+		}
 		const select = document.createElement('select'); select.appendChild(document.createElement('option')); form.appendChild(select);
 		form.appendChild(document.createElement('textarea'));
 		const footer = document.createElement('footer');
@@ -148,6 +155,12 @@ it('marks a cross-origin in-flow embed form with inert provenance, not same-orig
 		const url = `http://localhost:${port}/`;
 		const result = await captureScreenshots({ urls: [url], primaryUrl: url, outputDir, concurrency: 1, settleMs: 0, learnFluid: false });
 		expect(result.failed).toBe(0);
+		const entry = JSON.parse(readFileSync(result.manifestPath, 'utf8')).entries[url];
+		const desktop = readFileSync(join(outputDir, entry.html), 'utf8');
+		const mobile = readFileSync(join(outputDir, entry.mobileHtml), 'utf8');
+		expect(load(desktop)('#vendor-form fieldset').length).toBe(0);
+		expect(load(mobile)('#vendor-form fieldset').length).toBe(1);
+		expect(documentsDiffer(desktop, mobile)).toBe(false);
 		exportWebsiteCapture({ outputDir, sourceUrl: url, platform: 'default', summary: {
 			routesDiscovered: 1, routesCaptured: result.captured, routesSkipped: result.skipped,
 			routesFailed: result.failed, durationMs: result.durationMs,
@@ -168,7 +181,13 @@ it('marks a cross-origin in-flow embed form with inert provenance, not same-orig
 		expect(html).not.toContain('embed.js"></script>');
 		expect($('[data-blocks-engine-capture-runtime-owner-script], [data-blocks-engine-capture-runtime-owner-data]').length).toBe(0);
 		const marked = $('[data-blocks-engine-capture-runtime-owner]');
-		expect(marked.length).toBeGreaterThan(0);
+		// A device-specific embed tree must not duplicate the document or
+		// contribute native-control replay evidence; its visual reference stays.
+		expect(marked.length).toBe(1);
+		expect(marked.find('fieldset').length).toBe(0);
+		expect($('.data-blocks-engine-capture-mobile-document').length).toBe(0);
+		expect(marked.find('[data-blocks-engine-capture-native-control-state]').length).toBe(0);
+		expect($('#own-form [data-blocks-engine-capture-native-control-state]').length).toBeGreaterThan(0);
 		expect(marked.toArray().every(root => $(root).hasClass('vendor-form-root'))).toBe(true);
 		const id = marked.first().attr('data-blocks-engine-capture-runtime-owner')!;
 		expect(id).toMatch(/^runtime-[0-9a-f]{16}$/);
