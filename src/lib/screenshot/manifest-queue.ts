@@ -190,6 +190,11 @@ export class ManifestQueue {
     return this.manifest.entries[url];
   }
 
+  /** URLs with a manifest entry. */
+  urls(): string[] {
+    return Object.keys(this.manifest.entries);
+  }
+
   /** Claim a slug through the serialization chain. */
   claimSlug(base: string): Promise<string> {
     let result: string = base;

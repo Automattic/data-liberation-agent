@@ -142,6 +142,13 @@ describe( 'templateFingerprint', () => {
 		expect( templateFingerprint( html( '<link rel="stylesheet" href="../a.css"><script type="application/ld+json">{"a":1}</script>' ), `${ ORIGIN }/x/` ).key ).toBe( plain.key );
 		expect( templateFingerprint( html( '<link rel="stylesheet" href="/a.css"><script>var a = 1</script>' ), `${ ORIGIN }/x/` ).divergence.inlineScripts ).toBe( true );
 	} );
+
+	it( 'resolves relative asset URLs against an authored <base href>, so route depth is not a template', () => {
+		const html = `<html><head><base href="/"><link rel="stylesheet" href="site.css"></head><body><main><h1>Title</h1></main><script src="app.js"></script></body></html>`;
+		const keys = [ '/', '/journal/', '/product/item/', '/a/b/c/' ].map( path => templateFingerprint( html, `${ ORIGIN }${ path }` ) );
+		for ( const fingerprint of keys ) expect( fingerprint.key ).toBe( keys[ 0 ]!.key );
+		expect( templateFingerprint( html.replace( '<base href="/">', '' ), `${ ORIGIN }/a/b/c/` ).key ).not.toBe( keys[ 0 ]!.key );
+	} );
 } );
 
 describe( 'buildTemplateGroups', () => {

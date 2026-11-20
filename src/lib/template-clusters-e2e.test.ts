@@ -7,6 +7,7 @@ import { LinkedFrontier } from './screenshot/linked-frontier.js';
 import { RouteTimeBudget } from './capture-time-budget.js';
 import { OMITTED_ROUTE_REASON, ROUTE_OMITTED_BY_BUDGET } from './route-budget.js';
 import { captureWebsite } from './capture.js';
+import { TemplateClusterDeferral } from './template-cluster-deferral.js';
 import { buildTemplateGroups } from './template-groups.js';
 import { compareDerivedWithCapture } from './template-clusters.js';
 
@@ -99,6 +100,8 @@ describe( 'template-cluster derivation e2e (#784 phase 1)', () => {
 		const admits = RouteTimeBudget.prototype.admits;
 		const diagnostics = RouteTimeBudget.prototype.diagnostics;
 		let omittedUrls: string[] = [];
+		// The member must reach budget admission, not leave the browser pass early.
+		const deferralSpy = vi.spyOn( TemplateClusterDeferral.prototype, 'defers' ).mockReturnValue( false );
 		// Force the admission boundary without sleeping or racing a wall clock.
 		// All URLs remain in the admitted inventory; the real budget diagnostics
 		// record whichever routes the pool never starts.
@@ -127,6 +130,7 @@ describe( 'template-cluster derivation e2e (#784 phase 1)', () => {
 		} finally {
 			admissionSpy.mockRestore();
 			diagnosticsSpy.mockRestore();
+			deferralSpy.mockRestore();
 			rmSync( outputDir, { recursive: true, force: true } );
 		}
 	}, 240_000 );
@@ -145,6 +149,8 @@ describe( 'template-cluster derivation e2e (#784 phase 1)', () => {
 		const admits = RouteTimeBudget.prototype.admits;
 		const diagnostics = RouteTimeBudget.prototype.diagnostics;
 		let omittedUrls: string[] = [];
+		// The member must reach budget admission, not leave the browser pass early.
+		const deferralSpy = vi.spyOn( TemplateClusterDeferral.prototype, 'defers' ).mockReturnValue( false );
 		const admissionSpy = vi.spyOn( RouteTimeBudget.prototype, 'admits' ).mockImplementation( function ( this: RouteTimeBudget, candidate, concurrency ) {
 			return candidate !== memberUrl && admits.call( this, candidate, concurrency );
 		} );
@@ -171,6 +177,7 @@ describe( 'template-cluster derivation e2e (#784 phase 1)', () => {
 		} finally {
 			admissionSpy.mockRestore();
 			diagnosticsSpy.mockRestore();
+			deferralSpy.mockRestore();
 			rendered.set( '/', originalHome );
 			rendered.set( '/post-1/', originalPost );
 			rendered.delete( '/frontier/' );

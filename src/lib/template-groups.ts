@@ -27,7 +27,7 @@ export const TEMPLATE_GROUPS_SCHEMA = 'data-liberation-agent/template-groups/v1'
 export const TEMPLATE_GROUPS_FILE = 'template-groups.json';
 
 /** Version of the fingerprint rules below; bump when they change. */
-export const TEMPLATE_FINGERPRINT_VERSION = 2;
+export const TEMPLATE_FINGERPRINT_VERSION = 3;
 
 export const TEMPLATE_GROUPING_LIMITS = {
 	/**
@@ -228,10 +228,14 @@ function pageStyleText( styles: readonly TemplateStyleBlock[], normalization?: T
 }
 
 /** Fingerprint one server HTML document. Pure and deterministic. */
-export function templateFingerprint( html: string, baseUrl: string, normalization?: TemplateStyleNormalization, identity?: TemplateIdentity, runtimeStateClasses?: readonly RegExp[] ): TemplateFingerprint {
+export function templateFingerprint( html: string, documentUrl: string, normalization?: TemplateStyleNormalization, identity?: TemplateIdentity, runtimeStateClasses?: readonly RegExp[] ): TemplateFingerprint {
 	const $ = cheerio.load( html );
+	// Dependencies resolve against an authored `<base href>`: under `<base href="/">`,
+	// `href="site.css"` names one file on every route depth.
+	let baseUrl = documentUrl;
+	try { baseUrl = new URL( $( 'base[href]' ).first().attr( 'href' ) ?? documentUrl, documentUrl ).href; } catch { /* invalid base: the document URL */ }
 	const body = $( 'body' ).get( 0 );
-	const declaredIdentity = identity?.( html, baseUrl );
+	const declaredIdentity = identity?.( html, documentUrl );
 	const skeleton = declaredIdentity ? digest( `adapter:${ declaredIdentity }` ) : body ? skeletonHash( body, 0, runtimeStateClasses ) : digest( '' );
 	const styleText = pageStyleText( styleBlocks( $ ), normalization );
 	const describe = ( selector: string, kind?: string ) => $( selector ).toArray().filter( isElement ).map( element => `${ kind ? `${ kind }:` : '' }${ elementDescriptor( element, runtimeStateClasses ) }` );

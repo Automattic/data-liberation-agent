@@ -70,7 +70,7 @@ const SKIPPED_ELEMENTS = new Set( [ 'script', 'noscript', 'template', 'br', 'wbr
 const INLINE_ELEMENTS = new Set( [ 'a', 'abbr', 'b', 'bdi', 'bdo', 'br', 'cite', 'code', 'data', 'del', 'dfn', 'em', 'font', 'i', 'img', 'ins', 'kbd', 'label', 'mark', 'picture', 'q', 's', 'samp', 'small', 'source', 'span', 'strike', 'strong', 'sub', 'sup', 'time', 'u', 'var', 'wbr' ] );
 
 /** Attributes whose difference is authored content, per §3.1. */
-const SLOT_ATTRIBUTES = [ 'href', 'src', 'srcset', 'sizes', 'datetime', 'alt', 'id', 'class' ] as const;
+const SLOT_ATTRIBUTES = [ 'href', 'src', 'srcset', 'sizes', 'datetime', 'alt', 'id', 'class', 'aria-current' ] as const;
 
 /**
  * Head slots: `<title>`, description, canonical, and the Open Graph, Twitter
@@ -849,6 +849,8 @@ export interface TemplateClusterRecord {
 		/** Derived-vs-real acceptance checks; absent when not comparable. */
 		checks?: Record< string, boolean >;
 		equal?: boolean;
+		/** `rendered`: slot documents are light renders, the runtime rewrites server content. */
+		documents?: 'rendered';
 	};
 }
 

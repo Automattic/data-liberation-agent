@@ -498,11 +498,8 @@ async function runCaptureWebsite(
 		throw new UnsupportedCapturePlatformError(
 			`No adapter available for platform: ${ detection.platform }`
 		);
-	const templateClusters = options.templateClusters ?? ( options.acquisition !== 'http' && !! adapter.structuredContent );
-	const templateClustersDecision = {
-		enabled: templateClusters,
-		source: options.templateClusters !== undefined ? 'explicit' : templateClusters ? 'adapter-structured-content' : 'default',
-	};
+	const templateClusters = options.templateClusters ?? options.acquisition !== 'http';
+	const templateClustersDecision = { enabled: templateClusters, source: options.templateClusters !== undefined ? 'explicit' : 'default' };
 	if ( options.templateClusters === true && options.acquisition === 'http' ) throw new Error( 'templateClusters applies to browser acquisition only' ); // failure-class: programmer
 	const scopeDiagnostics: NonNullable<CaptureInventory['diagnostics']> = [];
 	const routeScope = await githubPagesRouteScope( sourceUrl, scopeDiagnostics ) ?? adapter.routeScope?.( sourceUrl );
@@ -640,6 +637,15 @@ async function runCaptureWebsite(
 	let frontierRemaining = frontierGroupingLimits?.maxRoutes === 'all' ? 1000 : frontierGroupingLimits?.maxRoutes ?? 0;
 	let frontierDeadline: number | undefined;
 	const assetQueue = new AssetAcquisitionQueue( outputDir, timeBudget?.abandonAt, adapter.resolveImageOriginal?.bind( adapter ), undefined, timeBudget?.admitUntil );
+	// Verified clusters' members leave the browser pass for derivation (#784).
+	const deferral = templateClusters && templateGrouping?.report
+		? new ( await import( './template-cluster-deferral.js' ) ).TemplateClusterDeferral( {
+				sourceUrl, outputDir, routeScope, governors: sourceGovernors,
+				templateIdentity: adapter.templateIdentity, styleNormalization: adapter.templateStyleNormalization,
+				// Light renders stop with the capture window, or the default one without a time budget.
+				deadline: timeBudget?.abandonAt ?? startedAt + DEFAULT_CAPTURE_TIME_BUDGET_MS,
+			}, () => clusterRankingGroups )
+		: undefined;
 	const screenshotResult = await captureScreenshots( {
 		governors: sourceGovernors,
 		maxTotalBytes: options.maxTotalBytes,
@@ -729,7 +735,11 @@ async function runCaptureWebsite(
 		...( timeBudget ? { timeBudget: { ...timeBudget, assetBacklog: () => assetQueue.backlog() } } : {} ),
 		...( options.routeDeadlineMs !== undefined ? { routeDeadlineMs: options.routeDeadlineMs } : {} ),
 		onProgress: ( current, total, url ) => progress( { phase: 'capturing', current, total, url } ),
-		onRouteCaptured: ( url, documents, stored ) => assetQueue.enqueueRoute( url, documents, stored ),
+		onRouteCaptured: ( url, documents, stored ) => {
+			assetQueue.enqueueRoute( url, documents, stored );
+			deferral?.routeCaptured( url, documents[ 0 ] );
+		},
+		...( deferral ? { deferRoute: ( url: string ) => deferral.defers( url ) } : {} ),
 	} );
 	await assetQueue.drain();
 	process.stderr.write(
@@ -766,8 +776,10 @@ async function runCaptureWebsite(
 				maxTotalBytes: options.maxTotalBytes,
 				resolveImageOriginal: adapter.resolveImageOriginal?.bind( adapter ),
 				acquisition: adapter.acquisition,
+				deferral,
 			} )
 		: undefined;
+	await deferral?.close();
 	if ( templateGrouping?.report?.frontier ) {
 		templateGroups = await recordTemplateSelection( outputDir, templateGrouping.report, urls, routeLimit );
 	}
@@ -803,9 +815,14 @@ async function runCaptureWebsite(
 	// Keep the first explanation per document, regardless of which stage found
 	// it or which slash spelling it used; derived documents keep no omission.
 	const budgetRows = new Set< string >();
+	// A deferred route derivation did not produce stays a missing route.
+	const underived = ( screenshotResult.deferredUrls ?? [] ).filter( url => ! derivedIdentities.has( normalizedUrl( url ) ) ).map( url => ( {
+		code: ROUTE_OMITTED_BY_BUDGET, url: documentRequestUrl( url ),
+		reason: 'deferred from browser capture to template-cluster derivation, which did not produce it (see template-clusters.json)',
+	} ) );
 	const captureDiagnostics = [
 		...discoveryDiagnostics, ...( screenshotResult.routeDiagnostics ?? [] ), ...linkedDiagnostics,
-		...( derivedTemplateClusters?.diagnostics ?? [] ),
+		...( derivedTemplateClusters?.diagnostics ?? [] ), ...underived,
 	].map( row => row.code === 'linked_page_budget_exhausted' ? { ...row, code: ROUTE_OMITTED_BY_BUDGET } : row )
 		.filter( row => {
 			if ( row.code !== ROUTE_OMITTED_BY_BUDGET ) return true;
@@ -1183,6 +1200,8 @@ export async function deriveTemplateClusterMembers( input: {
 	resolveImageOriginal?: import('../platform/types.js').Platform['resolveImageOriginal'];
 	/** The adapter's HTTP acquisition profile: escalated members fall back to it instead of being omitted. */
 	acquisition?: import('../platform/acquisition.js').HttpAcquisitionProfile;
+	/** The browser pass's deferral: its light renders verify and supply clusters whose runtime rewrites server content. */
+	deferral?: import('./template-cluster-deferral.js').TemplateClusterDeferral;
 } ): Promise< TemplateClusterDerivation > {
 	const { deriveMemberDocument, compareDerivedWithCapture, TEMPLATE_CLUSTER_LIMITS, writeTemplateClusters, TEMPLATE_CLUSTERS_FILE } =
 		await import( './template-clusters.js' );
@@ -1226,14 +1245,14 @@ export async function deriveTemplateClusterMembers( input: {
 	await queue.init();
 	// The admitted URL inventory includes budget omissions; only a manifest
 	// entry with HTML proves that capture produced a document.
-	const documentUrls = new Set< string >( Object.keys( JSON.parse( readFileSync( manifestPath, 'utf8' ) ).entries ) );
+	const documentUrls = new Set< string >( queue.urls() );
 	const documentIdentities = new Map( [ ...documentUrls ].map( url => [ normalizedUrl( url ), url ] ) );
 	const capturedEntry = ( url: string ) => queue.getEntry( documentIdentities.get( normalizedUrl( url ) ) ?? documentRequestUrl( url ) );
 	const isCaptured = ( url: string ) => Boolean( capturedEntry( url )?.html );
 	const { sameOriginPageAnchors } = await import( './screenshot/unscheduled-anchors.js' );
 	const { stateChangingAction } = await import( './url/action-url.js' );
 	const { isNonDocumentUrl } = await import( './extraction/sitemap.js' );
-	const { resolveDocumentReferences } = await import( './document-resource-base.js' );
+	const { resolveDocumentReferences, authoredBaseUrl } = await import( './document-resource-base.js' );
 	const offered = new Set< string >();
 	const diagnosed = new Set< string >();
 	const { TEMPLATE_GROUPING_LIMITS } = await import( './template-groups.js' );
@@ -1349,7 +1368,10 @@ export async function deriveTemplateClusterMembers( input: {
 					sourceUnavailable( group.representative, `representative ${ repFetch.unavailable }` );
 					continue;
 				}
-				const repServerHtml = repFetch.html;
+				let repServerHtml = repFetch.html;
+				// Where members' documents come from: server HTML, or light renders
+				// once the cluster verified only from rendered documents.
+				let rendered = false;
 				const repProcessedHtml = readFileSync( repHtmlPath, 'utf8' );
 				const repFeed = feedEntries.get( normalizedUrl( group.representative ) );
 				let feedVerified = Boolean( repFeed && feedBodyEquivalent( repProcessedHtml, repFeed ) );
@@ -1383,6 +1405,7 @@ export async function deriveTemplateClusterMembers( input: {
 				const verificationCaptured = verificationUrl !== undefined &&
 					isCaptured( verificationUrl );
 				let verified = false;
+				let failureReason: string | undefined;
 				let verificationRecord: import('./template-clusters.js').TemplateClusterRecord['verification'] =
 					{ url: verificationUrl ?? group.representative, captured: verificationCaptured };
 				if ( verificationUrl === undefined ) continue;
@@ -1417,13 +1440,31 @@ export async function deriveTemplateClusterMembers( input: {
 						if ( ! comparison.equal ) {
 							const failing = Object.entries( comparison.checks ).filter( ( [ , ok ] ) => ! ok ).map( ( [ name ] ) => name ).join( ', ' );
 							clusterFailure = { code: 'cluster_verification_mismatch', reason: `derived-vs-real comparison failed (${ failing })` };
-	diagnostics.push( { code: ROUTE_TEMPLATE_ESCALATED, url: verificationUrl, reason: `cluster verification failed its derived-vs-real comparison (${ failing })`, metrics: { clusterSize: group.size } } );
+							failureReason = `cluster verification failed its derived-vs-real comparison (${ failing })`;
 						}
 					} else {
 						verificationRecord = { url: verificationUrl, captured: true };
 						clusterFailure = derivation.gate;
-						diagnostics.push( { code: ROUTE_TEMPLATE_ESCALATED, url: verificationUrl, reason: `cluster verification member failed the ${ derivation.gate.code } gate`, metrics: { clusterSize: group.size } } );
+						failureReason = `cluster verification member failed the ${ derivation.gate.code } gate`;
 					}
+					// A runtime that rewrites server content per member fails the
+					// server-document check. Light renders of the representative and
+					// the verification member are then the slot pair: when the member
+					// derived from them equals its real capture, every member derives
+					// from its own light render.
+					if ( ! verified ) {
+						const [ repRender, memberRender ] = input.deferral ? await Promise.all( [ input.deferral.document( group.representative, 'rendered' ), input.deferral.document( verificationUrl, 'rendered' ) ] ) : [];
+						if ( repRender && memberRender && 'html' in repRender && 'html' in memberRender ) {
+							const renderedDerivation = deriveMemberDocument( { repServerHtml: repRender.html, repProcessedHtml, memberServerHtml: memberRender.html, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization } );
+							const comparison = renderedDerivation.ok ? compareDerivedWithCapture( { derivedHtml: renderedDerivation.html, realHtml, repServerHtml: repRender.html, memberServerHtml: memberRender.html, styleNormalization: input.styleNormalization, baseUrl: group.representative } ) : undefined;
+							if ( comparison?.equal ) {
+								verified = rendered = true;
+								repServerHtml = repRender.html;
+								verificationRecord = { url: verificationUrl, captured: true, documents: 'rendered', checks: comparison.checks, equal: true };
+							}
+						}
+					}
+					if ( ! verified && failureReason ) diagnostics.push( { code: ROUTE_TEMPLATE_ESCALATED, url: verificationUrl, reason: failureReason, metrics: { clusterSize: group.size } } );
 				}
 				// The verdict is final here: record it so a failed cluster is visible
 				// in the receipt, not only in the diagnostics.
@@ -1448,7 +1489,8 @@ export async function deriveTemplateClusterMembers( input: {
 					for ( let ahead = index; ahead < Math.min( members.length, index + input.governors.forOrigin( input.sourceUrl ).concurrency ); ahead++ ) {
 						const next = members[ ahead ]!;
 						const nextFeed = feedEntries.get( normalizedUrl( next ) );
-						if ( ! memberDocuments.has( next ) ) memberDocuments.set( next, feedVerified && repFeed && nextFeed ? Promise.resolve( feedMemberDocument( repServerHtml, repFeed, nextFeed ) ).catch( () => undefined ) : Promise.resolve( undefined ) );
+						if ( rendered ) void input.deferral!.document( next, 'rendered' );
+						else if ( ! memberDocuments.has( next ) ) memberDocuments.set( next, feedVerified && repFeed && nextFeed ? Promise.resolve( feedMemberDocument( repServerHtml, repFeed, nextFeed ) ).catch( () => undefined ) : Promise.resolve( undefined ) );
 					}
 					return memberDocuments.get( members[ index ]! );
 				};
@@ -1461,7 +1503,10 @@ export async function deriveTemplateClusterMembers( input: {
 					const feedHtml = await memberDocument( index ) ?? ( feedVerified && repFeed && memberFeed ? await Promise.resolve( feedMemberDocument( repServerHtml, repFeed, memberFeed ) ).catch( () => undefined ) : undefined );
 					memberDocuments.delete( url );
 					lap( 'memberDocument' );
-					const response = feedHtml ? { html: feedHtml } : await sourceDocument( url );
+					// The browser pass's deferral check already holds most member documents.
+					const memberSource = rendered ? 'rendered' : 'server';
+					const response = feedHtml ? { html: feedHtml } : input.deferral ? await input.deferral.document( url, memberSource ) : await sourceDocument( url );
+					input.deferral?.release( url, memberSource );
 					if ( 'unavailable' in response ) {
 						record.unavailable.push( { url, reason: response.unavailable } );
 						unavailableCount++;
@@ -1492,21 +1537,24 @@ export async function deriveTemplateClusterMembers( input: {
 					// Template dependencies take the captured-resource stage over the
 					// same store (§3.1 step 3). Slot media is queued for the media
 					// stage instead of downloaded inline (#1701).
-					await store.captureDomDependencies( derivation.html, url, { deferMedia } );
+					// The derived document keeps the source's `<base href>`; its slot
+					// media resolves against that base, as the browser's baseURI does.
+					const dependencyBase = authoredBaseUrl( derivation.html, url );
+					await store.captureDomDependencies( derivation.html, dependencyBase, { deferMedia } );
 					const memberPath = `screenshots/derived/${ slugify( url ) }.html`;
 					const memberFile = resolve( input.outputDir, memberPath );
 					mkdirSync( dirname( memberFile ), { recursive: true } );
 					writeFileSync( memberFile, derivation.html );
 					let memberMobilePath: string | undefined;
 					if ( mobileDerivation?.ok ) {
-						await store.captureDomDependencies( mobileDerivation.html, url, { deferMedia } );
+						await store.captureDomDependencies( mobileDerivation.html, dependencyBase, { deferMedia } );
 						memberMobilePath = `screenshots/derived/${ slugify( url ) }.mobile.html`;
 						writeFileSync( resolve( input.outputDir, memberMobilePath ), mobileDerivation.html );
 					}
 					const widthProfiles: NonNullable< import('./screenshot/manifest-queue.js').ManifestEntry[ 'profiles' ] > = {};
 					for ( const { key, profile, derivation: widthDerivation } of widthDerivations ) {
 						if ( ! widthDerivation.ok ) continue;
-						await store.captureDomDependencies( widthDerivation.html, url, { deferMedia } );
+						await store.captureDomDependencies( widthDerivation.html, dependencyBase, { deferMedia } );
 						const widthPath = `screenshots/derived/${ slugify( url ) }.${ key }.html`;
 						writeFileSync( resolve( input.outputDir, widthPath ), widthDerivation.html );
 						widthProfiles[ key ] = { ...profile, html: widthPath };

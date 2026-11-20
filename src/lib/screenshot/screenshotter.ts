@@ -1370,6 +1370,12 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	const capturedAt = () => new Date().toISOString();
 
 	const reusedRoutes = new Set< string >();
+	// Asked once, at admission: a deferred route never starts in this pass.
+	const deferredRoutes = new Set< string >();
+	const deferred = ( url: string ): boolean => {
+		if ( ! deferredRoutes.has( url ) && opts.deferRoute?.( url ) ) deferredRoutes.add( url );
+		return deferredRoutes.has( url );
+	};
 	const processUrl = async ( url: string, reuseOnly = false ): Promise< void > => {
 		const routeStartedAt = Date.now();
 		const base = slugify( url );
@@ -2033,7 +2039,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				const runningKinds = new Map< Promise<void>, RouteKind >();
 				const timer = memoryAdmission ? setInterval( admission.sample, 100 ) : undefined;
 				const budgetAdmits = (): boolean => {
-					while ( cursor < segEnd && reusedRoutes.has( urls[ cursor ]! ) ) cursor++;
+					while ( cursor < segEnd && ( reusedRoutes.has( urls[ cursor ]! ) || deferred( urls[ cursor ]! ) ) ) cursor++;
 					return cursor < segEnd && ! routeDeadlines.stalled && ( ! routeBudget || routeBudget.admits( urls[ cursor ]!, running.size + 1 ) );
 				};
 				try {
@@ -2214,9 +2220,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 
 
 	// Routes the time budget left uncaptured are missing routes: counted as failed.
-	const stallDiagnostics = routeDeadlines.diagnostics( urls.filter( url => ! reusedRoutes.has( url ) ) );
+	const stallDiagnostics = routeDeadlines.diagnostics( urls.filter( url => ! reusedRoutes.has( url ) && ! deferredRoutes.has( url ) ) );
 	const stalledUrls = new Set( stallDiagnostics.map( row => row.url ) );
-	const budgetDiagnostics = routeBudget?.diagnostics( urls.filter( url => ! stalledUrls.has( url ) ) ) ?? [];
+	const budgetDiagnostics = routeBudget?.diagnostics( urls.filter( url => ! stalledUrls.has( url ) && ! deferredRoutes.has( url ) ) ) ?? [];
 	if ( budgetDiagnostics.length ) sendLog( server, `[budget] ${ budgetDiagnostics.length } of ${ urls.length } routes left uncaptured by the ${ opts.timeBudget!.timeBudgetMs }ms capture time budget` );
 	for (const origin of new Set(urls.map(url => new URL(url).origin))) {
 		const blocked = opts.governors?.forOrigin(origin).blockedClient;
@@ -2232,6 +2238,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		manifestPath,
 		urls,
 		...(frontier ? {linkedPageCoverage: frontier.coverage()} : {}),
+		...(deferredRoutes.size ? {deferredUrls: [...deferredRoutes]} : {}),
 		...(routeDiagnostics.length ? {routeDiagnostics} : {}),
 		...(deviceMode ? {deviceMode: reflowViewports ? {...deviceMode, routes: summarizeRouteDecisions(routeDecisions)} : deviceMode} : {}),
 		...(entrypoint && sharedChromeResults.size ? {sharedChrome: summarizeSharedChrome(entrypoint, sharedChromeResults, sharedChromeDecisions)} : {}),

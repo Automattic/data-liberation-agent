@@ -142,6 +142,8 @@ export interface ScreenshotOpts {
 	referenceSampleUrls?: readonly string[];
 	/** Reorder only unstarted inventory routes after the entrypoint has rendered. */
 	prioritizePendingRoutes?: ( urls: string[] ) => string[];
+	/** Asked when a route comes up for admission: true leaves it to the caller (template-cluster derivation). */
+	deferRoute?: ( url: string ) => boolean;
 	/** Group newly discovered links before frontier admission, then rank pending work. */
 	groupLinkedRoutes?: ( urls: string[] ) => Promise< void >;
 	/**
@@ -183,6 +185,8 @@ export interface ScreenshotResult {
 	/** Every URL processed, including redirect targets queued during capture. */
 	urls: string[];
 	linkedPageCoverage?: import('./linked-frontier.js').LinkedPageCoverage;
+	/** Routes `deferRoute` took out of the browser pass. */
+	deferredUrls?: string[];
 	/** Findings about input routes dropped before capture (`route_off_origin`) or left by the time budget (`route_capture_skipped_budget`). */
 	routeDiagnostics?: import('../capture-export-routes.js').RouteDiagnostic[];
 	/** The device-mode decision, when `deviceMode` applied (no explicit `viewports`). */
