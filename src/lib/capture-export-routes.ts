@@ -102,6 +102,8 @@ export interface RouteDiagnostic {
 	/** The exported file the finding is about. */
 	path?: string;
 	metrics?: Record< string, number >;
+	stopReason?: 'source_blocked_client';
+	learnedRateCeiling?: number;
 }
 
 function documentIdentity( url: string ): string | undefined {

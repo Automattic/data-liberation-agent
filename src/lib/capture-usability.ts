@@ -31,7 +31,7 @@ export const ROUTE_CAPTURE_TIMEOUT = 'route_capture_timeout';
 export const ROUTE_PROFILE_CAPTURE_TIMEOUT = 'route_profile_capture_timeout';
 
 /** Codes of routes that were in scope and produced no page. */
-export const MISSING_ROUTE_CODES = [ 'route_capture_failed', ROUTE_CAPTURE_SKIPPED_BUDGET, ROUTE_CAPTURE_TIMEOUT, ...EXPORT_DROPPED_ROUTE_CODES ] as const;
+export const MISSING_ROUTE_CODES = [ 'route_capture_failed', 'route_capture_pending', ROUTE_CAPTURE_SKIPPED_BUDGET, ROUTE_CAPTURE_TIMEOUT, ...EXPORT_DROPPED_ROUTE_CODES ] as const;
 
 /**
  * A route that was attempted (or advertised as a redirect target) and did not

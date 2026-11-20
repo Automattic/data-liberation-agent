@@ -8,6 +8,7 @@
  * - At most `concurrency` HTTP requests are in flight at once. Browser
  *   fan-out is uncapped while healthy; it shares admission limits only after
  *   an origin throttle, until success-driven recovery reaches full speed.
+ *   Every source request then stays paced at the learned rate ceiling.
  * - A throttle response (429 or 503) pauses new requests for the source's
  *   `Retry-After` (delta-seconds or an HTTP date, capped at
  *   `maxRetryAfterMs`), drops the in-flight limit to 1 and retries the
@@ -17,7 +18,10 @@
  * - Each `recoveryStep` consecutive successes raise the limit by one, back up
  *   to `concurrency`.
  *
- * Throttle rates stay log-only. Documents the source keeps refusing after
+ * The first throttle learns half the observed rate (minimum 0.1 req/s);
+ * subsequent admissions stay evenly paced at that ceiling, even after
+ * concurrency recovers. The ceiling and stop reason are receipt evidence.
+ * Documents the source keeps refusing after
  * the capture has slowed down end the capture with `source_blocked_client`
  * and bounded evidence (first refusal time and request count) for the
  * receipt. An explicit throttle status is the source's own answer; ambiguous
@@ -128,6 +132,9 @@ export interface SourceRequestGovernorStats {
 	throttleEvents: number;
 	/** Current in-flight limit. */
 	concurrency: number;
+	/** Persistent requests/second ceiling learned on the first throttle. */
+	learnedRateCeiling?: number;
+	stopReason?: 'source_blocked_client';
 	/** Requests per second since the first request; logs only. */
 	sustainedRate: number;
 }
@@ -187,7 +194,13 @@ export class SourceRequestGovernor {
 	private observeAccess(status: number | undefined, error: unknown, category: SourceRequestCategory, routeUrl?: string, admission?: number): void {
 		if (status !== undefined) this.hadResponse = true;
 		if (!DOCUMENT_CATEGORIES.has(category)) return;
-		if (status !== undefined && !THROTTLE_STATUSES.has(status)) this.reachable();
+		if (status === 403 && this.hadResponse && this.learnedRateCeiling !== undefined) {
+			// A document denied after source pressure is a confirmed client block;
+			// an ordinary first-load/authentication 403 is not.
+			this.firstRefusal ??= { requestsBeforeFirstRefusal: this.requests - 1, firstRefusalAt: new Date().toISOString() };
+			this.blockedClient ??= new SourceBlockedClientError({ origin: this.origin, ...this.firstRefusal, refusal: 'throttle', requestCounts: this.stats().requestCounts });
+			for (const wake of this.waiters.splice(0)) wake();
+		} else if (status !== undefined && !THROTTLE_STATUSES.has(status)) this.reachable();
 		else if (status !== undefined) this.observeRefusal('throttle', routeUrl, admission);
 		else if (isSourceTransportThrottle(error, true)) this.observeRefusal('transport', routeUrl, admission);
 	}
@@ -262,6 +275,8 @@ export class SourceRequestGovernor {
 	private active = 0;
 	private successes = 0;
 	private browserThrottled = false;
+	private learnedRateCeiling?: number;
+	private nextRequestAt = 0;
 	private pausedUntil = 0;
 	private requests = 0;
 	private readonly requestCounts: SourceRequestCounts = { document: 0, 'device-check': 0, 'asset-original': 0, subresource: 0, 'refusal-probe': 0, retry: 0 };
@@ -328,7 +343,7 @@ export class SourceRequestGovernor {
 
 	stats(): SourceRequestGovernorStats {
 		const elapsed = this.firstRequestAt === undefined ? 0 : ( Date.now() - this.firstRequestAt ) / 1000;
-		return { origin: this.origin, requests: this.requests, requestCounts: { ...this.requestCounts }, throttleEvents: this.throttles, concurrency: this.limit, sustainedRate: elapsed > 0 ? this.requests / elapsed : 0 };
+		return { ...(this.learnedRateCeiling !== undefined ? { learnedRateCeiling: this.learnedRateCeiling } : {}), ...(this.blockedClient ? { stopReason: 'source_blocked_client' as const } : {}), origin: this.origin, requests: this.requests, requestCounts: { ...this.requestCounts }, throttleEvents: this.throttles, concurrency: this.limit, sustainedRate: elapsed > 0 ? this.requests / elapsed : 0 };
 	}
 
 	/**
@@ -379,6 +394,10 @@ export class SourceRequestGovernor {
 	}
 
 	private recordThrottle( delayMs: number ) {
+		// A one-second minimum observation window avoids an unbounded ceiling
+		// when the first response arrives in the same millisecond as admission.
+		this.learnedRateCeiling ??= Math.max(0.1, this.requests / Math.max(1, (Date.now() - (this.firstRequestAt ?? Date.now())) / 1000) / 2);
+		this.nextRequestAt = Math.max(this.nextRequestAt, Date.now() + this.paceMs());
 		this.throttles++;
 		this.limit = 1;
 		this.browserThrottled = true;
@@ -395,14 +414,27 @@ export class SourceRequestGovernor {
 		} else if (status !== undefined) this.recordSuccess();
 	}
 
-	/** Healthy native browser requests need no admission or bookkeeping slot. */
+	/** Native browser requests share concurrency slots only while recovering. */
 	get isBrowserThrottled(): boolean { return this.browserThrottled; }
+
+	/** Spacing at the learned ceiling, bounded like any source-requested wait. */
+	private paceMs(): number { return Math.min(this.maxRetryAfterMs, 1000 / this.learnedRateCeiling!); }
+
+	/** Waits for the next request start allowed by the learned rate ceiling. */
+	async pace(signal?: AbortSignal): Promise<void> {
+		if (this.learnedRateCeiling === undefined) return;
+		for (let wait = Math.max(this.pausedUntil, this.nextRequestAt) - Date.now(); wait > 0; wait = Math.max(this.pausedUntil, this.nextRequestAt) - Date.now()) await this.sleep(wait, signal);
+		this.nextRequestAt = Date.now() + this.paceMs();
+	}
 
 	private recordSuccess() {
 		if ( !this.browserThrottled && this.limit >= this.maxConcurrency ) return;
 		if ( ++this.successes < this.recoveryStep ) return;
 		this.successes = 0;
 		this.limit = Math.min(this.maxConcurrency, this.limit + 1);
+		// Recovery restores browser parallelism, never the pre-throttle rate:
+		// `pace()` keeps native requests at the learned ceiling without holding
+		// a slot, which same-URL cache locks could otherwise deadlock.
 		if (this.limit === this.maxConcurrency) this.browserThrottled = false;
 		this.wake();
 	}
@@ -413,8 +445,9 @@ export class SourceRequestGovernor {
 			await this.admitSourceRequest();
 			if ( signal?.aborted ) throw abortReason( signal ); // failure-class: operational
 			if ( (browser && !this.browserThrottled) || this.active < this.limit ) {
-				const wait = this.pausedUntil - Date.now();
+				const wait = Math.max(this.pausedUntil, this.nextRequestAt) - Date.now();
 				if ( wait <= 0 ) {
+					if (this.learnedRateCeiling !== undefined) this.nextRequestAt = Date.now() + this.paceMs();
 					this.active++;
 					return;
 				}

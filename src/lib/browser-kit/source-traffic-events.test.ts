@@ -66,6 +66,7 @@ it('returns admission slots of requests still in flight when their context close
   await continueSourceRoute({ request: () => request, continue: vi.fn().mockResolvedValue(undefined) } as unknown as Route, context, {});
   context.emit('close');
   const next = new AbortController();
-  setTimeout(() => next.abort(), 100);
-  await expect(governor.acquire(next.signal, true)).resolves.toBeUndefined();
+  const timer = setTimeout(() => next.abort(), 3000);
+  try { await expect(governor.acquire(next.signal, true)).resolves.toBeUndefined(); }
+  finally { clearTimeout(timer); governor.release(); }
 });

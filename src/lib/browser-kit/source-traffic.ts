@@ -150,13 +150,11 @@ export async function continueSourceRoute(route: Route, context: BrowserContext,
   const requestAttribution = attribution(context, request);
   await governor.admitSourceRequest();
   const acquired = governor.isBrowserThrottled;
-  if (acquired) {
-    const abort = new AbortController();
-    const close = () => abort.abort();
-    context.once('close', close);
-    try { await governor.acquire(abort.signal, true); }
-    finally { context.off('close', close); }
-  }
+  const abort = new AbortController();
+  const close = () => abort.abort();
+  context.once('close', close);
+  try { await (acquired ? governor.acquire(abort.signal, true) : governor.pace(abort.signal)); }
+  finally { context.off('close', close); }
   traffic.get(context)?.inFlight.add(request);
   nativeRequests.set(request, { governor, acquired, attribution: requestAttribution, category: request.resourceType() === 'document' ? traffic.get(context)?.category ?? 'document' : 'subresource', routeUrl: owningDocumentUrl(request), refusalAdmission: governor.refusalAdmission() });
   try { await route.continue(options); }

@@ -39,6 +39,7 @@ export type SourceFindingUnit = 'route' | 'page' | 'block' | 'asset' | 'styleshe
  */
 export const SOURCE_FINDING_LOSS_CLASSES = {
 	route_capture_failed: { loss_class: 'omitted_unit', unit: 'route' },
+	route_capture_pending: { loss_class: 'omitted_unit', unit: 'route' },
 	route_export_failed: { loss_class: 'omitted_unit', unit: 'route' },
 	route_path_collision: { loss_class: 'omitted_unit', unit: 'route' },
 	route_path_unsafe: { loss_class: 'omitted_unit', unit: 'route' },

@@ -2165,7 +2165,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				const runningKinds = new Map< Promise<void>, RouteKind >();
 				const timer = memoryAdmission ? setInterval( admission.sample, 100 ) : undefined;
 				const budgetAdmits = (): boolean => {
-					while ( cursor < segEnd && ( reusedRoutes.has( urls[ cursor ]! ) || deferred( urls[ cursor ]! ) ) ) cursor++;
+					while ( cursor < segEnd && ( reusedRoutes.has( urls[ cursor ]! ) || deferred( urls[ cursor ]! ) || opts.governors?.forOrigin(urls[cursor]!).blockedClient ) ) cursor++;
 					return cursor < segEnd && ! routeDeadlines.stalled && ( ! routeBudget || routeBudget.admits( urls[ cursor ]!, running.size + 1 ) );
 				};
 				try {
@@ -2211,7 +2211,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			// Deadline-kept profiles are in the manifest before links are read from it.
 			await Promise.allSettled( partialCommitWrites );
 			// Do not spend more source requests on link inspection after a stall.
-			if ( routeDeadlines.stalled ) break;
+			if ( routeDeadlines.stalled || urls.every(url => opts.governors?.forOrigin(url).blockedClient) ) break;
 			// Even after the budget closes, offer this wave's links to the
 			// frontier so rejected targets receive budget diagnostics.
 			// Expand a breadth-first wave from actual rendered artifacts. The normal
@@ -2355,7 +2355,14 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	if ( budgetDiagnostics.length ) sendLog( server, `[budget] ${ budgetDiagnostics.length } of ${ urls.length } routes left uncaptured by the ${ opts.timeBudget!.timeBudgetMs }ms capture time budget` );
 	for (const origin of new Set(urls.map(url => new URL(url).origin))) {
 		const blocked = opts.governors?.forOrigin(origin).blockedClient;
-		if (blocked) routeDiagnostics.push({ code: blocked.code, url: origin, reason: blocked.message, ...blocked.evidence });
+		const stats = opts.governors?.forOrigin(origin).stats();
+		if (stats?.learnedRateCeiling !== undefined) routeDiagnostics.push({ code: 'source_rate_ceiling_learned', url: origin, reason: `Source requests paced at ${stats.learnedRateCeiling} req/s for the rest of this capture`, ...stats });
+		if (blocked) {
+			routeDiagnostics.push({ code: blocked.code, url: origin, reason: blocked.message, ...blocked.evidence, stopReason: blocked.code });
+			for (const url of urls.filter(url => new URL(url).origin === origin && !reusedRoutes.has(url) && !manifest.getEntry(url)?.html && !failedRoutes.has(url))) {
+				routeDiagnostics.push({ code: 'route_capture_pending', url, reason: 'Source blocked this client; pending capture with --resume' });
+			}
+		}
 	}
 	routeDiagnostics.push( ...budgetDiagnostics, ...deadlineRows, ...profileDeadlineRows, ...stallDiagnostics );
 	return {

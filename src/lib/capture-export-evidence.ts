@@ -718,7 +718,7 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 	if (cleanup) writeFileSync(join(stageDir, 'cleanup-evidence.json'), JSON.stringify({ schema: recordedPolicy!.schema, pages: cleanupPages }, null, 2));
 	const summary = withExportDroppedRoutes( options.summary, routeCaptureDiagnostics );
 	const complete =
-		! httpInput && Number( summary.routesFailed ?? 0 ) === 0 && ! hasUncapturedProfiles( routeCaptureDiagnostics ) &&
+		! httpInput && summary.stopReason !== 'source_blocked_client' && Number( summary.routesPending ?? 0 ) === 0 && Number( summary.routesFailed ?? 0 ) === 0 && ! hasUncapturedProfiles( routeCaptureDiagnostics ) &&
 		! discoveryDiagnostics.some( diagnostic => diagnostic.code === 'linked_page_budget_exhausted' || diagnostic.code === 'linked_page_outcome_unproven' ) &&
 		! unresolvedAnchors.some( ( anchor ) => anchor.reason === UNCAPTURED_ROUTE_REASON );
 	const nativePages = Object.entries( capture.entries ).filter( ([ , entry ]) => entry.nativeViewTimelines ).map( ([ url, entry ]) => ({ url, profiles: entry.nativeViewTimelines }) );
