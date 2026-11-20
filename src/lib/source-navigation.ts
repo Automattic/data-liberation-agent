@@ -13,6 +13,8 @@ import type { SiteRouteScope } from '../platform/types.js';
 import { routeInScope, validateRouteScope } from './url/route-scope.js';
 import { SOURCE_DOCUMENT_MAX_BYTES } from './source-document-policy.js';
 
+import { holdMobileRedirects, type MobileRedirect } from './mobile-redirect.js';
+
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 export const SOURCE_NAVIGATION_LIMITS = { hops: 4, timeoutMs: 30_000, refreshDelayMs: 5_000 } as const;
 /**
@@ -282,7 +284,7 @@ export async function inspectSourceDocument(requestedUrl: string, acquire: (url:
  * within what remains of the same budget, and `loadIncomplete` reports a
  * delivered document whose subresources were still pending when it ran out.
  */
-export async function navigateSourceDocument(page: Page, requestedUrl: string, options: {timeoutMs?: number; publicUrlsOnly?: boolean; routeScope?: SiteRouteScope; /** Cap on the best-effort `load` wait after the document is parsed. */ loadWaitMs?: number} = {}): Promise<{response: Response | null; loadIncomplete?: true; subresourceLoss?: true; navigationUrl?: string; redirectedTo?: string; boundary?: BoundaryObservation; /** Same-route query the delivered document's script navigated to, replayed as its reload. */ scriptNavigationUrl?: string}> {
+export async function navigateSourceDocument(page: Page, requestedUrl: string, options: {timeoutMs?: number; publicUrlsOnly?: boolean; routeScope?: SiteRouteScope; /** Cap on the best-effort `load` wait after the document is parsed. */ loadWaitMs?: number} = {}): Promise<{response: Response | null; loadIncomplete?: true; subresourceLoss?: true; navigationUrl?: string; redirectedTo?: string; boundary?: BoundaryObservation; /** Same-route query the delivered document's script navigated to, replayed as its reload. */ scriptNavigationUrl?: string; mobileRedirects?: MobileRedirect[]}> {
 	const deadline = Date.now() + (options.timeoutMs ?? SOURCE_NAVIGATION_LIMITS.timeoutMs);
 	for (let attempt = 1; ; attempt++) {
 		const before = sourceLoadInterruptions(page);
@@ -300,7 +302,7 @@ const INTERRUPTED_NAVIGATION = /interrupted by another navigation|net::ERR_ABORT
 /** Longest wait for the guard to receive the navigation that interrupted `goto`. */
 const INTERRUPTED_NAVIGATION_GRACE_MS = 1_000;
 
-async function navigateSourceDocumentAttempt(page: Page, requestedUrl: string, options: {timeoutMs?: number; publicUrlsOnly?: boolean; routeScope?: SiteRouteScope; loadWaitMs?: number}): Promise<{response: Response | null; loadIncomplete?: true; navigationUrl?: string; redirectedTo?: string; boundary?: BoundaryObservation; scriptNavigationUrl?: string}> {
+async function navigateSourceDocumentAttempt(page: Page, requestedUrl: string, options: {timeoutMs?: number; publicUrlsOnly?: boolean; routeScope?: SiteRouteScope; loadWaitMs?: number}): Promise<{response: Response | null; loadIncomplete?: true; navigationUrl?: string; redirectedTo?: string; boundary?: BoundaryObservation; scriptNavigationUrl?: string; mobileRedirects?: MobileRedirect[]}> {
 	const deadline = Date.now() + (options.timeoutMs ?? SOURCE_NAVIGATION_LIMITS.timeoutMs);
 	const publicOnly = options.publicUrlsOnly ?? false;
 	safeTarget(requestedUrl, publicOnly);
@@ -315,6 +317,7 @@ async function navigateSourceDocumentAttempt(page: Page, requestedUrl: string, o
 	let executedDocument: string | undefined;
 	let scriptReloads = 0;
 	let scriptNavigationUrl: string | undefined;
+	let mobileRedirects: MobileRedirect[] = [];
 	const guard = async (route: Route) => {
 		const request = route.request();
 		if (!request.isNavigationRequest() || request.frame() !== page.mainFrame()) { await route.fallback(); return; }
@@ -369,7 +372,14 @@ async function navigateSourceDocumentAttempt(page: Page, requestedUrl: string, o
 				await route.fulfill({status: rendered!.status, contentType: rendered!.headers['content-type'] ?? 'text/html', body: ''});
 			} else {
 				executedDocument = address;
-				await route.fulfill({status: rendered!.status, headers: decodedHeaders(rendered!.headers), body: rendered!.body});
+				const viewport = page.viewportSize();
+				// Use a byte-preserving view: the recognized declarations and the
+				// replacement are ASCII, but the rest of the response need not be
+				// UTF-8. In particular, never re-encode an untouched document.
+				const held = viewport ? holdMobileRedirects(rendered!.body.toString('latin1'), requestedUrl, viewport) : undefined;
+				mobileRedirects = held?.redirects ?? [];
+				const body = held?.redirects.length ? Buffer.from(held.html, 'latin1') : rendered!.body;
+				await route.fulfill({status: rendered!.status, headers: decodedHeaders(rendered!.headers), body});
 			}
 		} catch (error) {
 			failure = error instanceof Error ? error : new Error(String(error));
@@ -408,7 +418,7 @@ async function navigateSourceDocumentAttempt(page: Page, requestedUrl: string, o
 		// through the guard, exactly as it did while navigation awaited `load`.
 		const loaded = await page.waitForLoadState('load', {timeout: Math.max(1, Math.min(deadline - Date.now(), options.loadWaitMs ?? Infinity))}).then(() => true, () => false);
 		if (failure) throw failure;
-		return {response, ...(loaded ? {} : {loadIncomplete: true as const}), ...(rendered && !boundary ? {navigationUrl: navigationDocumentUrl(requestedUrl, finalUrl, finalUrl !== requestedUrl)} : {}), ...(boundary ? {boundary} : {}), ...(redirectedTo ? {redirectedTo} : {}), ...(scriptNavigationUrl ? {scriptNavigationUrl} : {})};
+		return {response, ...(mobileRedirects.length ? {mobileRedirects} : {}), ...(loaded ? {} : {loadIncomplete: true as const}), ...(rendered && !boundary ? {navigationUrl: navigationDocumentUrl(requestedUrl, finalUrl, finalUrl !== requestedUrl)} : {}), ...(boundary ? {boundary} : {}), ...(redirectedTo ? {redirectedTo} : {}), ...(scriptNavigationUrl ? {scriptNavigationUrl} : {})};
 	} catch (error) {
 		// A `goto` timeout can precede the guard's own bounded outcome; report
 		// the guard's failure (policy or acquisition timeout) once it settles.

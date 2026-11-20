@@ -110,6 +110,7 @@ export interface ManifestEntry {
 }
 
 export interface ProfileDiagnostic {
+  mobileRedirect?: import('../mobile-redirect.js').MobileRedirect;
   code: string;
   reason: string;
 }
