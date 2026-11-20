@@ -13,8 +13,8 @@ it.each( [ 'initial inventory', 'rendered navigation' ] )( 'ranks cluster admiss
 	];
 	const expected = [
 		'/',
-		'/post/000', '/post/001', '/small/rep', '/small/verify', '/tag/seed', '/category/verify',
-		'/about', '/contact', '/form', '/blog/tag/nav', '/blog/category/nav', '/custom-archive',
+		'/post/000', '/post/001',
+		'/about', '/contact', '/form', '/small/rep', '/small/verify', '/blog/tag/nav', '/blog/category/nav', '/custom-archive', '/tag/seed', '/category/verify',
 		'/post/002', '/post/003',
 		'/other', '/tag/other', '/post/004',
 	].map( url );

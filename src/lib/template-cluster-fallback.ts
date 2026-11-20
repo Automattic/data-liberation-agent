@@ -6,9 +6,12 @@ import type { SiteRouteScope } from '../platform/types.js';
 import type { RouteDiagnostic } from './capture-export-routes.js';
 import type { SourceRequestGovernors } from './source-request-governor.js';
 import type { ManifestQueue, ManifestEntry } from './screenshot/manifest-queue.js';
+import { normalizedUrl } from './url/route-key.js';
 
 /** Where the fallback's acquisition receipt and source documents live, next to `website/`. */
 export const TEMPLATE_FALLBACK_DIR = 'template-fallback';
+/** HTTP work owns a separate window; browser admission never gates it. */
+export const HTTP_FALLBACK_BUDGET_MS = 600_000;
 
 export interface EscalatedMember {
 	url: string;
@@ -43,11 +46,19 @@ export async function acquireEscalatedMembers( input: {
 	profile: HttpAcquisitionProfile;
 	governors: SourceRequestGovernors;
 	members: readonly EscalatedMember[];
+	/** Canonical navigation targets precede ordinary templates and cluster members. */
+	navigationTargets?: ReadonlySet< string >;
+	clusterMemberUrls?: ReadonlySet< string >;
 	queue: ManifestQueue;
 	maxTotalBytes?: number;
+	/** Absolute HTTP deadline; defaults to a fresh HTTP_FALLBACK_BUDGET_MS window. */
+	deadline?: number;
 	/** Budget for runtime renders, measured from the start of that stage. */
 	runtimeRenderBudgetMs?: number;
 } ): Promise< EscalationFallback > {
+	const priority = ( member: EscalatedMember ) => input.navigationTargets?.has( normalizedUrl( member.url ) ) ? 0
+		: member.gate === 'route_omitted_by_budget' && ! input.clusterMemberUrls?.has( normalizedUrl( member.url ) ) ? 1 : 2;
+	input = { ...input, members: [ ...input.members ].sort( ( a, b ) => priority( a ) - priority( b ) ), deadline: input.deadline ?? Date.now() + HTTP_FALLBACK_BUDGET_MS };
 	const { acquireHttpDocuments } = await import( './http-acquisition.js' );
 	const { CapturedResourceStore } = await import( './screenshot/resource-capture.js' );
 	const { slugify } = await import( './url/index.js' );
@@ -63,15 +74,20 @@ export async function acquireEscalatedMembers( input: {
 	let documents: Awaited< ReturnType< typeof acquireHttpDocuments > >[ 'documents' ];
 	const fallbackDir = join( input.outputDir, TEMPLATE_FALLBACK_DIR );
 	try {
-		( { documents } = await acquireHttpDocuments( {
+		const acquired = await acquireHttpDocuments( {
 			url: input.sourceUrl, urls: input.members.map( member => member.url ), routeScope: input.routeScope,
-			outputDir: fallbackDir, profile: { ...input.profile, variants }, governors: input.governors,
-		} ) );
+			outputDir: fallbackDir, profile: { ...input.profile, variants }, governors: input.governors, deadline: input.deadline,
+		} );
+		documents = acquired.documents;
 	} catch ( error ) {
 		return failAll( error instanceof Error ? error.message : String( error ) );
 	}
 	const byUrl = new Map( documents.map( document => [ document.url, document ] ) );
-	const store = new CapturedResourceStore( input.outputDir, input.sourceUrl, undefined, input.maxTotalBytes );
+	const signal = input.deadline === undefined ? undefined : AbortSignal.timeout( Math.max( 1, input.deadline - Date.now() ) );
+	const store = new CapturedResourceStore( input.outputDir, input.sourceUrl, signal ? async ( url, maxBytes, timeoutMs ) => {
+		const { safeFetch } = await import( './media-fetch/safe-fetch.js' );
+		return safeFetch( url, { maxBytes, timeoutMs, signal, governors: input.governors, category: 'subresource' } );
+	} : undefined, input.maxTotalBytes );
 	const sourcePath = ( url: string ): string | undefined => {
 		const document = byUrl.get( url );
 		return document?.status === 'acquired' && document.documentPath ? resolve( fallbackDir, document.documentPath ) : undefined;
@@ -79,6 +95,8 @@ export async function acquireEscalatedMembers( input: {
 	const rendered = await renderRuntimeMembers( input, sourcePath, result.runtime );
 	try {
 		for ( const member of input.members ) {
+			// Keep documents already acquired before the deadline, even when later
+			// cluster requests exhausted it. Dependencies still use the HTTP signal.
 			const document = byUrl.get( member.url );
 			if ( ! document ) {
 				result.failed.set( member.url, 'route is outside the adapter route scope' );

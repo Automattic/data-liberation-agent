@@ -92,6 +92,45 @@ describe( 'template-cluster derivation e2e (#784 phase 1)', () => {
 		expect( postKey ).not.toBe( nineKey );
 	} );
 
+	// One browser pass (entry + two seeds), expected under 60 seconds.
+	it( 'HTTP-acquires nav singletons when only entry and cluster seeds fit the browser budget (#2079)', async () => {
+		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
+		const outputDir = mkdtempSync( join( parent, 'template-clusters-http-budget-' ) );
+		const url = `${ BASE }:${ port }/`;
+		const origin = new URL( url ).origin;
+		const originalHome = rendered.get( '/' )!;
+		rendered.set( '/', originalHome.replace( '</head>', '<style>.home-only{color:navy}</style></head>' ).replace( '</nav>', '<a href="/tabs/">Tabs</a><a href="/form/">Form</a></nav>' ) );
+		const seeds = new Set( [ url, `${ origin }/post-1/`, `${ origin }/post-2/` ] );
+		const admits = RouteTimeBudget.prototype.admits;
+		const admissionSpy = vi.spyOn( RouteTimeBudget.prototype, 'admits' ).mockImplementation( function ( this: RouteTimeBudget, candidate, concurrency ) {
+			return seeds.has( candidate ) && admits.call( this, candidate, concurrency );
+		} );
+		try {
+			const captured = await captureWebsite( { url, outputDir, templateClusters: true, timeBudgetMs: 600_000 }, {
+				findAdapter: () => ( {
+					id: 'neutral-http', detect: () => true,
+					discover: async () => ( { urls: sitemapPaths.map( path => ( { url: `${ origin }${ path }`, type: 'page' } ) ) } ),
+					acquisition: { id: 'neutral-desktop', variants: [ { id: 'desktop', headers: {} } ], prepare: async html => ( { html } ) },
+				} ),
+			} );
+			const manifest = JSON.parse( readFileSync( join( outputDir, 'screenshots', 'manifest.json' ), 'utf8' ) );
+			const acquisition = JSON.parse( readFileSync( join( outputDir, 'template-fallback', 'http-acquisition.json' ), 'utf8' ) );
+			for ( const path of [ '/tabs/', '/form/' ] ) {
+				const target = `${ origin }${ path }`;
+				expect( manifest.entries[ target ].html ).toMatch( /^screenshots\/http\// );
+				expect( acquisition.documents ).toContainEqual( expect.objectContaining( { url: target, status: 'acquired' } ) );
+				expect( existsSync( join( outputDir, 'website', path, 'index.html' ) ) ).toBe( true );
+				expect( captured.discoveryDiagnostics.some( row => row.url === target && row.code === ROUTE_OMITTED_BY_BUDGET ) ).toBe( false );
+				expect( captured.discoveryDiagnostics ).toContainEqual( expect.objectContaining( { url: target, code: 'route_template_escalated' } ) );
+			}
+			expect( new Set( acquisition.documents.slice( 0, 2 ).map( ( row: { url: string } ) => row.url ) ) ).toEqual( new Set( [ `${ origin }/form/`, `${ origin }/tabs/` ] ) );
+		} finally {
+			admissionSpy.mockRestore();
+			rendered.set( '/', originalHome );
+			rmSync( outputDir, { recursive: true, force: true } );
+		}
+	}, 240_000 );
+
 	it( 'derives an admitted member omitted by the time budget and replaces its omission', async () => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const outputDir = mkdtempSync( join( parent, 'template-clusters-budget-' ) );
