@@ -23,6 +23,8 @@ export const squarespaceAdapter: PlatformAdapter = {
 		pathPrefixes: [ '/' ],
 		excludedPathPrefixes: [ '/cart', '/checkout', '/commerce', '/account', '/config', '/api' ],
 	} ),
+	// Component asset versions can differ between otherwise identical canonical aliases.
+	nonContentAttributes: [ 'data-block-css', 'data-block-scripts' ],
   // Scroll-animation states depend on which elements entered the viewport.
   runtimeStateClasses: [/^pre(Scale|Fade|Slide|Clip|Flex)$/, /^(scale|fade|slide|clip|flex)In$/],
   liberation: { ...capture, cleanupRules: providerCreditRules('squarespace', ['squarespace.com'], 'Squarespace') },

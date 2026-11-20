@@ -37,6 +37,8 @@ interface Platform {
   discover(url: string, opts: Record<string, unknown>): Promise<unknown>;
   /** Optional optimizer/proxy unwrapping; undefined means an ordinary URL. */
   resolveImageOriginal?(url: string): string | undefined;
+  /** Asset-loader or bookkeeping attributes ignored by route alias content proofs. */
+  nonContentAttributes?: readonly string[];
   /** Optional source-specific hooks applied during liberation. */
   liberation?: LiberationHooks;
 }
@@ -60,6 +62,16 @@ it (bounded to 32 steps, stopping cycles and non-HTTP(S) targets), groups aliase
 with inline/CSS/lightbox/head uses, then acquires and verifies the chosen original.
 It does not choose a destination or transcode bytes. Next.js owns its `/_next/image`
 resolver; generic platforms leave such URLs unchanged. See [image assets](image-assets.md).
+
+`nonContentAttributes` declares case-insensitive attribute names whose values are
+asset-loader manifests or capture-independent bookkeeping, never page content.
+They are ignored only when comparing rendered content to prove route aliases;
+the declaration does not remove attributes from captured or exported HTML and
+does not itself establish an alias. All other content attributes still participate
+in the proof. Squarespace declares `data-block-css` and `data-block-scripts`
+because its component asset versions can differ between identical pages. This
+explicit platform contract avoids guessing whether arbitrary URL-valued attributes
+carry content.
 
 `LiberationHooks` (optional) mirrors the hooks built-in platforms use:
 

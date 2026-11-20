@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { allocateCaptureRoutes, type RouteEntry } from './capture-export-routes.js';
+import { squarespaceAdapter } from '../adapters/squarespace/index.js';
 
 const dirs: string[] = [];
 afterEach( () => {
@@ -15,6 +16,24 @@ function entry( dir: string, filename: string, url: string, html: string ): Rout
 }
 
 describe( 'capture export route stage', () => {
+	it( 'proves canonical aliases despite adapter-declared asset version skew, but keeps content differences', () => {
+		mkdirSync( '.tmp-test', { recursive: true } );
+		const dir = mkdtempSync( join( '.tmp-test', 'liberation-loader-alias-' ) ); dirs.push( dir );
+		const body = ( version: number, content = 'Welcome' ) => `<main data-content="${ content }" data-block-css='["https://definitions.sqspcdn.com/website-component-definition/text_${ version }.css"]' data-block-scripts='["https://definitions.sqspcdn.com/website-component-definition/text_${ version }.js"]'><h1>Home</h1></main>`;
+		const home = entry( dir, 'root.html', 'https://example.com/', body( 1061 ) );
+		const alias = { ...entry( dir, 'home.html', 'https://example.com/home', body( 1062 ) ), canonicalUrl: home.url, canonicalLinkUrl: home.url };
+		const distinct = { ...entry( dir, 'different.html', 'https://example.com/different', body( 1062, 'Different' ) ), canonicalUrl: home.url, canonicalLinkUrl: home.url };
+		const entries = [ home, alias, distinct ];
+		// No platform declaration: even URL-valued attributes remain content by default.
+		expect( allocateCaptureRoutes( entries, home.url, [] ).duplicateRoutes ).toEqual( [] );
+		for ( const ordered of [ entries, [ ...entries ].reverse() ] ) {
+			const routes = allocateCaptureRoutes( ordered, home.url, [], [], [], squarespaceAdapter.nonContentAttributes );
+			expect( routes.duplicateRoutes ).toEqual( [ { url: alias.url, canonicalUrl: home.url, path: 'website/index.html' } ] );
+			expect( routes.canonicalRouteAliases.get( alias.url ) ).toBe( 'index.html' );
+			expect( routes.retainedEntries.map( route => route.url ).sort() ).toEqual( [ home.url, distinct.url ].sort() );
+		}
+	} );
+
 	it( 'folds identical case variants and allocates distinct content around case-folded reservations', () => {
 		mkdirSync( '.tmp-test', { recursive: true } );
 		const dir = mkdtempSync( join( '.tmp-test', 'liberation-case-routes-' ) ); dirs.push( dir );
