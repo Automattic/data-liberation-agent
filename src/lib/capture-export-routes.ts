@@ -269,7 +269,13 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 				try {
 					const target = new URL( element.attribs.href, entry.url );
 					target.pathname = target.pathname.replace( /\/index\.html$/, '/' );
-					element.attribs.href = target.href;
+					// A fragment into the document itself names the same place in
+					// any copy of that document, whichever route URL it was captured at.
+					const self = new URL( entry.url );
+					self.pathname = self.pathname.replace( /\/index\.html$/, '/' );
+					self.hash = target.hash;
+					const selfFragment = target.href === self.href && ( !! target.hash || element.attribs.href.startsWith( '#' ) );
+					element.attribs.href = selfFragment ? target.hash || '#' : target.href;
 				} catch {
 					// Leave malformed authored links unchanged.
 				}
