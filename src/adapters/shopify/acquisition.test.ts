@@ -43,7 +43,8 @@ describe('Shopify declarative page HTTP profile', () => {
 				expect(await copy.locator('.slick-active').innerText()).toBe(width <= 768 ? 'Phase 2 narrow' : 'Phase 2 wide');
 			}
 		}
-	});
+		// Worker Chromium launch plus a six-width fluid sweep exceeds 15s on a loaded gate runner.
+	}, 60_000);
 	it('pauses Brooklyn slides through its native API without selecting a different caption phase', async ({ newPage }) => {
 
 		{
