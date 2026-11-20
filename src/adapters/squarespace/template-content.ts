@@ -4,6 +4,8 @@ import { safeFetch } from '../../lib/media-fetch/safe-fetch.js';
 import { SOURCE_USER_AGENT } from '../../lib/browser-kit/source-identity.js';
 import { extractSameOriginLinks } from '../../lib/extraction/sitemap.js';
 import { fetchSqsJson } from './content.js';
+import { discoveredCollectionProbes } from './discover.js';
+import type { SquarespaceInventory } from './types.js';
 
 // 7.1 and 7.0 blog item templates respectively (never the listing excerpt).
 const BODY = '.blog-item-content, .blog-list-article-content-body';
@@ -118,10 +120,18 @@ export function squarespaceTermArchiveUrl(term: string, sourceUrl: string): stri
 }
 
 export const squarespaceStructuredContent: StructuredContentSource = {
-	async enumerate(sourceUrl, { governors }) {
+	async enumerate(sourceUrl, { governors, inventory }) {
 		const result: StructuredContentEnumeration = { entries: [], diagnostics: [] };
 		const origin = new URL(sourceUrl).origin;
 		const candidates = new Set([sourceUrl]);
+		const probes = discoveredCollectionProbes(inventory);
+		for (const collection of (inventory as SquarespaceInventory | undefined)?.collections ?? []) {
+			if (collection.type !== 1 && collection.typeName !== 'blog') continue;
+			try {
+				const url = new URL(collection.url, sourceUrl);
+				if (url.origin === origin && !url.username && !url.password) candidates.add(url.href);
+			} catch { /* Ignore invalid discovery evidence. */ }
+		}
 		const seenEntries = new Set<string>();
 		const collections = new Set<string>();
 		const diagnostic = (code: string, url: string, reason: string) => result.diagnostics.push({ code, url, reason });
@@ -140,7 +150,7 @@ export const squarespaceStructuredContent: StructuredContentSource = {
 			diagnostic('collection_discovery_failed', sourceUrl, String(error));
 		}
 		for (const candidate of candidates) {
-			let json = await fetchSqsJson(candidate, governors);
+			let json = probes?.has(candidate) ? probes.get(candidate)! : await fetchSqsJson(candidate, governors);
 			if (!json) { diagnostic('collection_json_failed', candidate, 'Collection JSON unavailable'); continue; }
 			if (json.collection?.type !== 1 && json.collection?.typeName !== 'blog') continue;
 			let collection: URL;

@@ -1,12 +1,16 @@
 import { createServer, type Server } from 'node:http';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as fetching from '../../lib/media-fetch/safe-fetch.js';
 import { discover } from './discover.js';
+import { squarespaceStructuredContent } from './template-content.js';
+import { SourceRequestGovernors } from '../../lib/source-request-governor.js';
 
 const servers: Server[] = [];
 
 async function squarespaceServer(
   archive: (request: URL) => { status?: number; body: string },
   paths = ['/blog', '/about', '/contact', '/services', '/privacy'],
+  homepage = '<html></html>',
 ): Promise<{ url: string; archiveRequests: URL[] }> {
   const archiveRequests: URL[] = [];
   const server = createServer((request, response) => {
@@ -22,9 +26,7 @@ async function squarespaceServer(
     }
     if (url.searchParams.get('format') === 'json') {
       archiveRequests.push(url);
-      const result = url.pathname === '/blog' || !paths.includes('/blog')
-        ? archive(url)
-        : { body: '{}' };
+      const result = archive(url);
       response.statusCode = result.status || 200;
       // Real collection responses identify themselves; malformed shapes remain
       // untouched so the failure-path tests still exercise invalid JSON.
@@ -36,7 +38,7 @@ async function squarespaceServer(
       response.end(body);
       return;
     }
-    response.end('<html></html>');
+    response.end(homepage);
   });
   servers.push(server);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -46,10 +48,44 @@ async function squarespaceServer(
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))));
 });
 
 describe('Squarespace archive discovery', () => {
+  it('enumerates sitemap-only blog collections and reuses probes without discovery pagination', async () => {
+    const { url, archiveRequests } = await squarespaceServer(request => {
+      if (!['/blog', '/people'].includes(request.pathname)) return { body: '{}' };
+      const second = request.searchParams.has('offset');
+      const slug = second ? 'two' : 'one';
+      return { body: JSON.stringify({
+        collection: { type: 1, fullUrl: request.pathname },
+        items: [{ urlId: slug, fullUrl: `${request.pathname}/${slug}`, title: slug,
+          body: `<p>${slug}</p>`, publishOn: 1704067200000, updatedOn: 1704067200000 }],
+        pagination: second ? {} : { nextPageOffset: 'next' },
+      }) };
+    }, ['/blog', '/blog/one', '/blog/two', '/people', '/people/one', '/people/two'], '<a href="/blog">Blog</a>');
+
+    // Production safeFetch rejects loopback addresses; keep this fixture local.
+    vi.spyOn(fetching, 'safeFetch').mockImplementation(async (target) => {
+      const response = await globalThis.fetch(target);
+      return { status: response.status, body: Buffer.from(await response.arrayBuffer()), headers: response.headers, finalUrl: response.url };
+    });
+    const inventory = await discover(url, {});
+    expect(inventory.collections).toEqual([
+      { url: `${url}/blog`, type: 1, typeName: undefined, itemCount: 2 },
+      { url: `${url}/people`, type: 1, typeName: undefined, itemCount: 2 },
+    ]);
+    expect(archiveRequests.map(request => request.searchParams.get('offset'))).toEqual([null, null]);
+    const result = await squarespaceStructuredContent.enumerate(url, { governors: new SourceRequestGovernors(), inventory });
+    expect(result.entries.map(entry => entry.permalink).sort()).toEqual([
+      `${url}/blog/one`, `${url}/blog/two`, `${url}/people/one`, `${url}/people/two`,
+    ]);
+    expect(result.diagnostics).toEqual([]);
+    for (const root of ['/blog', '/people']) {
+      expect(archiveRequests.filter(request => request.pathname === root).map(request => request.searchParams.get('offset'))).toEqual([null, 'next']);
+    }
+  });
   it('discovers neutral collections across pagination and probes non-collections only once', async () => {
     const { url, archiveRequests } = await squarespaceServer((request) => {
       if (request.pathname !== '/people' && request.pathname !== '/library') {

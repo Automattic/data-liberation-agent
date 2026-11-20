@@ -22,7 +22,8 @@ export interface SquarespaceInventory {
   counts: Record<string, number>;
   urls: InventoryUrl[];
   diagnostics?: import('../../lib/extraction/sitemap.js').SitemapDiagnostic[];
-  /** Detected collection roots; itemCount is unique same-origin items observed within pagination limits. */
+  /** Detected collection roots; itemCount is sitemap-listed members when available,
+   * otherwise unique same-origin items observed within pagination limits. */
   collections?: Array<{ url: string; type?: number; typeName?: string; itemCount: number }>;
 }
 

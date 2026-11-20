@@ -5,10 +5,16 @@ import { extractNavLinks } from '../../lib/html-extract/index.js';
 import { extractSiteMetadata } from '../site-metadata.js';
 import type { InventoryUrl } from '../shared.js';
 import type { NavLink } from '../../lib/html-extract/index.js';
-import type { SquarespaceInventory } from './types.js';
+import type { SquarespaceInventory, SqsJsonResponse } from './types.js';
 import { fetchSqsJson } from './content.js';
 
 const MAX_ARCHIVE_PAGES = 200;
+
+// Run-local probe reuse without putting feed bodies into serialized inventory.
+const collectionProbes = new WeakMap<object, Map<string, SqsJsonResponse | null>>();
+export function discoveredCollectionProbes(inventory: unknown): ReadonlyMap<string, SqsJsonResponse | null> | undefined {
+  return inventory && typeof inventory === 'object' ? collectionProbes.get(inventory) : undefined;
+}
 
 interface ArchivePage {
   items?: Array<{ urlId?: string; fullUrl?: string; addedOn?: number | string } | null>;
@@ -158,14 +164,19 @@ export async function discover(url: string, opts: Record<string, unknown>): Prom
   // Ask the source which roots are collections instead of guessing from names.
   // Snapshot the candidates so pagination cannot grow the probe frontier.
   const collections: NonNullable<SquarespaceInventory['collections']> = [];
+  const probes = new Map<string, SqsJsonResponse | null>([[url, siteJson]]);
   const roots = collectionRoots(url, [url, ...inventoryUrls.map(({ url }) => url), ...navigation.map(({ href }) => href)]);
   for (const root of roots) {
     const collectionUrl = new URL(root, url).href;
     const firstPage = routeKey(collectionUrl) === routeKey(url)
       ? siteJson
       : await fetchSqsJson(collectionUrl);
+    probes.set(collectionUrl, firstPage);
     if (!firstPage?.collection || typeof firstPage.collection !== 'object' || !Array.isArray(firstPage.items)) continue;
-    const archiveUrls = await discoverArchiveUrls(url, root, firstPage);
+    // A sitemap containing collection members already supplies route discovery.
+    // Leave the full feed walk to structured-content enumeration in that case.
+    const listedItems = sitemapUrls.filter(item => new URL(item).pathname.startsWith(`${root}/`));
+    const archiveUrls = listedItems.length ? listedItems : await discoverArchiveUrls(url, root, firstPage);
     collections.push({
       url: collectionUrl,
       type: firstPage.collection.type,
@@ -197,5 +208,6 @@ export async function discover(url: string, opts: Record<string, unknown>): Prom
     collections,
   };
 
+  collectionProbes.set(inventory, probes);
   return inventory;
 }
