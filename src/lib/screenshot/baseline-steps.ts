@@ -419,7 +419,7 @@ export function baselineSteps(
 		await sweepSourceCleanup( page, sourcePolicy );
 		// A gated route ships its placeholder note or nothing (see access-gate.ts).
 		if ( args.entry.accessGate && ! ( await reassertAccessGatePlaceholder( page ) ) ) {
-			throw new Error( `Access-gate placeholder for ${ url } is missing at serialization; refusing to ship the shell's own content under the route` );
+			throw new Error( `Access-gate placeholder for ${ url } is missing at serialization; refusing to ship the shell's own content under the route` ); // failure-class: representability:route
 		}
 		await preserveStreamedVideoPosters( page, resourceStore, url ).catch ( orElse( undefined ) );
 		// Source width changes can rerender emoji replacement images (#954).
@@ -880,7 +880,7 @@ export function baselineSteps(
 				// content, without the placeholder note, would ship an empty page.
 				const strippedGate = entry.accessGate ? undefined : accessGateRemoval( cleanup, sourcePolicy );
 				if ( strippedGate && ! ( await page.evaluate( () => Boolean( document.querySelector( 'main,[role="main"]' ) ) ) ) ) {
-					throw new Error( `Access gate ${ strippedGate.rule } was removed after the placeholder step; the route would ship without its members-only note` );
+					throw new Error( `Access gate ${ strippedGate.rule } was removed after the placeholder step; the route would ship without its members-only note` ); // failure-class: representability:route
 				}
 
 			}

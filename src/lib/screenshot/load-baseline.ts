@@ -239,13 +239,16 @@ export async function loadSourceBaseline( args: SourceLoadInput ): Promise<Sourc
 	// left without content always ends in the placeholder (or a failure), never
 	// in a stripped, empty page. Returns 'placed', 'none', or undefined after `fail`.
 	const placeAccessGate = async ( settle: boolean ): Promise< 'placed' | 'none' | undefined > => {
-		if ( ! sourcePolicy.rules.some( ( rule ) => rule.accessGate ) ) return 'none';
+		// The settle read doubles as the first bounded evaluate on the settled
+		// page; only the late re-check is skipped for a policy without gate rules.
+		const gateRules = sourcePolicy.rules.some( ( rule ) => rule.accessGate );
+		if ( ! settle && ! gateRules ) return 'none';
 		let gate: ReturnType< typeof accessGateRemoval >;
 		let gateTitle = '';
 		try {
 			// Network and DOM quiet say nothing about a gate a runtime mounts later
 			// on an otherwise empty route: wait for the gate or the content.
-			if ( settle && ! ( await withEvaluateTimeout( routeKeptContent( page ), evaluateTimeoutMs ) ) ) {
+			if ( settle && gateRules && ! ( await withEvaluateTimeout( routeKeptContent( page ), evaluateTimeoutMs ) ) ) {
 				const settled = await withEvaluateTimeout( awaitAccessGateOrContent( page, sourcePolicy ), ACCESS_GATE_SETTLE_MS + evaluateTimeoutMs );
 				if ( settled === 'timeout' ) args.diagnostics?.push( { code: 'access_gate_unsettled', reason: `${ url }: no content root and no access gate within ${ ACCESS_GATE_SETTLE_MS }ms` } );
 			}
