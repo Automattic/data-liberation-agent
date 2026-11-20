@@ -159,6 +159,36 @@ export function bindBoxTree<T extends BoundTree>(html: string, tree: T | undefin
 	return 'tree' in bound ? bound.tree : undefined;
 }
 
+/** A debounced resize handler's quiet period, and the most a width may wait for one. */
+export const RESIZE_SETTLE = { quietMs: 400, budgetMs: 2_000 };
+
+/**
+ * Wait for resize-driven DOM changes to settle before observing another width.
+ * Debounced runtime restyles can land hundreds of milliseconds after resize;
+ * two frames alone capture the previous width's state, not what a visitor sees.
+ * Runs entirely in the page, with a budget so continuous mutations cannot stall capture.
+ */
+export function settleResize({ quietMs, budgetMs }: typeof RESIZE_SETTLE): Promise<void> {
+	return new Promise<void>(resolve => {
+		requestAnimationFrame(() => requestAnimationFrame(() => {
+			const deadline = performance.now() + budgetMs;
+			let last = performance.now();
+			const observer = new MutationObserver(() => { last = performance.now(); });
+			observer.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+			const check = () => {
+				const now = performance.now();
+				if (now - last >= quietMs || now >= deadline) {
+					observer.disconnect();
+					requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+					return;
+				}
+				setTimeout(check, Math.min(quietMs - (now - last), deadline - now) + 1);
+			};
+			check();
+		}));
+	});
+}
+
 /** Observe extra widths immediately after serialization, keeping only stable ones. */
 export async function captureBoxTree(page: Page, html: string, viewports: BoxTree['viewports'], initial?: { name: string; nodes: BoxTree['nodes'] }, onUnproven?: (mismatch: BoxTreeMismatch) => void): Promise<Omit<BoxTree, 'source_path' | 'source_hash'> | undefined> {
 	const $ = cheerio.load(html);
@@ -185,7 +215,7 @@ export async function captureBoxTree(page: Page, html: string, viewports: BoxTre
 		for (const [name, size] of Object.entries(viewports)) {
 			if (name === initial?.name) continue;
 			await page.setViewportSize(size);
-			await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+			await page.evaluate(settleResize, RESIZE_SETTLE);
 			const observations = await page.evaluate(({ attribute, properties, topology, html, observerSource }) => {
 				// A visitor loading at this width sees the end state, not a resize transition mid-flight.
 				for (const animation of document.getAnimations()) if (animation instanceof CSSTransition) animation.finish();
