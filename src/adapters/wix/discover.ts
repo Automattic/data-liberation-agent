@@ -6,7 +6,7 @@ import { discoverLinkedRoutes, resolveCanonicalSiteUrl } from './discovery-links
 import { RENDERER_CALL_TIMEOUT_MS } from './page.js';
 import type { InventoryUrl } from '../shared.js';
 import { extractSiteMetadata } from '../site-metadata.js';
-import type { NavLink } from '../../lib/html-extract/index.js';
+import { extractNavLinks, extractTitle, type NavLink } from '../../lib/html-extract/index.js';
 import type { WixAdapterOpts, Inventory } from './types.js';
 
 export async function discover(url: string, opts: Record<string, unknown>): Promise<Inventory> {
@@ -146,44 +146,23 @@ export async function discover(url: string, opts: Record<string, unknown>): Prom
     });
     const allUrls = linkedDiscovery.urls;
 
-    // 3. Extract navigation from homepage
-    let navigation: NavLink[] = [];
-    try {
-      // See comment at the page-extraction goto above for why we
-      // avoid `networkidle` on Wix sites.
-      await p
-        .goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 })
-        .catch(() => {});
-      await p.waitForTimeout(4000);
-      navigation = (await withTimeout(p.evaluate(() => {
-        const navLinks: Array<{ text: string; href: string }> = [];
-        document
-          .querySelectorAll('nav a, header a, [role="navigation"] a')
-          .forEach((el) => {
-            const a = el as HTMLAnchorElement;
-            const text = a.textContent?.trim() || '';
-            const href = a.href;
-            if (text && href && !href.includes('#') && !navLinks.find((l) => l.href === href)) {
-              navLinks.push({ text, href });
-            }
-          });
-        return navLinks;
-      }), RENDERER_CALL_TIMEOUT_MS, 'wix discover nav')) as NavLink[];
-    } catch {
-      // nav extraction failed
+    // 3. Navigation and site metadata come from the entry document the capture
+    // already fetched: Wix server-renders its header, navigation and title.
+    let homepageHtml = wixOpts.entryHtml ?? '';
+    if (!homepageHtml) {
+      try {
+        await p.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        homepageHtml = await withTimeout(p.content(), RENDERER_CALL_TIMEOUT_MS, 'wix discover metadata');
+      } catch {
+        // metadata extraction failed
+      }
     }
+    const navigation: NavLink[] = extractNavLinks(homepageHtml, url);
 
     // 4. Wix's editor sets document.title to "Page Title | Site Name Main":
     // the half after the last " | ", without the " Main" suffix Wix appends,
     // is the site name ("Gilded Carat", not "Home | Gilded Carat Main").
-    let homepageHtml = '';
-    let documentTitle = '';
-    try {
-      homepageHtml = await withTimeout(p.content(), RENDERER_CALL_TIMEOUT_MS, 'wix discover metadata');
-      documentTitle = (await withTimeout(p.evaluate(() => document.title), RENDERER_CALL_TIMEOUT_MS, 'wix discover title')) as string;
-    } catch {
-      // metadata extraction failed
-    }
+    const documentTitle = extractTitle(homepageHtml);
     const pipeIdx = documentTitle.lastIndexOf(' | ');
     const siteName = (pipeIdx > 0 ? documentTitle.slice(pipeIdx + 3) : documentTitle).replace(/ Main$/, '');
     const siteMetadata = extractSiteMetadata(homepageHtml, { title: siteName });
