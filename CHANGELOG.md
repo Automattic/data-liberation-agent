@@ -15,6 +15,15 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.40.13] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+- Behavior discovery observes the time counterfactual concurrently
+- Site preview waits only for images inside its viewport
+- Wix discovery: do not retry a definitive sitemap client error
+- Compare freezes a pending deferred reference before comparing
+
 ## [0.40.12] - 2026-11-21
 
 ### Changed
