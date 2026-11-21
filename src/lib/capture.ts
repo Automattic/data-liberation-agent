@@ -945,6 +945,7 @@ async function runCaptureWebsite(
 		outputDir,
 		sourceUrl,
 		platform: detection.platform,
+		nonContentAttributes: adapter.nonContentAttributes,
 		canonicalizeHtml: adapter.liberation?.canonicalizeHtml?.bind( adapter.liberation ),
 		routeScope,
 		resolveDocumentSelection: adapter.liberation?.documentSelection,
