@@ -17,6 +17,7 @@ describe('Shopify structured catalog', () => {
 		vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
 			const url = String(input);
 			requests.push(url);
+			if (new URL(url).pathname === '/cart.js') return Response.json({ currency: 'PEN' });
 			if (!throttled) { throttled = true; return new Response('', { status: 429, headers: { 'Retry-After': '0' } }); }
 			const path = new URL(url).pathname;
 			const page = new URL(url).searchParams.get('page');
@@ -30,7 +31,7 @@ describe('Shopify structured catalog', () => {
 		expect(result.entries[0]).toMatchObject({ ...entry('one'), terms: ['Sample', 'collection:samples'] });
 		expect(result.diagnostics).toEqual([expect.objectContaining({ code: 'product_rejected' })]);
 		expect(requests.filter(url => url === 'https://example.com/products.json?limit=250&page=1')).toHaveLength(2);
-		expect(admission).toHaveBeenCalledTimes(5);
+		expect(admission).toHaveBeenCalledTimes(6);
 		expect(shopifyAdapter.structuredContent).toBe(shopifyStructuredContent);
 	});
 
@@ -54,7 +55,10 @@ describe('Shopify structured catalog', () => {
 		vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 404 })));
 		const result = await enumerateShopifyProducts('https://example.com/', { governors: new SourceRequestGovernors() });
 		expect(result.entries).toEqual([]);
-		expect(result.diagnostics[0]?.code).toBe('product_page_failed');
+		expect(result.diagnostics).toEqual(expect.arrayContaining([
+			expect.objectContaining({ code: 'product_page_failed' }),
+			expect.objectContaining({ code: 'product_currency_unavailable' }),
+		]));
 	});
 
 	it('requires one complete description with matching text and resolved URLs', () => {

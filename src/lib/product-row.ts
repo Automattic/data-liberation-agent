@@ -19,6 +19,8 @@ export interface ProductRow {
 	category?: string;
 	categories?: string[];
 	tags?: string[];
+	/** ISO 4217 code shared by this row's prices and variants, when known. */
+	currency?: string;
 	regular_price: string;
 	sale_price?: string;
 	sku?: string;
