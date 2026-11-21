@@ -146,6 +146,8 @@ export interface ScreenshotOpts {
 	deferRoute?: ( url: string ) => boolean;
 	/** Group newly discovered links before frontier admission, then rank pending work. */
 	groupLinkedRoutes?: ( urls: string[] ) => Promise< readonly import('../route-aliases.js').CanonicalRouteAlias[] | void >;
+	/** Prove frontier aliases before budget admission, independently of grouping. */
+	probeLinkedRouteAliases?: ( urls: string[] ) => Promise< readonly import('../route-aliases.js').CanonicalRouteAlias[] >;
 	/**
 	 * A route resolved to a server redirect alias of `target`, the queued route
 	 * that captures its document. Evidence owed to the alias follows the target.

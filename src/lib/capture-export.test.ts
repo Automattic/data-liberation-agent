@@ -3894,6 +3894,19 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		} ) ) );
 	} );
 
+	it( 'treats a link to an alias of a budget-omitted canonical as omitted, not missing', () => {
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		const alias = 'https://example.com/collections/x/products/p';
+		capture.page( 'https://example.com/', `<h1>Home</h1><a href="${ alias }">P</a>`, { entry: { html: 'html/homepage.html' } } );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [],
+			canonicalAliases: [ { url: alias, canonicalUrl: 'https://example.com/products/p' } ],
+			discoveryDiagnostics: [ { code: 'route_omitted_by_budget', url: 'https://example.com/products/p', reason: 'Outside the route budget of 1 routes' } ] } ), 'utf8' ) );
+		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
+		expect( diagnostics.unresolvedAnchors.filter( ( row: { url: string } ) => row.url === alias ).map( ( row: { reason: string } ) => row.reason ) ).not.toContain( 'target route was not captured' );
+		expect( receipt.complete ).not.toBe( false );
+	} );
+
 	it( 'keeps one route when an alternate address declares the claimed route as canonical', () => {
 		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
 		const outputDir = capture.build();

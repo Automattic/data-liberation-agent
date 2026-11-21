@@ -2247,6 +2247,10 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				}
 			}
 			if (frontier) {
+				if ( opts.probeLinkedRouteAliases && candidates.size ) {
+					const aliases = await opts.probeLinkedRouteAliases( [ ...candidates ] );
+					frontier.registerAliases( aliases );
+				}
 				if ( opts.groupLinkedRoutes && candidates.size && ! routeBudget?.closed() ) {
 					const aliases = await opts.groupLinkedRoutes( [ ...candidates ] );
 					if ( aliases ) frontier.registerAliases( aliases );

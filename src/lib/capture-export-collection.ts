@@ -793,12 +793,13 @@ export function collectMediaCandidates( { retainedEntries, outputDir, sourceUrl:
 	return { mediaFamilies, failedMedia, mixedSrcsetReferences, interactionMediaFamilies, interactionMediaReferences, probeReferences, retainedMediaFamilies, imageAssets, referencedImageAssets, imageByUrl, diagnostics: routeCaptureDiagnostics };
 }
 
-export function collectRouteLinks( { retainedEntries, routePathOf, structuredContent, sourceUrl, canonicalRouteAliases, mediaReplacements, resourceReplacements, downloadedMedia = [], stylesheetServedPaths, entries, routeCaptureDiagnostics, outputDir, discoveryDiagnostics, unresolvedDependencies }: {
+export function collectRouteLinks( { retainedEntries, routePathOf, structuredContent, sourceUrl, canonicalRouteAliases, mediaReplacements, resourceReplacements, downloadedMedia = [], stylesheetServedPaths, entries, routeCaptureDiagnostics, outputDir, discoveryDiagnostics, unresolvedDependencies, preCaptureAliases = [] }: {
  retainedEntries: CaptureEntry[]; routePathOf: ( url: string ) => string; structuredContent?: { source: StructuredContentSource; entries: StructuredContentEntry[] }; sourceUrl: string; canonicalRouteAliases: ReadonlyMap<string, string>;
  mediaReplacements: ReadonlyMap<string, string>; resourceReplacements: ReadonlyMap<string, string>;
  /** Source URLs the capture downloaded as media, whether or not export shipped them. */
  downloadedMedia?: readonly string[]; stylesheetServedPaths: readonly string[]; entries: ScreenshotManifest['entries']; routeCaptureDiagnostics: readonly RouteDiagnostic[];
  outputDir: string; discoveryDiagnostics?: Array<{ code: string; url: string; reason: string }>; unresolvedDependencies: ReadonlyArray<{ url: string }>;
+	preCaptureAliases?: ReadonlyArray<{ url: string; canonicalUrl: string }>;
 } ): RouteLinks {
 	const routes: Array< { url: string; path: string; accessGate?: AccessGateEvidence } > = [];
 	const portableRouteLinks = new Map< string, string >();
@@ -883,6 +884,8 @@ export function collectRouteLinks( { retainedEntries, routePathOf, structuredCon
 		? ( JSON.parse( readFileSync( linkedCoveragePath, 'utf8' ) ) as { diagnostics?: Array< { code?: unknown; url?: unknown } > } ).diagnostics ?? []
 		: [];
 	const omittedRouteKeys = new Set( budgetOmittedRoutes( [ ...( discoveryDiagnostics ?? [] ), ...linkedCoverageDiagnostics ] ).map( documentRequestUrl ) );
+	// A link to a canonical alias is a link to its canonical route, omitted when that route was.
+	for ( const { url, canonicalUrl } of preCaptureAliases ) if ( omittedRouteKeys.has( documentRequestUrl( canonicalUrl ) ) ) omittedRouteKeys.add( documentRequestUrl( url ) );
 	// A link to a non-document resource is not a missing page: the capture
 	// downloaded it as media, or discovery already classified it as a resource.
 	const nonDocumentUrls = [ ...( discoveryDiagnostics ?? [] ), ...linkedCoverageDiagnostics ]

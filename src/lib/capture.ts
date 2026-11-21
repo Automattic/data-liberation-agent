@@ -658,6 +658,8 @@ async function runCaptureWebsite(
 				deadline: timeBudget?.abandonAt ?? startedAt + DEFAULT_CAPTURE_TIME_BUDGET_MS,
 			}, () => clusterRankingGroups )
 		: undefined;
+	const aliasInventory = new Set( inventoryUrls );
+	const aliasOffered = new Set< string >();
 	const screenshotResult = await captureScreenshots( {
 		governors: sourceGovernors,
 		maxTotalBytes: options.maxTotalBytes,
@@ -667,6 +669,20 @@ async function runCaptureWebsite(
 		sourceTelemetry: adapter.sourceTelemetry,
 		outputDir,
 		linkedPages: options.linkedPages ?? {},
+		probeLinkedRouteAliases: async ( candidates: string[] ) => {
+			for ( const url of candidates ) aliasInventory.add( url );
+			const candidateUrls = candidates.filter( url => ! aliasOffered.has( url ) && ! actionUrlExclusion( url ) && ! platformRuntimeExclusion( url, sourceUrl, adapter.runtimePaths ) );
+			for ( const url of candidateUrls ) aliasOffered.add( url );
+			const { aliases } = await probeCanonicalRouteAliases( {
+				sourceUrl, urls: [ ...aliasInventory ], candidateUrls, routeScope,
+			}, { fetch: ( url, opts ) => safeFetch( url, { ...opts, governors: sourceGovernors } ) } );
+			aliasProbe.aliases.push( ...aliases );
+			for ( const { url, canonicalUrl } of aliases ) discoveryDiagnostics.push( {
+				code: ROUTE_ALIAS_CANONICAL, url: documentRequestUrl( url ),
+				reason: `Route skipped before capture: its server-HTML rel=canonical resolves to ${ documentRequestUrl( canonicalUrl ) }, another inventory route`,
+			} );
+			return aliases;
+		},
 		...( aliasProbe.aliases.length ? { linkedCanonicalAliases: aliasProbe.aliases } : {} ),
 		// The same budget bounds linked-page admissions, so the frontier cannot
 		// push the total past it.
@@ -703,7 +719,7 @@ async function runCaptureWebsite(
 			groupLinkedRoutes: async ( candidates: string[] ) => {
 				const report = templateGrouping.report!;
 				const grouped = new Set( report.groups.flatMap( group => group.members ) );
-				const urls = candidates.filter( url => ! grouped.has( url ) && ! frontierOffered.has( url ) && ! actionUrlExclusion( url ) && ! platformRuntimeExclusion( url, sourceUrl, adapter.runtimePaths ) ).slice( 0, frontierRemaining );
+				const urls = candidates.filter( url => ! aliasProbe.aliases.some( alias => alias.url === url ) && ! grouped.has( url ) && ! frontierOffered.has( url ) && ! actionUrlExclusion( url ) && ! platformRuntimeExclusion( url, sourceUrl, adapter.runtimePaths ) ).slice( 0, frontierRemaining );
 				frontierDeadline ??= Date.now() + frontierGroupingLimits.timeBudgetMs;
 				if ( ! urls.length || frontierRounds >= 3 || Date.now() >= frontierDeadline ) return;
 				frontierRounds++;
@@ -822,6 +838,7 @@ async function runCaptureWebsite(
 				routeScope,
 				timeBudgetMs: options.timeBudgetMs,
 				frontierUrls: screenshotResult.linkedPageCoverage?.requiredUrls ?? [],
+				aliasUrls: new Set( aliasProbe.aliases.map( alias => normalizedUrl( alias.url ) ) ),
 				governors: sourceGovernors,
 				styleNormalization: adapter.templateStyleNormalization,
 				templateIdentity: adapter.templateIdentity,
@@ -870,6 +887,8 @@ async function runCaptureWebsite(
 	// derivation's own loss row (`route_template_derived`).
 	const derivedUrls = new Set( [ ...derivedTemplateClusters?.summary.derivedUrls ?? [], ...derivedTemplateClusters?.summary.httpAcquiredUrls ?? [], ...budgetHttp.acquired ] );
 	const derivedIdentities = new Set( [ ...derivedUrls ].map( normalizedUrl ) );
+	// A confirmed canonical alias is held by its canonical route, never omitted.
+	const aliasIdentities = new Set( aliasProbe.aliases.map( alias => normalizedUrl( alias.url ) ) );
 	const blockedClient = sourceGovernors.forOrigin( sourceUrl ).blockedClient;
 	// Frontier timeouts and late-pass refusals are capture-budget omissions too.
 	// Keep the first explanation per document, regardless of which stage found
@@ -887,7 +906,7 @@ async function runCaptureWebsite(
 		.filter( row => {
 			if ( row.code !== ROUTE_OMITTED_BY_BUDGET ) return true;
 			const identity = normalizedUrl( row.url );
-			if ( derivedIdentities.has( identity ) || budgetRows.has( identity ) ) return false;
+			if ( derivedIdentities.has( identity ) || aliasIdentities.has( identity ) || budgetRows.has( identity ) ) return false;
 			budgetRows.add( identity );
 			return true;
 		} );
@@ -1257,6 +1276,8 @@ export async function deriveTemplateClusterMembers( input: {
 	/** Runtime-render stage budget; defaults to `runtimeRenderBudgetMs( timeBudgetMs )`. */
 	runtimeRenderBudgetMs?: number;
 	frontierUrls: string[];
+	/** Normalized identities of confirmed canonical aliases; their canonical route holds the document. */
+	aliasUrls?: ReadonlySet< string >;
 	governors: SourceRequestGovernors;
 	styleNormalization?: import('./template-groups.js').TemplateStyleNormalization;
 	templateIdentity?: import('./template-groups.js').TemplateIdentity;
@@ -1356,10 +1377,10 @@ export async function deriveTemplateClusterMembers( input: {
 				}
 			}
 		}
-		const candidates = [ ...targets ].filter( url => ! isCaptured( url ) && ! grouped.has( url ) && ! offered.has( url ) ).slice( 0, remainingRoutes );
+		const candidates = [ ...targets ].filter( url => ! isCaptured( url ) && ! input.aliasUrls?.has( normalizedUrl( url ) ) && ! grouped.has( url ) && ! offered.has( url ) ).slice( 0, remainingRoutes );
 		for ( const url of targets ) {
 			const identity = normalizedUrl( url );
-			if ( ! isCaptured( url ) && ! diagnosed.has( identity ) ) {
+			if ( ! isCaptured( url ) && ! input.aliasUrls?.has( identity ) && ! diagnosed.has( identity ) ) {
 				diagnostics.push( { code: ROUTE_OMITTED_BY_BUDGET, url: documentRequestUrl( url ), reason: 'post-capture linked route exceeds the browser capture budget' } );
 				diagnosed.add( identity );
 			}
