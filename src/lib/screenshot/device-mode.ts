@@ -21,8 +21,12 @@ export type DeviceMode = 'dual' | 'reflow-only';
 export type DeviceModeRequest = 'auto' | DeviceMode;
 export const DEVICE_MODE_REQUESTS: readonly DeviceModeRequest[] = [ 'auto', 'dual', 'reflow-only' ];
 
-/** Per-request noise removed before comparing the two server documents. Everything else must match byte for byte. */
+/**
+ * Per-request noise removed before comparing the two server documents. After
+ * it, the `<body>` and the `<head>` stylesheet resources must match byte for byte.
+ */
 export const SERVER_HTML_IGNORED = [
+	'everything in <head> except its stylesheet resources (link[rel=stylesheet] hrefs and <style> text, in order), such as script order and per-request metadata',
 	'nonce attribute values',
 	'values of attributes, meta tags, hidden inputs and JSON keys named like csrf, xsrf, nonce or authenticity token',
 	'ISO-8601 date-time stamps',
@@ -86,9 +90,34 @@ export function normalizeServerHtml( html: string ): string {
 		.replace( /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?\b/g, '<timestamp>' );
 }
 
+const HEAD = /(<head\b[^>]*>)([\s\S]*?)(<\/head\s*>)/i;
+const HEAD_STYLESHEET = /<link\b[^>]*>|<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi;
+
+/**
+ * The `<head>` reduced to the stylesheet resources that can change layout:
+ * each `link[rel=stylesheet]` href and `<style>` text, in document order.
+ * Scripts and comments are dropped first so markup inside them is not read.
+ */
+function headStylesheets( head: string ): string {
+	const markup = head.replace( /<script\b[\s\S]*?<\/script\s*>|<!--[\s\S]*?-->/gi, '' );
+	const resources: string[] = [];
+	for ( const [ tag, style ] of markup.matchAll( HEAD_STYLESHEET ) ) {
+		if ( style !== undefined ) { resources.push( `style:${ style }` ); continue; }
+		if ( ! /\srel\s*=\s*(?:"[^"]*\bstylesheet\b[^"]*"|'[^']*\bstylesheet\b[^']*'|stylesheet\b)/i.test( tag ) ) continue;
+		const href = /\shref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec( tag );
+		resources.push( `link:${ href?.[ 1 ] ?? href?.[ 2 ] ?? href?.[ 3 ] ?? '' }` );
+	}
+	return resources.join( '\n' );
+}
+
+/** The inputs that decide server-HTML equivalence; see `SERVER_HTML_IGNORED`. */
+function serverHtmlDecidingInputs( html: string ): string {
+	return normalizeServerHtml( html ).replace( HEAD, ( _, open: string, head: string, close: string ) => open + headStylesheets( head ) + close );
+}
+
 export function compareServerHtml( desktop: string, phone: string ): NonNullable< DeviceModeDecision['serverHtml'] > {
 	if ( desktop === phone ) return 'identical';
-	return normalizeServerHtml( desktop ) === normalizeServerHtml( phone ) ? 'identical-after-normalization' : 'different';
+	return serverHtmlDecidingInputs( desktop ) === serverHtmlDecidingInputs( phone ) ? 'identical-after-normalization' : 'different';
 }
 
 /**
