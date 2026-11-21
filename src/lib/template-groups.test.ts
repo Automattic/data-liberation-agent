@@ -100,10 +100,13 @@ function fixtureFetch( options: { delay?: ( url: string ) => number } = {} ) {
 
 const fingerprint = ( path: string ) => templateFingerprint( PAGES.get( `${ ORIGIN }${ path }` )!(), `${ ORIGIN }${ path }` );
 
-it( 'excludes frontier collection aliases without extra requests and keeps a captured non-query verifier', async () => {
+it.each( [
+	{ name: 'path suffix', paths: [ '/section/collection', '/section/deeper/collection' ] },
+	{ name: 'query variant', paths: [ '/collection?author=someone', '/collection?offset=20' ] },
+] )( 'excludes frontier $name aliases without extra requests and keeps a captured verifier', async ( { paths } ) => {
 	const index = `${ ORIGIN }/collection`;
 	const captured = `${ index }/category/Focus`;
-	const variants = [ `${ index }?author=someone`, `${ index }?offset=20` ];
+	const variants = paths.map( path => `${ ORIGIN }${ path }` );
 	const requested: string[] = [];
 	const fetch = async ( url: string ) => {
 		requested.push( url );
