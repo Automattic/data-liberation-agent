@@ -31,6 +31,7 @@ import * as cheerio from 'cheerio';
 import { sanitizeSourceHtml } from '../streaming/html-sanitize.js';
 import { wireNativeControlState } from '../native-control-state.js';
 import { portableVisualIframeWidth } from '../visual-iframe-geometry.js';
+import { NODE_ID_ATTRIBUTE } from './box-tree.js';
 
 // A real page's sanitized HTML+CSS is many KB. Anything below this is almost
 // certainly a blank/shell capture (page didn't render) — fail loudly rather
@@ -63,7 +64,8 @@ export function sanitizeFrozenHtml(html: string): string {
     try { url = new URL(src); } catch { return; }
     if (url.protocol !== 'https:' || !url.hostname || !/^[1-9]\d*$/.test(width) || !/^[1-9]\d*$/.test(height)) return;
     const safe = $('<iframe></iframe>');
-    for (const name of ['allow','allowfullscreen','class','loading','referrerpolicy','sandbox','style','title','data-blocks-engine-capture-google-map-embed']) {
+    // The node id binds the frame's captured box, the evidence its geometry is rebuilt from.
+    for (const name of ['allow','allowfullscreen','class','loading','referrerpolicy','sandbox','style','title','data-blocks-engine-capture-google-map-embed',NODE_ID_ATTRIBUTE]) {
       const value = frame.attr(name);
       if (value !== undefined) safe.attr(name,value);
     }

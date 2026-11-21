@@ -17,7 +17,7 @@ describe('sanitizeFrozenHtml', () => {
   });
   it('keeps only bounded HTTPS capture-attested iframe surfaces and rebuilds safe attributes', () => {
     const html = sanitizeFrozenHtml(`<main>
-      <iframe src="https://source.test/wrong" class="map" style="width:100%;aspect-ratio:16 / 9" title="Map" srcdoc="evil" onclick="evil()" data-blocks-engine-capture-visual-iframe-src="https://maps.example.test/embed" data-blocks-engine-capture-visual-iframe-width="640" data-blocks-engine-capture-visual-iframe-height="320"><script>evil()</script></iframe>
+      <iframe src="https://source.test/wrong" class="map" style="width:100%;aspect-ratio:16 / 9" title="Map" data-blocks-engine-node-id="n7" srcdoc="evil" onclick="evil()" data-blocks-engine-capture-visual-iframe-src="https://maps.example.test/embed" data-blocks-engine-capture-visual-iframe-width="640" data-blocks-engine-capture-visual-iframe-height="320"><script>evil()</script></iframe>
       <iframe src="https://unattested.test/embed" width="640" height="320"></iframe>
       <iframe src="https://source.test/wrong" data-blocks-engine-capture-visual-iframe-src="javascript:evil()" data-blocks-engine-capture-visual-iframe-width="640" data-blocks-engine-capture-visual-iframe-height="320"></iframe>
       <iframe src="https://source.test/wrong" data-blocks-engine-capture-visual-iframe-src="https://zero.test/embed" data-blocks-engine-capture-visual-iframe-width="640" data-blocks-engine-capture-visual-iframe-height="0"></iframe>
@@ -31,6 +31,8 @@ describe('sanitizeFrozenHtml', () => {
     // The authored box survives, or the phone embed falls back to its attested pixel size.
     expect($('iframe').attr('style')).toBe('width:100%;aspect-ratio:16 / 9');
     expect($('iframe').attr('class')).toBe('map');
+    // Its box-tree binding survives, so the frame keeps its captured geometry.
+    expect($('iframe').attr('data-blocks-engine-node-id')).toBe('n7');
     expect($('iframe').attr('srcdoc')).toBeUndefined();
     expect($('iframe').attr('onclick')).toBeUndefined();
     expect($('iframe').html()).toBe('');
