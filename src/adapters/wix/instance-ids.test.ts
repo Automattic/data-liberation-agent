@@ -1,3 +1,4 @@
+import * as cheerio from 'cheerio';
 import { describe, expect, it } from 'vitest';
 import { canonicalizeWixCapturedHtml, canonicalizeWixFormControlIds, canonicalizeWixInstanceIds } from './instance-ids.js';
 
@@ -28,6 +29,23 @@ describe( 'canonicalizeWixInstanceIds', () => {
 		expect( out ).toContain( `<header id="${ id }" class="${ id }-container">` );
 		expect( out ).toContain( `#${ id }{position:sticky}.${ id }-container{margin:0}` );
 		expect( out ).not.toContain( 'comp-aaaa1111' );
+	} );
+
+	it.each( [ 'img', 'portal', 'custom' ] )( 'canonicalizes chrome whose only scoped references have derived prefixes (%s, #2218)', ( prefix ) => {
+		const route = ( instance: string ) => `<html><head><style>#${ instance }{position:sticky}#${ prefix }-${ instance }_r_comp-a{width:10px}#portal-${ instance }_r_comp-b{color:red}</style></head>` +
+			`<body><header id="${ instance }"><img id="${ prefix }-${ instance }_r_comp-a"><div id="portal-${ instance }_r_comp-b"></div></header><i id="${ prefix }-${ instance }2"></i></body></html>`;
+		const first = canonicalizeWixInstanceIds( route( 'comp-aaaa1111' ) );
+		const second = canonicalizeWixInstanceIds( route( 'comp-bbbb2222' ) );
+		const $ = cheerio.load( first );
+		expect( $( 'header' ).toString() ).toBe( cheerio.load( second )( 'header' ).toString() );
+		expect( $( 'header' ).attr( 'id' ) ).toMatch( /^comp-dla[0-9a-f]{8}$/ );
+		for ( const rule of $( 'style' ).text().split( '}' ).filter( Boolean ) ) {
+			expect( $( rule.split( '{' )[ 0 ]! ) ).toHaveLength( 1 );
+		}
+		expect( $( 'i' ).attr( 'id' ) ).toBe( `${ prefix }-comp-aaaa11112` );
+		expect( canonicalizeWixInstanceIds( first ) ).toBe( first );
+		const collision = route( 'comp-aaaa1111' ).replace( '</body>', '<aside class="img-comp-cccc3333_r_comp-a portal-comp-cccc3333_r_comp-b"></aside></body>' );
+		expect( canonicalizeWixInstanceIds( collision ) ).toBe( collision );
 	} );
 
 	it( 'does not rewrite an id that merely starts with an instance id', () => {
