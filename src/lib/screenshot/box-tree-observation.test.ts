@@ -92,8 +92,19 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('binds a snapshot with runtime element
 		expect(html).toContain(`<head data-blocks-engine-node-id="${headId}">`);
 		expect(await page.evaluate(() => document.documentElement.outerHTML)).toBe(source);
 		const nodes = observation && 'nodes' in observation ? observation.nodes : {};
-		const tree = await captureBoxTree(page, html, { mobile: { width: 390, height: 844 } }, { name: 'mobile', nodes });
+		const dropped: Array<{ name: string; mismatch: BoxTreeMismatch }> = [];
+		const viewports = { desktop: { width: 1440, height: 900 }, mobile: { width: 390, height: 844 }, tablet: { width: 768, height: 1024 } };
+		const tree = await captureBoxTree(page, html, viewports, { name: 'mobile', nodes }, undefined, (name, mismatch) => dropped.push({ name, mismatch }));
 		expect(tree).toBeDefined();
+		expect(Object.keys(tree!.viewports).sort()).toEqual(['desktop', 'mobile', 'tablet']);
+		for (const node of Object.values(tree!.nodes)) expect(Object.keys(node.viewports).sort()).toEqual(['desktop', 'mobile', 'tablet']);
+		expect(dropped).toEqual([]);
+		expect(await page.evaluate(() => document.documentElement.outerHTML)).toBe(source);
+		// A real retained move must still drop the width and name the disagreement.
+		await page.evaluate(() => document.querySelector('main')!.append(document.querySelector('#before-head-1')!));
+		const changed = await captureBoxTree(page, html, { desktop: viewports.desktop }, { name: 'mobile', nodes }, undefined, (name, mismatch) => dropped.push({ name, mismatch }));
+		expect(Object.keys(changed!.viewports)).toEqual(['mobile']);
+		expect(dropped).toMatchObject([{ name: 'desktop', mismatch: { kind: 'moved', detail: expect.stringContaining('expected children') } }]);
 		expect(bindBoxTree(html, tree)).toEqual(tree);
 		await page.setContent(html);
 		expect(await page.locator('html > *').evaluateAll(elements => elements.map(element => element.localName))).toEqual(['head', 'body']);

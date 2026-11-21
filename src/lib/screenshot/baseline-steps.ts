@@ -599,7 +599,9 @@ export function baselineSteps(
 				}
 				const observed: BoxTreeObservation | undefined = boxNodes;
 				if (observed && 'mismatch' in observed) state.boxTreeMismatch = observed.mismatch;
-				else if (observed) state.boxTree = await captureBoxTree(page, state.initialDocument, boxViewports(), { name: viewport.id, nodes: observed.nodes }, mismatch => { state.boxTreeMismatch = mismatch; });
+				else if (observed) state.boxTree = await captureBoxTree(page, state.initialDocument, boxViewports(), { name: viewport.id, nodes: observed.nodes }, mismatch => { state.boxTreeMismatch = mismatch; }, (name, mismatch) => {
+					args.diagnostics?.push({ code: 'box_tree_viewport_dropped', reason: `${name}: ${describeBoxTreeMismatch(mismatch)}` });
+				});
 				if ( await args.absentDocument?.( state.initialDocument ) ) {
 					fail( 'goto', 'HTTP 404 (render matches absent nonce sibling)' );
 					state.stopped = true;

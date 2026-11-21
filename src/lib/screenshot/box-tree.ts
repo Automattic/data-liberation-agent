@@ -4,6 +4,7 @@ import { dirname, join, relative } from 'node:path';
 import * as cheerio from 'cheerio';
 import type { AnyNode, Element as TagElement } from 'domhandler';
 import type { Page } from 'playwright';
+import { normalizeRetainedDocument } from './retained-document.js';
 
 export const BOX_TREE_SCHEMA = 'blocks-engine/box-tree/v2';
 export const NODE_ID_ATTRIBUTE = 'data-blocks-engine-node-id';
@@ -245,7 +246,7 @@ export function settleResize({ quietMs, budgetMs }: typeof RESIZE_SETTLE): Promi
 }
 
 /** Observe extra widths immediately after serialization, keeping only stable ones. */
-export async function captureBoxTree(page: Page, html: string, viewports: BoxTree['viewports'], initial?: { name: string; nodes: BoxTree['nodes'] }, onUnproven?: (mismatch: BoxTreeMismatch) => void): Promise<Omit<BoxTree, 'source_path' | 'source_hash'> | undefined> {
+export async function captureBoxTree(page: Page, html: string, viewports: BoxTree['viewports'], initial?: { name: string; nodes: BoxTree['nodes'] }, onUnproven?: (mismatch: BoxTreeMismatch) => void, onDroppedViewport?: (name: string, mismatch: BoxTreeMismatch) => void): Promise<Omit<BoxTree, 'source_path' | 'source_hash'> | undefined> {
 	const $ = cheerio.load(html);
 	const nodes: BoxTree['nodes'] = {};
 	let mismatch: BoxTreeMismatch | undefined;
@@ -270,28 +271,34 @@ export async function captureBoxTree(page: Page, html: string, viewports: BoxTre
 			if (name === initial?.name) continue;
 			await page.setViewportSize(size);
 			await page.evaluate(settleResize, RESIZE_SETTLE);
-			const readObservation = () => page.evaluate(({ attribute, properties, topology, html, observerSource }) => {
+			const readObservation = () => page.evaluate(({ attribute, properties, topology, html, observerSource, normalizeDocumentSource }) => {
 				// A visitor loading at this width sees the end state, not a resize transition mid-flight.
 				for (const animation of document.getAnimations()) if (animation instanceof CSSTransition) animation.finish();
-				const live = new Map(Array.from(document.querySelectorAll('*'), element => [element.getAttribute(attribute), element]));
+				// Compare retained topology on a clone; geometry still comes from the live source.
+				const retained = document.documentElement.cloneNode(true) as Element;
+				(new Function(`return (${normalizeDocumentSource})`)() as typeof normalizeRetainedDocument)(retained);
+				const live = new Map([retained, ...retained.querySelectorAll('*')].map(element => [element.getAttribute(attribute), element]));
 				for (const [id, expected] of Object.entries(topology)) {
 					const element = live.get(id);
-					if (!element) return;
+					if (!element) return { mismatch: { kind: 'missing' as const, id, path: 'html', detail: 'retained node missing at resized viewport' } };
 					// Ignore source-only nodes removed by serialization, but never accept a changed retained tree.
 					const children = Array.from(element.children, child => child.getAttribute(attribute)).filter(child => child && topology[child]);
-					if (JSON.stringify(children) !== JSON.stringify(expected.children)) return;
+					if (JSON.stringify(children) !== JSON.stringify(expected.children)) return { mismatch: {
+						kind: 'moved' as const, id, path: element.localName, detail: `expected children [${expected.children.join(',')}], retained [${children.join(',')}]`,
+					} };
 				}
 				// The protected constructor binds saved probe intrinsics; indirect eval
 				// would resolve built-ins from the source page's mutable globals.
 				const observe = new Function(`return (${observerSource})`)() as typeof observeBoxTree;
 				const observed = observe(new DOMParser().parseFromString(html, 'text/html').documentElement, properties, attribute);
 				return 'mismatch' in observed ? observed : { observations: Object.fromEntries(Object.entries(observed.nodes).map(([id, node]) => [id, node.viewports.capture])) };
-			}, { attribute: NODE_ID_ATTRIBUTE, properties: BOX_TREE_STYLES, topology: nodes, html, observerSource: observeBoxTree.toString() });
+			}, { attribute: NODE_ID_ATTRIBUTE, properties: BOX_TREE_STYLES, topology: nodes, html, observerSource: observeBoxTree.toString(), normalizeDocumentSource: normalizeRetainedDocument.toString() });
 			let reading = await readObservation();
 			if (reading && 'mismatch' in reading && reading.mismatch.kind === 'stylesheet') {
 				await page.waitForTimeout(250);
 				reading = await readObservation();
 			}
+			if (reading && 'mismatch' in reading) onDroppedViewport?.(name, reading.mismatch);
 			if (reading && 'mismatch' in reading && reading.mismatch.kind === 'stylesheet') {
 				onUnproven?.(reading.mismatch);
 				return;
