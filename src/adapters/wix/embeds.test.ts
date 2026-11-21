@@ -125,6 +125,41 @@ describe( 'sealWixAppFrameHtml', () => {
 		}
 	} );
 
+	it( 'finds a credential under any key case, repeat, encoding depth or fragment, and in noscript', () => {
+		const pages = [
+			`<iframe src="https://widgets.example.test/w?instance=&amp;instance=${ INSTANCE }"></iframe>`,
+			`<iframe src="https://widgets.example.test/w?Instance=${ INSTANCE }"></iframe>`,
+			`<iframe src="https://widgets.example.test/w#instance=${ INSTANCE }"></iframe>`,
+			`<iframe src="https://widgets.example.test/w?%2569nstance=${ INSTANCE }"></iframe>`,
+			`<noscript><iframe src="${ widget }"></iframe></noscript>`,
+		];
+		for ( const page of pages ) {
+			const sealed = sealWixAppFrameHtml( `<main>${ page }</main><p>after</p>` );
+			expect( sealed, page ).not.toContain( '7UqG_' );
+			expect( sealed, page ).toContain( '<p>after</p>' );
+		}
+	} );
+
+	it( 'resolves frames against the effective base, never a template base, and nested markup against its owner', () => {
+		const unsigned = '<iframe src="/render/w?instance=unsigned-value"></iframe>';
+		const pages = [
+			`<head><base href="//app.wixapps.net/"></head><body>${ unsigned }</body>`,
+			`<template><base href="https://public.example.test/"></template>${ unsigned }`,
+			`<base href="https://app.wixapps.net/"><iframe srcdoc="${ escape( '<iframe src="/render/w?instance=unsigned-value"></iframe>' ) }"></iframe>`,
+		];
+		for ( const page of pages ) expect( sealWixAppFrameHtml( page ), page ).not.toContain( 'unsigned-value' );
+		// A captured fragment resolves against the page it came from.
+		expect( sealWixAppFrameHtml( '<iframe src="https://public.example.test/w?instance=x"></iframe>', '<base href="https://app.wixapps.net/">' ) ).toContain( 'instance=x' );
+	} );
+
+	it( 'removes replay markup nested past the sealing depth instead of passing it through', () => {
+		let markup = `<iframe src="${ widget }"></iframe>`;
+		for ( let level = 0; level < 12; level++ ) markup = `<button data-blocks-engine-capture-dialog-panel-state="${ escape( JSON.stringify( { html: `<div>${ markup }</div>` } ) ) }">Open</button>`;
+		const sealed = sealWixAppFrameHtml( `<nav>${ markup }</nav>` );
+		expect( sealed ).not.toContain( '7UqG_' );
+		expect( sealed ).toMatch( /^<nav><button data-blocks-engine-capture-dialog-panel-state=/ );
+	} );
+
 	it( 'seals app frames inside captured panel replay markup, recursively', () => {
 		const frameMarkup = `<iframe src="${ widget }" data-blocks-engine-capture-visual-iframe-width="180" data-blocks-engine-capture-visual-iframe-height="120"></iframe>`;
 		const inner = `<button data-blocks-engine-capture-dialog-panel-state="${ escape( JSON.stringify( { html: `<div>${ frameMarkup }</div>`, style: '', class: '' } ) ) }">Open</button>`;
@@ -420,19 +455,32 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime embed
 	 * its own DOM APIs, a panel that never renders, category tabs, or no render.
 	 */
 	const faqFrame = ( variant = 'plain' ) => `${ FAQ_WIDGET }&variant=${ variant }`;
+	const TOKEN_LINK_ENTRIES = [ { question: 'First question?', answer: `<p>See <a href="https://app.example.test/widget?instance=${ INSTANCE }">the app page</a>.</p>` }, FAQ_ENTRIES[ 1 ] ];
+	let errorServed = false;
 	const routeFaqApp = async ( page: Page ) => page.route( 'https://faq-app.example.test/**', async ( route ) => {
 		const url = new URL( route.request().url() );
 		if ( route.request().method() === 'POST' ) {
 			// Wix's answer shape: one page of questions and whether more follow, by cursor.
-			const batched = /variant=(?:slow-)?staggered/.test( route.request().frame().url() );
+			const asking = new URL( route.request().frame().url() ).searchParams.get( 'variant' ) ?? '';
 			const next = ( route.request().postData() ?? '' ).includes( 'cursor' );
-			const body = ! batched
-				? { questionEntries: FAQ_ENTRIES, pagingMetadata: { count: FAQ_ENTRIES.length, hasNext: false } }
-				: next
-					? { questionEntries: FAQ_ENTRIES.slice( 1 ), pagingMetadata: { count: FAQ_ENTRIES.length - 1, hasNext: false } }
+			const whole = { questionEntries: asking === 'token-link' ? TOKEN_LINK_ENTRIES : FAQ_ENTRIES, pagingMetadata: { count: FAQ_ENTRIES.length, hasNext: false } };
+			let status = 200;
+			let body: unknown = whole;
+			if ( /staggered|final-late/.test( asking ) ) {
+				// The final page counts only its own questions (or, for 'final-late', omits the count).
+				body = next
+					? { questionEntries: FAQ_ENTRIES.slice( 1 ), pagingMetadata: { ...( asking === 'final-late' ? {} : { count: FAQ_ENTRIES.length - 1 } ), hasNext: false } }
 					: { questionEntries: FAQ_ENTRIES.slice( 0, 1 ), pagingMetadata: { count: 1, hasNext: true, cursors: { next: 'page-2' } } };
+			} else if ( asking === 'renav-a' ) {
+				body = { questionEntries: FAQ_ENTRIES.slice( 0, 1 ), pagingMetadata: { count: 1, hasNext: false } };
+			} else if ( asking === 'error-first' && ! errorServed ) {
+				// A failed query whose body still looks final.
+				errorServed = true;
+				status = 500;
+				body = { questionEntries: FAQ_ENTRIES.slice( 0, 1 ), pagingMetadata: { count: 1, hasNext: false } };
+			}
 			await new Promise( ( resolve ) => setTimeout( resolve, 500 ) );
-			await route.fulfill( { contentType: 'application/json', body: JSON.stringify( body ) } );
+			await route.fulfill( { status, contentType: 'application/json', body: JSON.stringify( body ) } );
 			return;
 		}
 		const variant = url.searchParams.get( 'variant' );
@@ -456,13 +504,23 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime embed
 					'<button data-hook="accordion-item-header" aria-expanded="' + ( index === 0 ) + '" aria-controls="item-' + index + '"><h3 data-hook="title">' + entry.question + '</h3><svg data-hook="expandIcon"></svg></button>' +
 					'<div id="' + ${ panelId } + '" data-hook="accordion-item-content" style="display:' + ( index === 0 ? 'block' : 'none' ) + '">' + ${ answer } + '</div>' ).join( '' ) + '</div></div>' );
 			};
-			const query = ( cursor ) => fetch( '/_api/faq-server/v2/question-entries/query', { method: 'POST', body: JSON.stringify( cursor ? { cursor } : {} ) } ).then( response => response.json() );
+			const query = ( cursor ) => fetch( '/_api/faq-server/v2/question-entries/query', { method: 'POST', body: JSON.stringify( cursor ? { query: { cursorPaging: { cursor } } } : { query: {} } ) } ).then( response => response.json() );
+			${ {
+				// Renders the first page, asks for the final one at once, and renders it 900 ms after the answer.
+				'final-late': `query().then( ( first ) => { render( first.questionEntries ); query( first.pagingMetadata.cursors.next ).then( ( second ) => setTimeout( () => render( first.questionEntries.concat( second.questionEntries ) ), 900 ) ); } );`,
+				// Renders what a failed query returned, then retries.
+				'error-first': `query().then( ( first ) => { render( first.questionEntries ); setTimeout( () => query().then( ( second ) => render( second.questionEntries ) ), 900 ); } );`,
+				// Gets a final answer, then navigates in place before rendering.
+				'renav-a': `query().then( () => location.replace( ${ JSON.stringify( faqFrame( 'renav-b' ) ) } ) );`,
+				// Renders one remembered question at once and queries for the rest later.
+				'renav-b': `render( ${ JSON.stringify( FAQ_ENTRIES.slice( 0, 1 ) ) } ); setTimeout( () => query().then( ( all ) => render( all.questionEntries ) ), 1200 );`,
+			}[ variant ?? '' ] ?? `
 			// A batched variant renders its first page, then asks for the next one later
 			// ('staggered' 800 ms, 'slow-staggered' 1.8 s), as cursor paging does.
 			query().then( ( first ) => {
 				render( first.questionEntries );
 				if ( first.pagingMetadata.hasNext ) setTimeout( () => query( first.pagingMetadata.cursors.next ).then( ( second ) => render( first.questionEntries.concat( second.questionEntries ) ) ), ${ variant === 'slow-staggered' ? 1_800 : 800 } );
-			} );
+			} );` }
 		</script>`;
 		await route.fulfill( { contentType: 'text/html', body: widget } );
 	} );
@@ -592,6 +650,49 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime embed
 		await portWixRuntimeEmbeds( page );
 		expect( Date.now() - startedAt ).toBeLessThan( 1_500 );
 		await expectPortedFaq( page );
+	}, 30_000 );
+
+	it( 'waits for every question a cursor chain counted, and ignores failed queries', async ({ newPage }) => {
+		const page = await newPage();
+		await routeFaqApp( page );
+		for ( const variant of [ 'final-late', 'error-first' ] ) {
+			await page.setContent( `${ FRAME_STYLE }<iframe title="Wix FAQ" src="${ faqFrame( variant ) }"></iframe>` );
+			await portWixRuntimeEmbeds( page, { faqRenderMilliseconds: 6_000 } );
+			await expectPortedFaq( page );
+		}
+	}, 30_000 );
+
+	it( 'sees a FAQ that queried once at startup, from the adapter init script', async ({ newPage }) => {
+		const page = await newPage();
+		await routeFaqApp( page );
+		await capture.initScript!( page );
+		await page.setContent( `${ FRAME_STYLE }<iframe title="Wix FAQ" src="${ faqFrame() }"></iframe>` );
+		await page.frameLocator( 'iframe' ).locator( '[data-hook="accordion-item-header"]' ).first().waitFor();
+		await portWixRuntimeEmbeds( page );
+		await expectPortedFaq( page );
+	}, 30_000 );
+
+	it( 'starts over when a FAQ frame navigates in place after a final answer, and forgets detached frames', async ({ newPage }) => {
+		const page = await newPage();
+		await routeFaqApp( page );
+		const frames = trackWixFaqQueries( page );
+		await page.setContent( `${ FRAME_STYLE }<iframe title="Wix FAQ" src="${ faqFrame( 'renav-a' ) }"></iframe>` );
+		await portWixRuntimeEmbeds( page, { faqRenderMilliseconds: 6_000 } );
+		await expectPortedFaq( page );
+		await page.setContent( `${ FRAME_STYLE }<iframe src="${ faqFrame() }"></iframe><iframe src="${ faqFrame() }"></iframe>` );
+		await expect.poll( () => frames.size ).toBe( 2 );
+		await page.evaluate( () => document.querySelectorAll( 'iframe' ).forEach( ( frame ) => frame.remove() ) );
+		await expect.poll( () => frames.size ).toBe( 0 );
+	}, 30_000 );
+
+	it( 'keeps an answer link that carries an app credential as text only', async ({ newPage }) => {
+		const page = await newPage();
+		await routeFaqApp( page );
+		await page.setContent( `${ FRAME_STYLE }<iframe title="Wix FAQ" src="${ faqFrame( 'token-link' ) }"></iframe>` );
+		await portWixRuntimeEmbeds( page );
+		const faq = page.locator( '[data-blocks-engine-capture-ported-embed="wix-faq"]' );
+		expect( await faq.locator( 'details > div' ).first().innerHTML() ).toBe( '<p>See the app page.</p>' );
+		expect( await savedHtml( page ) ).not.toMatch( /instance|7UqG_/i );
 	}, 30_000 );
 
 	it( 'gives a venue map host that mounts during the FAQ wait the warmup-data fallback', async ({ newPage }) => {

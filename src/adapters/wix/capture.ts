@@ -707,6 +707,8 @@ export function installWixGallerySlideshow( { compId, markup, stylesheet }: { co
 
 export const capture: LiberationHooks = {
 	initScript: async ( page ) => {
+		// Watch the FAQ app's question queries from before navigation, so a frame that queries once at startup is seen (see embeds.ts).
+		trackWixFaqQueries( page );
 		await page.addInitScript( () => {
 			document.addEventListener( 'DOMContentLoaded', () => {
 				const header = document.querySelector( '#SITE_HEADER' );
@@ -720,7 +722,7 @@ export const capture: LiberationHooks = {
 	referenceWidths: [ 390, 768, 1440 ],
   resolveClientRedirect: resolveEventFormRedirect,
   // The app-frame seal runs last, on the exact string that is saved (see embeds.ts).
-  canonicalizeHtml: ( html, document ) => sealWixAppFrameHtml( canonicalizeWixCapturedHtml( restoreWixBlurredImageSources( preserveWixCollections( html ) ), document ) ),
+  canonicalizeHtml: ( html, document ) => sealWixAppFrameHtml( canonicalizeWixCapturedHtml( restoreWixBlurredImageSources( preserveWixCollections( html ) ), document ), document ),
   cleanupRules: [
     // Wix publishes the measured height of its own banner into these, and its
     // layout reads them from the sticky header, the page root and the pinned
@@ -754,7 +756,7 @@ export const capture: LiberationHooks = {
 	 * fragment and leave a real target behind.
 	 */
 	prepare: async ( page, ctx ) => {
-		// Watch the FAQ app's question queries from here, before lazy loading mounts its frame (see embeds.ts).
+		// Idempotent: also covers a page that was opened without the init script.
 		trackWixFaqQueries( page );
 		// Keep the runtime-owned overflow control and resting link visibility.
 		// Generic interaction capture observes its panel after baseline artifacts
