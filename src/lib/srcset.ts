@@ -1,3 +1,10 @@
+/**
+ * Rendered-source evidence on an `<img>` inside an art-directed `<picture>`:
+ * the file the browser rendered (`currentSrc`) at the viewport this document
+ * copy was captured in, localized like the image's own references.
+ */
+export const CURRENT_SOURCE_ATTRIBUTE = 'data-blocks-engine-capture-current-src';
+
 export interface SrcsetCandidate {
 	url: string;
 	size: number;
@@ -213,7 +220,7 @@ export function rewriteMediaReferences(
 	replaceOther: ( content: string ) => string
 ): string {
 	const rewriteOther = ( text: string ): string => rewriteCssUrlReferences( text, replaceUrl, replaceOther );
-	const attributes = /\s(srcset|data-srcset|src|poster|data-bg|data-src|data-lazy-src|data-original|data-image|data-image-src|href|xlink:href)\s*=\s*(["'])([\s\S]*?)\2/gi;
+	const attributes = /\s(srcset|data-srcset|src|data-blocks-engine-capture-current-src|poster|data-bg|data-src|data-lazy-src|data-original|data-image|data-image-src|href|xlink:href)\s*=\s*(["'])([\s\S]*?)\2/gi;
 	let result = '';
 	let offset = 0;
 	for ( const match of content.matchAll( attributes ) ) {

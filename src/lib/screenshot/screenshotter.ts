@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node
 import { incompleteDeviceDocument } from '../responsive-assembly.js';
 import { join } from 'node:path';
 import { resolveDocumentReferences } from '../document-resource-base.js';
-import { parseSrcset, isSrcsetShaped } from '../srcset.js';
+import { CURRENT_SOURCE_ATTRIBUTE, parseSrcset, isSrcsetShaped } from '../srcset.js';
 import { SOURCE_SUBFRAME_RUNTIME_ERROR, watchSourceRuntimeErrors } from '../source-readiness.js';
 import { forgetSourceDocument, getSourceResponse } from '../browser-kit/source-traffic.js';
 import { SourceRequestGovernors } from '../source-request-governor.js';
@@ -326,7 +326,7 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 		// The installed source cleanup sweeps first, in this same task: the
 		// settle and media waits above give the source time to mount a widget
 		// after the last sweep, and no source script runs between these two.
-		const result = await page.evaluate( async ( { boxTreeSource, boxTreeProperties, captureBoxes, stampSource, nodeIdAttribute, observeControlSource, controlAttribute, portMapsSource, mapHostSource, iframeEvidenceAttributes, scaffoldingSource, shadowSource, parseSrcsetSource, srcsetShapedSource, initialScrollClassAttribute } ) => {
+		const result = await page.evaluate( async ( { boxTreeSource, boxTreeProperties, captureBoxes, stampSource, nodeIdAttribute, observeControlSource, controlAttribute, portMapsSource, mapHostSource, iframeEvidenceAttributes, scaffoldingSource, shadowSource, parseSrcsetSource, srcsetShapedSource, initialScrollClassAttribute, currentSourceAttribute } ) => {
 			( window as unknown as { __dlaCleanup?: { sweep: () => void } } ).__dlaCleanup?.sweep();
 			// Independent computed-style sentinels from the styled baseline, before
 			// any serialization-only DOM trials. Never validate evidence against itself.
@@ -351,6 +351,8 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				);
 			};
 			const restoredImages: Array< { image: HTMLImageElement; previous: string | null } > = [];
+			// Images whose rendered-source evidence is written for this serialization only.
+			const currentSourceImages: Array< { image: HTMLImageElement; previous: string | null } > = [];
 			const restoredAspectRatios: Array< { image: HTMLImageElement; previous: string; priority: string } > = [];
 			const restoredBackgrounds: Array< { element: HTMLElement; previous: string | null; classes: string | null; status: string | null } > = [];
 			const placeholderGif = /^data:image\/gif;base64,R0lGODlhAQAB/i;
@@ -392,6 +394,25 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 			// srcset). outerHTML keeps the attribute, so write the loaded URL
 			// immediately before serializing, then put the live attribute back.
 			for ( const image of document.querySelectorAll( 'img' ) ) {
+				// An art-directed <picture> selects among its <source>s per viewport.
+				// Record which file this viewport rendered, in the authored spelling
+				// of the matching candidate, so export localizes it like that
+				// candidate and a consumer can tell which source this copy showed.
+				const picture = image.closest( 'picture' );
+				const renderedSource = picture?.querySelector( 'source' ) ? durableImageUrl( image.currentSrc ) : '';
+				if ( renderedSource || image.hasAttribute( currentSourceAttribute ) ) {
+					currentSourceImages.push( { image, previous: image.getAttribute( currentSourceAttribute ) } );
+					image.removeAttribute( currentSourceAttribute );
+				}
+				if ( renderedSource ) {
+					const authored = [
+						image.getAttribute( 'src' ) ?? '',
+						...srcsetCandidates( image.getAttribute( 'srcset' ) ?? '' ).map( ( candidate ) => candidate.url ),
+						...Array.from( picture!.querySelectorAll( 'source[srcset]' ) ).flatMap( ( source ) =>
+							srcsetCandidates( source.getAttribute( 'srcset' ) ?? '' ).map( ( candidate ) => candidate.url ) ),
+					].find( ( candidate ) => durableImageUrl( candidate ) === renderedSource );
+					image.setAttribute( currentSourceAttribute, authored?.trim() || renderedSource );
+				}
 				// Responsive image components often put the rendered ratio on the
 				// image's owning layer through a custom property. Keep that computed
 				// contract in the static artifact: the source stylesheet/runtime may
@@ -605,6 +626,10 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 			} finally {
 				restoreParagraphDescendants();
 				for ( const boundary of textBoundaries ) boundary.remove();
+				for ( const { image, previous } of currentSourceImages ) {
+					if ( previous === null ) image.removeAttribute( currentSourceAttribute );
+					else image.setAttribute( currentSourceAttribute, previous );
+				}
 				for ( const { image, previous } of restoredImages.reverse() ) {
 					if ( previous === null ) image.removeAttribute( 'src' );
 					else image.setAttribute( 'src', previous );
@@ -623,7 +648,7 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				}
 				for ( const { element, parent, next } of detached.reverse() ) parent.insertBefore( element, next );
 			}
-		}, { boxTreeSource: observeBoxTree.toString(), boxTreeProperties: BOX_TREE_STYLES, captureBoxes: Boolean(onBoxTree), stampSource: assignNodeIds.toString(), nodeIdAttribute: NODE_ID_ATTRIBUTE, initialScrollClassAttribute: INITIAL_SCROLL_CLASS_ATTRIBUTE, observeControlSource: observeNativeControlState.toString(), controlAttribute: NATIVE_CONTROL_STATE_ATTRIBUTE, portMapsSource: portRenderedGoogleMaps.toString(), mapHostSource: isGoogleMapHost.toString(), iframeEvidenceAttributes, scaffoldingSource: cleanPortableScaffolding.toString(), shadowSource: portStaticShadowContent.toString(), parseSrcsetSource: parseSrcset.toString(), srcsetShapedSource: isSrcsetShaped.toString() } );
+		}, { boxTreeSource: observeBoxTree.toString(), boxTreeProperties: BOX_TREE_STYLES, captureBoxes: Boolean(onBoxTree), stampSource: assignNodeIds.toString(), nodeIdAttribute: NODE_ID_ATTRIBUTE, initialScrollClassAttribute: INITIAL_SCROLL_CLASS_ATTRIBUTE, observeControlSource: observeNativeControlState.toString(), controlAttribute: NATIVE_CONTROL_STATE_ATTRIBUTE, portMapsSource: portRenderedGoogleMaps.toString(), mapHostSource: isGoogleMapHost.toString(), iframeEvidenceAttributes, scaffoldingSource: cleanPortableScaffolding.toString(), shadowSource: portStaticShadowContent.toString(), parseSrcsetSource: parseSrcset.toString(), srcsetShapedSource: isSrcsetShaped.toString(), currentSourceAttribute: CURRENT_SOURCE_ATTRIBUTE } );
 		if ( onPainted ) onPainted( await readPaintState( page ) );
 		onBoxTree?.(result.boxNodes);
 		diagnostics?.push( ...result.findings );

@@ -23,9 +23,9 @@ import { rewriteMediaUrls } from './streaming/media-url-rewrite.js';
 import { withViewportEntrances } from './viewport-entrances.js';
 import { namespaceExportBoxTreeIds } from './export-box-trees.js';
 import { sameOriginPageAnchors } from './screenshot/unscheduled-anchors.js';
-import { isSrcsetShaped, srcsetCandidates } from './srcset.js';
+import { CURRENT_SOURCE_ATTRIBUTE, isSrcsetShaped, srcsetCandidates } from './srcset.js';
 import { portableVisualIframeWidth } from './visual-iframe-geometry.js';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import * as cheerio from 'cheerio';
 import type { Element } from 'domhandler';
@@ -352,6 +352,31 @@ function truthfulSourceTypes( html: string ): string {
 	} );
 }
 
+// Rendered-source evidence localizes with the image's own references. Keep it
+// only where it names a local file the same <picture> still references (its
+// <img> src/srcset or a <source> srcset), so a consumer never reads a source
+// URL, a blanked dangling reference or a file no candidate names.
+export function bindPictureCurrentSources( html: string, isLocalAsset: ( path: string ) => boolean ): string {
+	if ( ! html.includes( CURRENT_SOURCE_ATTRIBUTE ) ) return html;
+	const attribute = new RegExp( `\\s${ CURRENT_SOURCE_ATTRIBUTE }\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i' );
+	return html.replace( /<picture\b[^>]*>[\s\S]*?<\/picture\s*>/gi, ( picture ) => {
+		if ( ! picture.includes( CURRENT_SOURCE_ATTRIBUTE ) ) return picture;
+		const candidates = new Set< string >();
+		for ( const [ tag ] of picture.matchAll( /<(?:img|source)\b[^>]*>/gi ) ) {
+			const srcset = /\ssrcset\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec( tag );
+			if ( srcset ) for ( const { url } of srcsetCandidates( ( srcset[ 1 ] ?? srcset[ 2 ] ).replace( /&amp;/g, '&' ) ) ) candidates.add( url );
+			const src = /^<img\b/i.test( tag ) ? /\ssrc\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec( tag ) : null;
+			if ( src ) candidates.add( ( src[ 1 ] ?? src[ 2 ] ).replace( /&amp;/g, '&' ).trim() );
+		}
+		return picture.replace( /<img\b[^>]*>/gi, ( tag ) => {
+			const match = attribute.exec( tag );
+			if ( ! match ) return tag;
+			const value = ( match[ 1 ] ?? match[ 2 ] ).replace( /&amp;/g, '&' ).trim();
+			return /^\/(?!\/)/.test( value ) && candidates.has( value ) && isLocalAsset( value ) ? tag : tag.replace( match[ 0 ], '' );
+		} );
+	} );
+}
+
 // A captured interaction state carries the HTML of a revealed panel. That HTML
 // is serialized from the live DOM, so an image can name the exact CDN rendition
 // the runtime chose for the viewport at the moment of capture. That rendition
@@ -654,6 +679,14 @@ export function renderRoutePages( { canonicalizeHtml, retainedEntries, websiteDi
 		}
 	}
 	const metadataPathsBySource = new Map( [ ...mediaMetadataPathsBySource, ...portablePathsBySource ] );
+	const isLocalAsset = ( path: string ): boolean => {
+		try {
+			const file = join( websiteDir, decodeURIComponent( new URL( path, 'https://portable.invalid/' ).pathname ) );
+			return pathWithin( websiteDir, file ) && statSync( file ).isFile();
+		} catch {
+			return false;
+		}
+	};
 	for ( const entry of retainedEntries ) {
 		const { url, htmlPath } = entry;
 		const routePath = routePathOf( url );
@@ -667,7 +700,7 @@ export function renderRoutePages( { canonicalizeHtml, retainedEntries, websiteDi
 		unresolvedAnchors.push( ...uncapturedRouteAnchors( originalHtml, url, capturedRouteKeys, absentRouteKeys, omittedRouteKeys, resourceInputKeys, routeScope, boundaryRoutes ) );
 		// Rewrite route links once, after wiring dialogs below. A portable path
 		// can also name a source route that was allocated a different filename.
-		const identityHtml = localizeMetadataImageReferences( originalHtml, url, metadataPathsBySource, content => truthfulSourceTypes( bindSrcsetShapedImageSrc(
+		const identityHtml = bindPictureCurrentSources( localizeMetadataImageReferences( originalHtml, url, metadataPathsBySource, content => truthfulSourceTypes( bindSrcsetShapedImageSrc(
 			localizeDataAttributeMedia(
 				replaceResources(
 					rewriteMediaUrls(
@@ -678,7 +711,7 @@ export function renderRoutePages( { canonicalizeHtml, retainedEntries, websiteDi
 				),
 				portableUrlByFamily
 			)
-		) ) );
+		) ) ), isLocalAsset );
 		const normalizedHtml = routePhoneDocumentFragments(
 			rewriteCapturedRouteLinks(
 				wireCapturedRouteNavigation(
