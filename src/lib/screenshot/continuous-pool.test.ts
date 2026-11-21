@@ -36,13 +36,19 @@ it.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.e
 	try {
 		const result = await captureScreenshots( {
 			urls: [ origin + '/' ], primaryUrl: origin + '/', outputDir,
-			concurrency: 2, settleMs: 0, learnFluid: false,
+			concurrency: 2, settleMs: 0, learnFluid: false, sharedChrome: true,
 			viewports: [ { id: 'desktop', width: 1440, height: 900 } ],
 			linkedPages: { maxPages: 8, maxDepth: 3, timeoutMs: 90_000 },
 			groupLinkedRoutes: grouped, prioritizePendingRoutes: urls => urls,
 			onProgress: ( _completed, _total, url ) => finishes.set( new URL( url ).pathname, Date.now() ),
 		} );
 		expect( result.captured ).toBe( 5 );
+		// A lazy, one-route inventory must establish chrome before admitting
+		// successors, without turning their continuous pool back into waves.
+		expect( result.sharedChrome?.profiles.desktop.status ).toBe( 'captured' );
+		expect( result.sharedChrome?.routes.probedInPlace ).not.toContainEqual(
+			expect.objectContaining( { reason: expect.stringContaining( 'not probed' ) } ),
+		);
 		expect( grouped ).toHaveBeenCalledWith( [ origin + '/child' ] );
 		expect( starts.get( '/slow' ) ).toBeGreaterThanOrEqual( finishes.get( '/' )! );
 		expect( starts.get( '/child' ) ).toBeGreaterThanOrEqual( finishes.get( '/fast-a' )! );

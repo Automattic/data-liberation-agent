@@ -62,6 +62,26 @@ it.each( [ 'unavailable', 'rejected' ] )( 'releases pending members after a %s c
 	}
 } );
 
+it.each( [ 0, 1 ] )( 'keeps browser capture when seed %i has separate interaction states', async interactiveSeed => {
+	const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
+	const outputDir = mkdtempSync( join( parent, 'template-deferral-interactions-' ) );
+	const members = [ '/', '/verifier/', '/tail/' ].map( path => origin + path );
+	const group = { size: members.length, representative: members[ 0 ]!, members };
+	const deferral = new TemplateClusterDeferral( { sourceUrl: origin, outputDir, governors: new SourceRequestGovernors() }, () => [ group ] );
+	const document = vi.spyOn( deferral, 'document' );
+	try {
+		writeFileSync( join( outputDir, 'seed.html' ), page( 'seed' ) );
+		for ( const [ index, url ] of members.slice( 0, 2 ).entries() ) deferral.routeCaptured( url, 'seed.html', index === interactiveSeed );
+		await deferral.waitForCheck();
+		expect( deferral.pending( members[ 2 ]! ) ).toBe( false );
+		expect( deferral.defers( members[ 2 ]! ) ).toBe( false );
+		expect( document ).not.toHaveBeenCalled();
+	} finally {
+		await deferral.close();
+		rmSync( outputDir, { recursive: true, force: true } );
+	}
+} );
+
 it.each( [
 	{ name: 'seeded verifier sorts after the other members', members: [ '/product/rep/', '/product/sb-030/', '/product/alpha/', '/product/beta/' ] },
 	{ name: 'seeded verifier sorts first', members: [ '/product/rep/', '/product/alpha/', '/product/sb-030/', '/product/zeta/' ] },

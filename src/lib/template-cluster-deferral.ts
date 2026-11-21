@@ -52,6 +52,7 @@ export interface TemplateClusterDeferralInput {
 
 export class TemplateClusterDeferral {
 	private readonly captured = new Map< string, string >();
+	private readonly interactive = new Set< string >();
 	private readonly started = new Set< string >();
 	private readonly settled = new Set< string >();
 	private readonly activeChecks = new Set< Promise< void > >();
@@ -65,11 +66,12 @@ export class TemplateClusterDeferral {
 	constructor( private readonly input: TemplateClusterDeferralInput, private readonly groups: () => readonly Group[] ) {}
 
 	/** The browser pass captured `url`; `htmlPath` is its desktop document. */
-	routeCaptured( url: string, htmlPath: string | undefined ): void {
+	routeCaptured( url: string, htmlPath: string | undefined, hasInteractionStates = false ): void {
 		if ( ! htmlPath ) return;
 		const file = resolve( this.input.outputDir, htmlPath );
 		if ( ! pathWithin( this.input.outputDir, file ) ) return;
 		this.captured.set( normalizedUrl( url ), file );
+		if ( hasInteractionStates ) this.interactive.add( normalizedUrl( url ) );
 		for ( const group of this.groups() ) {
 			if ( group.size < 2 || this.started.has( group.representative ) ) continue;
 			// The member route ranking admits beside the representative, and the one
@@ -131,6 +133,10 @@ export class TemplateClusterDeferral {
 	}
 
 	private async check( group: Group, verifier: string ): Promise< void > {
+		// Derivation transplants HTML, not the separate interaction reports used
+		// by export to wire menus and dialogs. Until it can project those reports,
+		// interactive seeds cannot prove that a tail member is portable.
+		if ( [ group.representative, verifier ].some( url => this.interactive.has( normalizedUrl( url ) ) ) ) return;
 		const { deriveMemberDocument, compareDerivedWithCapture } = await import( './template-clusters.js' );
 		const repProcessedHtml = this.capturedHtml( group.representative );
 		const realHtml = this.capturedHtml( verifier );

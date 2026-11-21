@@ -81,9 +81,10 @@ export interface ScreenshotOpts {
 	onProgress?: ( current: number, total: number, url: string ) => void;
 	/**
 	 * Fired once per route whose documents were saved, with their paths
-	 * relative to `outputDir` and whether the capture already stored a URL's bytes.
+	 * relative to `outputDir`, whether the capture already stored a URL's bytes,
+	 * and whether separate interaction states must be preserved by export.
 	 */
-	onRouteCaptured?: ( url: string, documents: string[], stored: ( resourceUrl: string ) => boolean ) => void;
+	onRouteCaptured?: ( url: string, documents: string[], stored: ( resourceUrl: string ) => boolean, hasInteractionStates: boolean ) => void;
 	/**
 	 * Learn how the source sizes itself by sweeping viewport widths with its
 	 * runtime alive, then emit the learned CSS instead of the pixels that

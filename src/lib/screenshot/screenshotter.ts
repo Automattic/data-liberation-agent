@@ -2112,7 +2112,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		}
 		if ( ( entry.html || entry.mobileHtml ) && ! entry.redirectedTo ) {
 			const documents = [ entry.html, entry.mobileHtml, ...Object.values( entry.profiles ?? {} ).map( profile => profile.html ) ];
-			opts.onRouteCaptured?.( url, [ ...new Set( documents.filter( ( path ): path is string => Boolean( path ) ) ) ], resource => resourceStore.has( resource ) );
+			opts.onRouteCaptured?.( url, [ ...new Set( documents.filter( ( path ): path is string => Boolean( path ) ) ) ], resource => resourceStore.has( resource ), Boolean( entry.interactions?.states.length ) );
 		}
 		completed++;
 		const routeMs = Date.now() - routeStartedAt;
@@ -2171,7 +2171,6 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 						const from = Math.max( 1, cursor );
 						urls.splice( from, urls.length - from, ...opts.prioritizePendingRoutes!( urls.slice( from ) ) );
 					}
-					if ( ! running.size && cursor < urls.length ) await ensureSharedChrome();
 				}
 				// Completions during asynchronous expansion/probing must be expanded
 				// before their newly freed slots admit another route.
@@ -2186,6 +2185,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					urlsSinceRestart = 0;
 				}
 				while ( budgetAdmits() && running.size < concurrency && admission.admit( admission.kind( urls[ cursor ]! ), runningKinds.values() ) ) {
+					// The segment loop established chrome evidence before successor
+					// admission. Keep that guarantee even when this pool never idles.
+					if ( cursor > 0 ) await ensureSharedChrome();
 					const url = urls[ cursor++ ];
 					const kind = admission.kind( url );
 					urlsSinceRestart++;
