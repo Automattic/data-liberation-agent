@@ -693,6 +693,8 @@ export class CapturedResourceStore {
 	getReplayableResponse( url: string, resourceType: string, requestHeaders: Record< string, string > = {}, report?: ( outcome: import('../source-request-governor.js').SourceReplayOutcome ) => void ): CapturedResourceReplay | undefined {
 		const miss = (reason: 'type_not_replayable' | 'no_entry' | 'vary_mismatch' | 'stale' | 'uncacheable') => { report?.(`miss:${reason}`); return undefined; };
 		if ( ! REPLAYABLE_RESOURCE_TYPES.has( resourceType ) && ! isPrefetch( resourceType, requestHeaders ) ) return miss('type_not_replayable');
+		// Image requests can retain an SVG fragment that response.url() omits.
+		if ( resourceType === 'image' ) url = url.split( '#', 1 )[ 0 ];
 		const resource = this.replayResources.get( url );
 		const metadata = this.replayMetadata.get( url );
 		if (!resource || !metadata) return miss(this.uncacheableReplayUrls.has(url) || this.browserLoadedResources.has(url) || this.manifest.resources[url] ? 'uncacheable' : 'no_entry');
@@ -1037,7 +1039,8 @@ export class CapturedResourceStore {
 				this.manifest.omissions = this.manifest.omissions.filter( omission => omission.url !== url );
 			}
 			this.deferredImages.set( url, response );
-			return Promise.resolve();
+			resourceUrl.hash = '';
+			return this.captureReplayOnly( response, resourceUrl );
 		}
 		const existing = this.captures.get( url );
 		if ( existing ) return existing;
