@@ -218,6 +218,17 @@ describe( 'exportWebsiteCapture', () => {
 			expect( values.slice( destinations.length ) ).toEqual( unchanged );
 		}
 	} );
+	it( 'reports unproven box trees from capture profiles in export diagnostics', () => {
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		const sourceUrl = 'https://example.test/';
+		const diagnostic = { code: 'box_tree_unproven', reason: 'Saved mobile document could not be bound: unstamped node at html[n0]>head' };
+		capture.page( sourceUrl, '<h1>Home</h1>', { entry: { html: 'html/homepage.html', profiles: { mobile: { viewport: { width: 390, height: 844 }, diagnostics: [ diagnostic ] } } } } );
+		exportWebsiteCapture( { outputDir, sourceUrl, platform: 'generic', summary: {}, failures: [] } );
+		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
+		expect( diagnostics.discoveryDiagnostics ).toContainEqual( { ...diagnostic, url: sourceUrl } );
+	} );
+
 	it( 'names the capture-stage cause when the homepage has no manifest entry', () => {
 		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
 		const outputDir = capture.build();
