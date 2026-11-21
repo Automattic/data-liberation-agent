@@ -21,22 +21,30 @@
  * canonicalizes each route again after its stylesheets became linked files, so
  * the markup then shows only some of the instance's components; renaming it
  * from that subset would leave every external rule pointing at the old name.
+ *
+ * Export passes `linkedNames`, the ids its stylesheet files select (see
+ * `wixStylesheetNames`), which it cannot rename. An instance they select keeps
+ * the name its rules use, on every route; the other instances are named as
+ * before, so a route that capture kept as captured stays styled.
  */
 const INSTANCE_REFERENCE = /\b(comp-[a-z0-9]+)_r_(comp-[a-z0-9]+)/gi;
 const CANONICAL_INSTANCE = /^comp-dla[0-9a-f]{8}$/i;
+const INSTANCE_TOKEN = /(?<![a-z0-9_-])(comp-[a-z0-9]+)(?![a-z0-9])/gi;
+const NO_NAMES: ReadonlySet< string > = new Set();
 
-export function canonicalizeWixInstanceIds( html: string, document: string = html ): string {
+export function canonicalizeWixInstanceIds( html: string, document: string = html, linkedNames: ReadonlySet< string > = NO_NAMES ): string {
 	const tokenByInstance = new Map( instanceTokens( document ) );
 	if ( document !== html ) {
 		for ( const [ instance, token ] of instanceTokens( html ) ) if ( ! tokenByInstance.has( instance ) ) tokenByInstance.set( instance, token );
 	}
-	if ( tokenByInstance.size === 0 ) return html;
 	// Two instances scoping the same components on one page would collapse into
 	// one token and merge rules meant for different elements. Keep such a page
-	// exactly as captured rather than guess.
+	// exactly as captured rather than guess, before linked sheets narrow the set.
 	if ( new Set( tokenByInstance.values() ).size !== tokenByInstance.size ) return html;
 	const named = new Set( [ ...`${ document }\n${ html }`.matchAll( INSTANCE_REFERENCE ) ].map( ( [ , instance ] ) => instance!.toLowerCase() ).filter( instance => CANONICAL_INSTANCE.test( instance ) ) );
 	if ( [ ...tokenByInstance.values() ].some( token => named.has( token ) ) ) return html;
+	for ( const instance of tokenByInstance.keys() ) if ( linkedNames.has( instance.toLowerCase() ) ) tokenByInstance.delete( instance );
+	if ( tokenByInstance.size === 0 ) return html;
 
 	// The instance element carries the bare instance id too (`id="<instance>"`,
 	// `<instance>-container`), and the page stylesheet targets it, so every
@@ -73,15 +81,16 @@ const FORM_CONTROL_COUNTER = /(?<![a-z0-9_-])(checkbox-\d+)(?![a-z0-9_-])/gi;
 const FORM_CONTROL_ID = /\sid=(["'])(checkbox-\d+)\1/gi;
 const FORM_FIELD_HOOK = /data-hook=(["'])(form-field-[^"']+)\1/gi;
 
-export function canonicalizeWixFormControlIds( html: string, document: string = html ): string {
+export function canonicalizeWixFormControlIds( html: string, document: string = html, linkedNames: ReadonlySet< string > = NO_NAMES ): string {
 	const tokenById = formControlTokens( document );
 	if ( ! tokenById ) return html;
 	if ( document !== html ) {
 		const own = formControlTokens( html );
 		for ( const [ id, token ] of own ?? [] ) if ( ! tokenById.has( id ) ) tokenById.set( id, token );
 	}
-	if ( tokenById.size === 0 ) return html;
 	if ( new Set( tokenById.values() ).size !== tokenById.size ) return html;
+	for ( const id of tokenById.keys() ) if ( linkedNames.has( id.toLowerCase() ) ) tokenById.delete( id );
+	if ( tokenById.size === 0 ) return html;
 	return html.replace( FORM_CONTROL_COUNTER, ( match ) => tokenById.get( match ) ?? match );
 }
 
@@ -107,8 +116,22 @@ function formControlTokens( html: string ): Map< string, string > | undefined {
 }
 
 /** Every Wix runtime-id canonicalization a captured document, or markup captured from it, needs. */
-export function canonicalizeWixCapturedHtml( html: string, document: string = html ): string {
-	return canonicalizeWixFormControlIds( canonicalizeWixInstanceIds( html, document ), canonicalizeWixInstanceIds( document ) );
+export function canonicalizeWixCapturedHtml( html: string, document: string = html, linkedNames: ReadonlySet< string > = NO_NAMES ): string {
+	const page = canonicalizeWixInstanceIds( document, document, linkedNames );
+	const markup = html === document ? page : canonicalizeWixInstanceIds( html, document, linkedNames );
+	return canonicalizeWixFormControlIds( markup, page, linkedNames );
+}
+
+const CSS_ESCAPE = /\\([^0-9a-f\r\n])/gi;
+
+/**
+ * The instance and form control ids a stylesheet selects, lowercased: each as
+ * the rewrite would match it, so a longer id that only starts with one does not
+ * count. An escaped character (`#comp\-x`) counts as the character itself.
+ */
+export function wixStylesheetNames( css: string ): string[] {
+	const text = css.replace( CSS_ESCAPE, '$1' );
+	return [ ...text.matchAll( INSTANCE_TOKEN ), ...text.matchAll( FORM_CONTROL_COUNTER ) ].map( ( [ , id ] ) => id!.toLowerCase() );
 }
 
 function escapeRegExp( text: string ): string {
