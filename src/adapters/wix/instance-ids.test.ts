@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { canonicalizeWixCapturedHtml, canonicalizeWixFormControlIds, canonicalizeWixInstanceIds, wixStylesheetNames } from './instance-ids.js';
 
-const linked = ( ...sheets: string[] ) => new Set( sheets.flatMap( wixStylesheetNames ) );
+const linked = ( ...sheets: string[] ) => new Set( sheets.flatMap( sheet => [ ...wixStylesheetNames( sheet ) ] ) );
 
 const page = ( instance: string, extra = '' ) =>
 	`<html><head><style>#${ instance }{position:sticky}.${ instance }-container{margin:0}` +
@@ -77,6 +77,15 @@ describe( 'canonicalizeWixInstanceIds', () => {
 		expect( out ).toContain( 'class="comp-aaaa1111_r_comp-nav"' );
 		expect( out ).toMatch( /class="comp-dla[0-9a-f]{8}_r_comp-copyright"/ );
 		expect( canonicalizeWixCapturedHtml( exported, undefined, linked( '#comp-aaaa11112{top:0}' ) ) ).not.toContain( 'comp-aaaa1111_r_' );
+	} );
+
+	it( 'does not count an id named only in a stylesheet comment', () => {
+		expect( wixStylesheetNames( '/* old component comp-aaaa1111 */ body{margin:0}/* checkbox-5' ).size ).toBe( 0 );
+		expect( canonicalizeWixCapturedHtml( page( 'comp-aaaa1111' ), undefined, linked( '/* old component comp-aaaa1111 */ body{margin:0}' ) ) ).not.toContain( 'comp-aaaa1111' );
+	} );
+
+	it( 'collects each selected id once, however often a sheet repeats it', () => {
+		expect( [ ...wixStylesheetNames( '#comp-aaaa1111{z-index:1}'.repeat( 50_000 ) ) ] ).toEqual( [ 'comp-aaaa1111' ] );
 	} );
 
 	it( 'reads an escaped selector in a linked stylesheet as the id it selects', () => {

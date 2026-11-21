@@ -37,6 +37,7 @@ export function canonicalizeWixInstanceIds( html: string, document: string = htm
 	if ( document !== html ) {
 		for ( const [ instance, token ] of instanceTokens( html ) ) if ( ! tokenByInstance.has( instance ) ) tokenByInstance.set( instance, token );
 	}
+	if ( tokenByInstance.size === 0 ) return html;
 	// Two instances scoping the same components on one page would collapse into
 	// one token and merge rules meant for different elements. Keep such a page
 	// exactly as captured rather than guess, before linked sheets narrow the set.
@@ -88,6 +89,7 @@ export function canonicalizeWixFormControlIds( html: string, document: string = 
 		const own = formControlTokens( html );
 		for ( const [ id, token ] of own ?? [] ) if ( ! tokenById.has( id ) ) tokenById.set( id, token );
 	}
+	if ( tokenById.size === 0 ) return html;
 	if ( new Set( tokenById.values() ).size !== tokenById.size ) return html;
 	for ( const id of tokenById.keys() ) if ( linkedNames.has( id.toLowerCase() ) ) tokenById.delete( id );
 	if ( tokenById.size === 0 ) return html;
@@ -122,16 +124,21 @@ export function canonicalizeWixCapturedHtml( html: string, document: string = ht
 	return canonicalizeWixFormControlIds( markup, page, linkedNames );
 }
 
+const CSS_COMMENT = /\/\*[\s\S]*?(?:\*\/|$)/g;
 const CSS_ESCAPE = /\\([^0-9a-f\r\n])/gi;
 
 /**
  * The instance and form control ids a stylesheet selects, lowercased: each as
  * the rewrite would match it, so a longer id that only starts with one does not
- * count. An escaped character (`#comp\-x`) counts as the character itself.
+ * count. Comments select nothing, and an escaped character (`#comp\-x`) counts
+ * as the character itself.
  */
-export function wixStylesheetNames( css: string ): string[] {
-	const text = css.replace( CSS_ESCAPE, '$1' );
-	return [ ...text.matchAll( INSTANCE_TOKEN ), ...text.matchAll( FORM_CONTROL_COUNTER ) ].map( ( [ , id ] ) => id!.toLowerCase() );
+export function wixStylesheetNames( css: string ): Set< string > {
+	const text = css.replace( CSS_COMMENT, ' ' ).replace( CSS_ESCAPE, '$1' );
+	const names = new Set< string >();
+	for ( const match of text.matchAll( INSTANCE_TOKEN ) ) names.add( match[ 1 ]!.toLowerCase() );
+	for ( const match of text.matchAll( FORM_CONTROL_COUNTER ) ) names.add( match[ 1 ]!.toLowerCase() );
+	return names;
 }
 
 function escapeRegExp( text: string ): string {
