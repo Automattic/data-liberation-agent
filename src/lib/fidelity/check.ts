@@ -427,6 +427,7 @@ export async function observePage(
 				if ( pose.x || pose.y || pose.innerY ) throw new Error( `Observation pose unproven: baseline callback left the document scrolled to (${ pose.x }, ${ pose.y }), inner scroller at ${ pose.innerY }` );
 			}
 		}
+		const clickUnresolved = ! localOrigin && ! captureSession;
 		const measured = await page.evaluate( async ( { clickUnresolved, skipScrollProbe }: { clickUnresolved: boolean; skipScrollProbe: boolean } ) => {
 			const globalWithName = globalThis as typeof globalThis & { __name?: (fn: unknown) => unknown };
 			if (typeof globalWithName.__name === 'undefined') globalWithName.__name = fn => fn;
@@ -1077,7 +1078,14 @@ export async function observePage(
 				hashTargets,
 				internalPaths,
 			};
-		}, { clickUnresolved: ! localOrigin && ! captureSession, skipScrollProbe } );
+		}, { clickUnresolved, skipScrollProbe } );
+		// The in-page scroll and fragment probes park the document back at its
+		// pose with a bare scrollTo: no settle, and a throttled or debounced
+		// scroll handler may still hold its scrolled state (a sticky header in
+		// its scrolled look). Restore the rest pose the same way the sweep does,
+		// so anything rendered after observation — the frozen screenshot, the
+		// dialog probes — sees the document as a visitor at the top does.
+		if ( ! skipScrollProbe || clickUnresolved ) await restoreTopScrollState( page );
 
 		const internalRoutes: InternalRouteOutcome[] = [];
 		if ( localOrigin ) {
