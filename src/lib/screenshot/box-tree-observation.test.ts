@@ -113,6 +113,34 @@ it('names the first node at which saved bytes and the observed tree disagree', (
 	expect(mismatch(doc('<p data-blocks-engine-node-id="n4"></p><p data-blocks-engine-node-id="n3"></p>'))).toMatchObject({ kind: 'moved', id: 'n4', parent: 'n2', path: 'html[n0]>body[n2]>p[n4]' });
 	expect(mismatch(doc('<p data-blocks-engine-node-id="n3"><i data-blocks-engine-node-id="n9"></i></p>'))).toMatchObject({ kind: 'extra', id: 'n9', parent: 'n3' });
 	expect(describeBoxTreeMismatch(mismatch(doc('<p data-blocks-engine-node-id="n3"><b></b></p>'))!)).toBe('unstamped node at html[n0]>body[n2]>p[n3]>b');
+	// Capture-owned, non-rendering elements have no box; unmarked source scripts still fail by name.
+	const owned = '<style data-blocks-engine-capture-width-class-rules></style><p data-blocks-engine-node-id="n3"></p><p data-blocks-engine-node-id="n4"></p><script data-blocks-engine-capture-native-control-runtime></script>';
+	expect(bindBoxTreeEvidence(doc(owned), tree)).toHaveProperty('tree');
+	expect(describeBoxTreeMismatch(mismatch(doc('<p data-blocks-engine-node-id="n3"></p><p data-blocks-engine-node-id="n4"></p><script></script>'))!)).toBe('unstamped node at html[n0]>body[n2]>script');
+});
+
+// One Chromium pass (~1 second). The native-control runtime is appended after
+// observation (#2187), so a page with a stateful checkbox lost its box tree.
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('binds a page whose stateful checkbox adds the native-control runtime', async () => {
+	const browser = await chromium.launch({ headless: true });
+	try {
+		const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+		await page.setContent('<!doctype html><html><head><title>Form</title></head><body><form><input type="checkbox" name="news"></form></body></html>');
+		await page.check('input');
+		await stampNodeIds(page);
+		let observation: BoxTreeObservation | undefined;
+		const html = await capturePageHtml(page, [], undefined, observed => { observation = observed; });
+		expect(html).toContain('data-blocks-engine-capture-native-control-runtime');
+		expect(observation).toHaveProperty('nodes');
+		const nodes = observation && 'nodes' in observation ? observation.nodes : {};
+		let unproven: BoxTreeMismatch | undefined;
+		const tree = await captureBoxTree(page, html, { mobile: { width: 390, height: 844 }, desktop: { width: 1440, height: 900 } }, { name: 'mobile', nodes }, mismatch => { unproven = mismatch; });
+		expect(unproven).toBeUndefined();
+		expect(tree && Object.keys(tree.viewports).sort()).toEqual(['desktop', 'mobile']);
+		expect(bindBoxTree(html, tree)).toEqual(tree);
+	} finally {
+		await browser.close();
+	}
 });
 
 // One Chromium pass (~1 second). Wix inserted a head <script> during the
