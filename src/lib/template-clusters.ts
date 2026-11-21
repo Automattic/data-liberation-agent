@@ -280,7 +280,33 @@ function resolveAnchor( body: Element, anchor: SlotAnchor, matches: ( node: Elem
 
 /** Serialize one node through a Cheerio API (cheerio has no module-level serializer). */
 const html$ = ( html: string ) => cheerio.load( html );
-const serializeNode = ( node: AnyNode ): string => html$( '<w></w>' ).html( node as never ) ?? '';
+const serializer = html$( '<w></w>' );
+const serializeNode = ( node: AnyNode ): string => serializer.html( node as never ) ?? '';
+
+/**
+ * An identity per node, equal exactly when two nodes serialize alike, built
+ * bottom-up from interned child identities: linear in the nodes, where
+ * comparing serializations of every subtree is quadratic in the document.
+ */
+function structuralIdentity(): ( node: AnyNode ) => number {
+	const ids = new Map< string, number >();
+	const memo = new WeakMap< AnyNode, number >();
+	const intern = ( key: string ): number => {
+		let id = ids.get( key );
+		if ( id === undefined ) ids.set( key, id = ids.size );
+		return id;
+	};
+	const identity = ( node: AnyNode ): number => {
+		let id = memo.get( node );
+		if ( id !== undefined ) return id;
+		if ( isElement( node ) ) id = intern( `${ node.type } ${ node.name }${ Object.entries( node.attribs ).map( ( [ name, value ] ) => ` ${ name }=${ JSON.stringify( value ) }` ).join( '' ) } [${ node.children.map( identity ).join( ',' ) }]` );
+		else if ( node.type === 'text' || node.type === 'comment' ) id = intern( `${ node.type } ${ ( node as unknown as { data: string } ).data }` );
+		else id = intern( serializeNode( node ) );
+		memo.set( node, id );
+		return id;
+	};
+	return identity;
+}
 
 /** Every child node, text and styles included, as HTML; skipped elements stay out. */
 function serializeChildNodes( element: Element ): string {
@@ -344,33 +370,45 @@ function findServerSlots( repElement: Element, memberElement: Element, slots: Sl
 	}
 }
 
-/** Does the member's slot subtree hold behaviour capture never observed in the browser? */
-function slotRuntimeObservation( element: Element, representative: Element ): { runtime: boolean; unobserved: boolean } {
-	// Exact server elements share capture's observation. Changed handlers and
-	// embeds still need a browser pass; lazy media and hydration stay guarded.
-	const observed = new Set< string >();
-	const collect = ( node: Element ): void => {
-		observed.add( serializeNode( node ) );
-		for ( const child of node.children ) if ( isElement( child ) ) collect( child );
-	};
-	collect( representative );
-	let runtime = false;
-	let unobserved = false;
-	const walk = ( node: Element ): void => {
-		const shared = observed.has( serializeNode( node ) );
-		if ( ! shared && [ 'iframe', 'video', 'canvas', 'object', 'embed' ].includes( node.name ) ) runtime = true;
-		for ( const attribute of Object.keys( node.attribs ) ) {
-			if ( ! shared && /^on[a-z]+$/i.test( attribute ) ) runtime = true;
-			// Media swapped by a runtime (lazy loaders, background rotators): the
-			// rendered URL was never observed for this member, so the transplant
-			// would ship the placeholder instead of the asset.
-			if ( /^data-(?:src|srcset|lazy|original|poster|video|bg|background)$/i.test( attribute ) ) unobserved = true;
-			if ( /^data-(?:reactroot|hydrat|astro|vue|svelte|n-)/i.test( attribute ) ) runtime = true;
+/**
+ * Does a member's slot subtree hold behaviour capture never observed in the
+ * browser? One observer per derivation: slots under the same representative
+ * element share its observed identities.
+ */
+function slotRuntimeObserver(): ( element: Element, representative: Element ) => { runtime: boolean; unobserved: boolean } {
+	const identity = structuralIdentity();
+	const observedBy = new WeakMap< Element, Set< number > >();
+	return ( element, representative ) => {
+		// Exact server elements share capture's observation. Changed handlers and
+		// embeds still need a browser pass; lazy media and hydration stay guarded.
+		let observed = observedBy.get( representative );
+		if ( ! observed ) {
+			const identities = new Set< number >();
+			const collect = ( node: Element ): void => {
+				identities.add( identity( node ) );
+				for ( const child of node.children ) if ( isElement( child ) ) collect( child );
+			};
+			collect( representative );
+			observedBy.set( representative, observed = identities );
 		}
-		for ( const child of node.children ) if ( isElement( child ) ) walk( child );
+		let runtime = false;
+		let unobserved = false;
+		const walk = ( node: Element ): void => {
+			const shared = observed.has( identity( node ) );
+			if ( ! shared && [ 'iframe', 'video', 'canvas', 'object', 'embed' ].includes( node.name ) ) runtime = true;
+			for ( const attribute of Object.keys( node.attribs ) ) {
+				if ( ! shared && /^on[a-z]+$/i.test( attribute ) ) runtime = true;
+				// Media swapped by a runtime (lazy loaders, background rotators): the
+				// rendered URL was never observed for this member, so the transplant
+				// would ship the placeholder instead of the asset.
+				if ( /^data-(?:src|srcset|lazy|original|poster|video|bg|background)$/i.test( attribute ) ) unobserved = true;
+				if ( /^data-(?:reactroot|hydrat|astro|vue|svelte|n-)/i.test( attribute ) ) runtime = true;
+			}
+			for ( const child of node.children ) if ( isElement( child ) ) walk( child );
+		};
+		walk( element );
+		return { runtime, unobserved };
 	};
-	walk( element );
-	return { runtime, unobserved };
 }
 
 /**
@@ -608,6 +646,7 @@ export function deriveMemberDocument( input: {
 	}
 	const mounts = hydratedMounts( repBody, processedBody, anchorCounts );
 	const located = slots.map( slot => ( { slot, anchor: slotAnchor( slot.repNode, repBody, anchorCounts ) } ) );
+	const slotRuntimeObservation = slotRuntimeObserver();
 	// Content gate before any mapping: one runtime-only slot escalates the member.
 	for ( const { slot, anchor } of located ) {
 		if ( slot.kind !== 'subtree' && slot.kind !== 'element' ) continue;
