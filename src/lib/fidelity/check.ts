@@ -430,24 +430,31 @@ export async function observePage(
 		const measured = await page.evaluate( async ( { clickUnresolved, skipScrollProbe }: { clickUnresolved: boolean; skipScrollProbe: boolean } ) => {
 			const globalWithName = globalThis as typeof globalThis & { __name?: (fn: unknown) => unknown };
 			if (typeof globalWithName.__name === 'undefined') globalWithName.__name = fn => fn;
-			// Perceptual identity for one image: fetch the bytes (cache-warm —
-			// the page just rendered them), decode locally, downscale to 8x8
-			// grayscale, threshold at the mean. Fetching keeps this
-			// cross-origin safe where canvas reads of the element would taint;
-			// any failure leaves null and the key-only matcher covers it.
-			const hashCache = new Map< string, Promise< { contentHash: string; assetHash: string | null } | null > >();
-			const contentHashFor = ( src: string ): Promise< { contentHash: string; assetHash: string | null } | null > => {
+			// Resource and perceptual identity for one image: fetch the bytes
+			// (cache-warm — the page just rendered them), digest them, then decode
+			// locally, downscale to 8x8 grayscale and threshold at the mean.
+			// Fetching keeps this cross-origin safe where canvas reads of the
+			// element would taint. The digest does not depend on decoding:
+			// createImageBitmap rejects formats such as SVG, and that must not
+			// discard byte identity. Any failure leaves null and the key-only
+			// matcher covers it.
+			const hashCache = new Map< string, Promise< { contentHash: string | null; assetHash: string | null } | null > >();
+			const contentHashFor = ( src: string ): Promise< { contentHash: string | null; assetHash: string | null } | null > => {
 				const cached = hashCache.get( src );
 				if ( cached ) return cached;
 				const pending = ( async () => {
+					let blob: Blob, assetHash: string | null;
 					try {
 						if ( ! src || src.startsWith( 'data:' ) || src.startsWith( 'blob:' ) ) return null;
 						const response = await fetch( src, { mode: 'cors', credentials: 'omit', signal: AbortSignal.timeout( 5000 ) } );
 						if ( ! response.ok ) return null;
-						const blob = await response.blob();
-						const bytes = await blob.arrayBuffer();
-						const digest = await globalThis.crypto?.subtle?.digest( 'SHA-256', bytes );
-						const assetHash = digest ? Array.from( new Uint8Array( digest ), byte => byte.toString( 16 ).padStart( 2, '0' ) ).join( '' ) : null;
+						blob = await response.blob();
+						const digest = await globalThis.crypto?.subtle?.digest( 'SHA-256', await blob.arrayBuffer() );
+						assetHash = digest ? Array.from( new Uint8Array( digest ), byte => byte.toString( 16 ).padStart( 2, '0' ) ).join( '' ) : null;
+					} catch {
+						return null;
+					}
+					try {
 						const bitmap = await createImageBitmap( blob );
 						const side = 8;
 						const canvas = new OffscreenCanvas( side, side );
@@ -470,7 +477,7 @@ export async function observePage(
 						}
 						return { contentHash: value, assetHash };
 					} catch {
-						return null;
+						return assetHash ? { contentHash: null, assetHash } : null;
 					}
 				} )();
 				hashCache.set( src, pending );

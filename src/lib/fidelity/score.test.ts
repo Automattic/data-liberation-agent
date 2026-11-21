@@ -322,6 +322,29 @@ describe( 'scoreViewport', () => {
 		}
 	}, 30_000 );
 
+	it.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) )( 'keeps the resource digest of an image the browser cannot bitmap-decode, so a renamed copy still pairs', async ({ serve, newPage }) => {
+		const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="176" height="79"><rect width="176" height="79" fill="#2a6"/></svg>';
+		const { server } = await serve(( request, response ) => {
+			if ( request.url?.endsWith( '.svg' ) ) {
+				response.writeHead( 200, { 'content-type': 'image/svg+xml' } );
+				response.end( svg );
+			} else {
+				const name = request.url === '/copy' ? '/uploads/logo.svg' : '/media/brand-logo-horizontal.svg';
+				response.writeHead( 200, { 'content-type': 'text/html' } );
+				response.end( `<img src="${ name }" alt="Brand" style="display:block;width:176px;height:79px">` );
+			}
+		});
+		const origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
+		const page = await newPage( { viewport: { width: 768, height: 900 } } );
+		const source = await observePage( page, origin, 768, 0, null );
+		const copy = await observePage( page, `${ origin }/copy`, 768, 0, origin );
+		expect( source.images ).toHaveLength( 1 );
+		expect( source.images[ 0 ].assetHash ).toMatch( /^[a-f0-9]{64}$/ );
+		expect( copy.images[ 0 ].assetHash ).toBe( source.images[ 0 ].assetHash );
+		expect( matchRenderedImages( source.images, copy.images ) ).toHaveLength( 1 );
+		expect( scoreViewport( source, copy ).failures.join( '\n' ) ).not.toContain( 'missing' );
+	}, 30_000 );
+
 	it( 'refuses to score mismatched viewports', () => {
 		expect( () => scoreViewport( at( 1440 ), at( 1600 ) ) ).toThrow( /mismatched viewports/ );
 	} );
