@@ -8,7 +8,7 @@ import { rewriteWixDerivedMedia } from './derived-media.js';
 import { resolveEventFormRedirect } from './event-forms.js';
 import { providerCreditRules } from '../../lib/source-cleanup.js';
 import type { Locator, Page } from 'playwright';
-import { canonicalizeWixCapturedHtml } from './instance-ids.js';
+import { canonicalizeWixCapturedHtml, wixStylesheetNames } from './instance-ids.js';
 import { wixDocumentSelection, wixAdditionalProfiles } from './document-selection.js';
 import { preserveWixCollections } from './collections.js';
 import { markMemberLoginControls, MEMBER_LOGIN_ATTRIBUTE, MEMBER_LOGIN_CLASS_PREFIX } from '../../lib/member-login.js';
@@ -721,7 +721,8 @@ export const capture: LiberationHooks = {
 	referenceWidths: [ 390, 768, 1440 ],
   resolveClientRedirect: resolveEventFormRedirect,
   rewriteDerivedMedia: rewriteWixDerivedMedia,
-  canonicalizeHtml: ( html, document, linkedStylesheets ) => canonicalizeWixCapturedHtml( restoreWixBlurredImageSources( preserveWixCollections( html ) ), document, linkedStylesheets ),
+  canonicalizeHtml: ( html, document, linkedNames ) => canonicalizeWixCapturedHtml( restoreWixBlurredImageSources( preserveWixCollections( html ) ), document, linkedNames ),
+  stylesheetNames: wixStylesheetNames,
   cleanupRules: [
     // Wix publishes the measured height of its own banner into these, and its
     // layout reads them from the sticky header, the page root and the pinned

@@ -80,11 +80,17 @@ export interface LiberationHooks {
    * static copy. Must be deterministic and keep markup and in-document CSS
    * paired. Markup captured from a page (an opened dialog) comes with that
    * page's raw `document`, and must take the names the document gets.
-   * Export passes the text of every stylesheet file it emitted as
-   * `linkedStylesheets`, which it cannot rename: an identifier they select must
-   * keep its name, on every route.
+   * Export passes `linkedNames`, what `stylesheetNames` found in the
+   * stylesheet files it emitted, which it cannot rename: an identifier they
+   * select must keep its name, on every route.
    */
-  canonicalizeHtml?(html: string, document?: string, linkedStylesheets?: readonly string[]): string;
+  canonicalizeHtml?(html: string, document?: string, linkedNames?: ReadonlySet<string>): string;
+  /**
+   * The identifiers in one stylesheet that `canonicalizeHtml` would rename.
+   * Export reads each emitted stylesheet file once and passes the union to
+   * every route's `canonicalizeHtml`.
+   */
+  stylesheetNames?(css: string): Iterable<string>;
   /** Resolve derived runtime media from the member's memoized light render.
    * Undefined declines the member; capture verification remains unchanged. */
   rewriteDerivedMedia?(input: {

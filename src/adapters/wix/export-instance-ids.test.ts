@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { exportWebsiteCapture } from '../../lib/capture-export.js';
 import { checkSelfConsistency } from '../../lib/fidelity/self-consistency.js';
-import { canonicalizeWixCapturedHtml } from './instance-ids.js';
+import { canonicalizeWixCapturedHtml, wixStylesheetNames } from './instance-ids.js';
 
 const dirs: string[] = [];
 afterEach( () => {
@@ -53,7 +53,7 @@ function exportRoutes( routes: Route[], resources: Record< string, string > = {}
 		} );
 		writeFileSync( join( outputDir, 'resources', 'manifest.json' ), JSON.stringify( { version: 1, resources: manifest, failures: [] } ) );
 	}
-	exportWebsiteCapture( { outputDir, sourceUrl: `${ ORIGIN }/`, platform: 'wix', canonicalizeHtml: canonicalizeWixCapturedHtml, summary: {}, failures: [] } );
+	exportWebsiteCapture( { outputDir, sourceUrl: `${ ORIGIN }/`, platform: 'wix', canonicalizeHtml: canonicalizeWixCapturedHtml, stylesheetNames: wixStylesheetNames, summary: {}, failures: [] } );
 	const website = join( outputDir, 'website' );
 	const resolveIncludes = ( html: string ) => html.replace( /<!--#include virtual="([^"]+)" -->/g, ( _match, path: string ) => readFileSync( join( website, path ), 'utf8' ) );
 	// Every stylesheet the page loads: inline, linked, and imported from either.
@@ -123,6 +123,25 @@ describe( 'Wix export canonicalization with linked page stylesheets', () => {
 		expect( exported[ '/target/' ]!.html ).toContain( '<section id="comp-bbbb2222">' );
 		expect( exported[ '/target/' ]!.loadedCss ).toContain( '#comp-bbbb2222{border:1px solid}' );
 		expect( exported[ '/' ]!.html ).toContain( '#comp-bbbb2222"' );
+		const report = checkSelfConsistency( join( dirs.at( -1 )!, 'website' ), new Map( [ [ '/', 'index.html' ], [ '/target/', 'target/index.html' ] ] ) );
+		expect( report.findings.filter( finding => finding.kind === 'anchor-missing' ) ).toEqual( [] );
+	} );
+
+	it( 'renames the other instances when one new name is taken, so fragment links into them resolve', () => {
+		// The home page's second instance would take a name a stylesheet on the
+		// target already selects. Only that instance keeps its captured name; the
+		// shared section is renamed the same way on both routes.
+		const style = '<style>#comp-aaaa1111_r_comp-menu{display:flex}.comp-aaaa1111_r_comp-item{color:rgb(1,2,3)}</style>';
+		const section = '<section id="comp-bbbb2222"><nav class="comp-bbbb2222_r_comp-nav">Offer</nav></section>';
+		const taken = canonicalizeWixCapturedHtml( '<p class="comp-other_r_comp-other"></p>' ).match( /comp-dla[0-9a-f]{8}/ )![ 0 ];
+		const exported = exportRoutes( [
+			{ url: `${ ORIGIN }/`, slug: 'homepage', html: route( 'comp-aaaa1111', style, 'Home', '', `${ section }<p class="comp-other_r_comp-other">Other</p><a href="/target/#comp-bbbb2222">See the offer</a>` ) },
+			{ url: `${ ORIGIN }/target/`, slug: 'target', html: route( 'comp-aaaa1111', style, 'Target', '<link rel="stylesheet" href="https://example.com/offer.css">', section ) },
+		], { [ `${ ORIGIN }/offer.css` ]: `.${ taken }{color:rgb(9,9,9)}` } );
+		expect( exported[ '/' ]!.html ).toContain( 'class="comp-other_r_comp-other"' );
+		const target = /<section id="(comp-dla[0-9a-f]{8})">/.exec( exported[ '/target/' ]!.html )?.[ 1 ];
+		expect( target ).toBeDefined();
+		expect( exported[ '/' ]!.html ).toContain( `#${ target }"` );
 		const report = checkSelfConsistency( join( dirs.at( -1 )!, 'website' ), new Map( [ [ '/', 'index.html' ], [ '/target/', 'target/index.html' ] ] ) );
 		expect( report.findings.filter( finding => finding.kind === 'anchor-missing' ) ).toEqual( [] );
 	} );

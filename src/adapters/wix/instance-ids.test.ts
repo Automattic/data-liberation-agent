@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { canonicalizeWixCapturedHtml, canonicalizeWixFormControlIds, canonicalizeWixInstanceIds } from './instance-ids.js';
+import { canonicalizeWixCapturedHtml, canonicalizeWixFormControlIds, canonicalizeWixInstanceIds, wixStylesheetNames } from './instance-ids.js';
+
+const linked = ( ...sheets: string[] ) => new Set( sheets.flatMap( wixStylesheetNames ) );
 
 const page = ( instance: string, extra = '' ) =>
 	`<html><head><style>#${ instance }{position:sticky}.${ instance }-container{margin:0}` +
@@ -50,7 +52,7 @@ describe( 'canonicalizeWixInstanceIds', () => {
 
 	it( 'leaves a page untouched when two instances scope the same components, even if a linked sheet selects one', () => {
 		const html = page( 'comp-aaaa1111', '<div id="comp-cccc3333" class="comp-cccc3333_r_comp-nav comp-cccc3333_r_comp-logo"></div><p class="comp-dddd4444_r_comp-promo"></p>' );
-		expect( canonicalizeWixInstanceIds( html, html, [ '.comp-aaaa1111_r_comp-nav{color:blue}' ] ) ).toBe( html );
+		expect( canonicalizeWixInstanceIds( html, html, linked( '.comp-aaaa1111_r_comp-nav{color:blue}' ) ) ).toBe( html );
 	} );
 
 	it( 'keeps an instance name once given, even when later markup shows fewer of its components', () => {
@@ -71,10 +73,22 @@ describe( 'canonicalizeWixInstanceIds', () => {
 	it( 'keeps the name of an instance its linked stylesheets select', () => {
 		const exported = page( 'comp-aaaa1111' ).replace( /<style>[\s\S]*?<\/style>/, '<link rel="stylesheet" href="/assets/css/page.css">' ) +
 			'<p class="comp-cccc3333_r_comp-copyright">©</p>';
-		const out = canonicalizeWixCapturedHtml( exported, undefined, [ '.unrelated{color:blue}', '.comp-aaaa1111_r_comp-nav{color:red}' ] );
+		const out = canonicalizeWixCapturedHtml( exported, undefined, linked( '.unrelated{color:blue}', '.comp-aaaa1111_r_comp-nav{color:red}' ) );
 		expect( out ).toContain( 'class="comp-aaaa1111_r_comp-nav"' );
 		expect( out ).toMatch( /class="comp-dla[0-9a-f]{8}_r_comp-copyright"/ );
-		expect( canonicalizeWixCapturedHtml( exported, undefined, [ '#comp-aaaa11112{top:0}' ] ) ).not.toContain( 'comp-aaaa1111_r_' );
+		expect( canonicalizeWixCapturedHtml( exported, undefined, linked( '#comp-aaaa11112{top:0}' ) ) ).not.toContain( 'comp-aaaa1111_r_' );
+	} );
+
+	it( 'keeps only the instance whose new name a linked stylesheet selects', () => {
+		const taken = canonicalizeWixInstanceIds( '<p class="comp-cccc3333_r_comp-promo"></p>' ).match( /comp-dla[0-9a-f]{8}/ )![ 0 ];
+		const out = canonicalizeWixInstanceIds( page( 'comp-aaaa1111', '<p class="comp-cccc3333_r_comp-promo"></p>' ), undefined, linked( `.${ taken }{color:red}` ) );
+		expect( out ).toContain( 'class="comp-cccc3333_r_comp-promo"' );
+		expect( out ).not.toContain( 'comp-aaaa1111' );
+	} );
+
+	it( 'reads an escaped selector in a linked stylesheet as the id it selects', () => {
+		expect( wixStylesheetNames( '#comp\\-aaaa1111{top:0}' ) ).toContain( 'comp-aaaa1111' );
+		expect( canonicalizeWixCapturedHtml( page( 'comp-aaaa1111' ), undefined, linked( '#comp\\-aaaa1111{top:0}' ) ) ).toContain( 'id="comp-aaaa1111"' );
 	} );
 
 	it( 'leaves a page untouched when a new instance would take a name already on the page', () => {
@@ -112,15 +126,15 @@ describe( 'canonicalizeWixFormControlIds', () => {
 	} );
 
 	it( 'keeps a counter id a linked stylesheet selects, but not one it only starts', () => {
-		const kept = canonicalizeWixFormControlIds( consent( 5 ), undefined, [ '#checkbox-5{margin:0}' ] );
+		const kept = canonicalizeWixFormControlIds( consent( 5 ), undefined, linked( '#checkbox-5{margin:0}' ) );
 		expect( kept ).toContain( 'id="checkbox-5"' );
-		const named = canonicalizeWixFormControlIds( consent( 5 ), undefined, [ '#checkbox-5-hint{margin:0}' ] );
+		const named = canonicalizeWixFormControlIds( consent( 5 ), undefined, linked( '#checkbox-5-hint{margin:0}' ) );
 		expect( named ).toMatch( /id="checkbox-dla[0-9a-f]{8}"/ );
 	} );
 
 	it( 'keeps a document unchanged when a generated checkbox name is already selected by a linked stylesheet', () => {
 		const token = /id="(checkbox-dla[0-9a-f]{8})"/.exec( canonicalizeWixFormControlIds( consent( 5 ) ) )?.[ 1 ];
-		expect( canonicalizeWixFormControlIds( consent( 5 ), undefined, [ `#${ token }{display:none}` ] ) ).toBe( consent( 5 ) );
+		expect( canonicalizeWixFormControlIds( consent( 5 ), undefined, linked( `#${ token }{display:none}` ) ) ).toBe( consent( 5 ) );
 	} );
 
 	it( 'keeps a document unchanged when a counter checkbox has no enclosing field', () => {
