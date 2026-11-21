@@ -376,7 +376,8 @@ export function projectViewportClassRules( html: string, linkedSheet: ( href: st
 	return $.html();
 }
 
-export type ViewportClassMemo = Map< string, ReadonlyArray< { width: number; present: boolean } > >;
+/** Shared toggle evidence: a presence series, or a proven rejection. */
+export type ViewportClassMemo = Map< string, ReadonlyArray< { width: number; present: boolean } > | 'rejected' >;
 
 export async function captureViewportClassStates( page: Page, options: { widths?: readonly number[]; settleMs?: number; breakpoints?: Set< number >; memo?: ViewportClassMemo } = {} ): Promise< ViewportClassStatesResult > {
 	const original = page.viewportSize();
@@ -502,11 +503,25 @@ export async function captureViewportClassStates( page: Page, options: { widths?
 			for ( const token of change.added ) candidates.set( `${ indexText }|${ token }`, { index: Number( indexText ), token, base: false } );
 			for ( const token of change.removed ) candidates.set( `${ indexText }|${ token }`, { index: Number( indexText ), token, base: true } );
 		}
+		const css = await stylesheetTexts( page );
+		if ( css === null ) return { ...none, sampledWidths };
+		const named = new Set<string>();
+		for ( const sheet of css ) {
+			let root: postcss.Root;
+			try { root = postcss.parse( sheet ); } catch { continue; }
+			root.walkRules( rule => { for ( const token of ruleClassNames( rule ) ) named.add( token ); } );
+		}
+		const eligible = ( toggle: Toggle ) => {
+			const memoKey = `${ signatures[toggle.index] }|${ toggle.token }`;
+			if ( ! named.has( toggle.token ) ) options.memo?.set( memoKey, 'rejected' );
+			return named.has( toggle.token ) && options.memo?.get( memoKey ) !== 'rejected';
+		};
 		const reused = new Set<string>();
 		for ( const [ key, toggle ] of candidates ) {
+			if ( ! eligible( toggle ) ) { candidates.delete( key ); continue; }
 			const memoKey = `${ signatures[toggle.index] }|${ toggle.token }`;
 			const saved = options.memo?.get( memoKey );
-			if ( saved ) {
+			if ( saved && saved !== 'rejected' ) {
 				// Prove the stored series at this route's extremes and at each
 				// exact flip (the width either side of it): agreement at the extremes
 				// alone cannot see a breakpoint that moved inside the range.
@@ -522,28 +537,18 @@ export async function captureViewportClassStates( page: Page, options: { widths?
 				if ( agrees ) { toggles.set( key, toggle ); presence.set( key, [ ...saved ] ); reused.add( memoKey ); }
 			}
 		}
-		if ( reused.size !== candidates.size ) {
+		if ( candidates.size === 0 ) return { ...none, sampledWidths };
+		if ( ! [ ...candidates.keys() ].every( key => toggles.has( key ) ) ) {
 			for ( const width of ladder ) {
 				for ( const [ index, change ] of Object.entries( await probe( width ) ) ) {
-					for ( const token of change.added ) toggles.set( `${ index }|${ token }`, { index: Number( index ), token, base: false } );
-					for ( const token of change.removed ) toggles.set( `${ index }|${ token }`, { index: Number( index ), token, base: true } );
+					for ( const [ tokens, base ] of [ [ change.added, false ], [ change.removed, true ] ] as const ) {
+						for ( const token of tokens ) {
+							const toggle = { index: Number( index ), token, base };
+							if ( eligible( toggle ) ) toggles.set( `${ index }|${ token }`, toggle );
+						}
+					}
 				}
 			}
-		}
-		if ( toggles.size === 0 ) return { ...none, sampledWidths };
-
-		const css = await stylesheetTexts( page );
-		if ( css === null ) return { ...none, sampledWidths };
-		const named = new Set<string>();
-		for ( const sheet of css ) {
-			let root: postcss.Root;
-			try { root = postcss.parse( sheet ); } catch { continue; }
-			root.walkRules( rule => { for ( const token of ruleClassNames( rule ) ) named.add( token ); } );
-		}
-		for ( const [ key, toggle ] of toggles ) {
-			if ( named.has( toggle.token ) ) continue;
-			toggles.delete( key );
-			presence.delete( key );
 		}
 		if ( toggles.size === 0 ) return { ...none, sampledWidths };
 
@@ -604,11 +609,18 @@ export async function captureViewportClassStates( page: Page, options: { widths?
 		const aliases: Array< { index: number; token: string; base: boolean; alias: string; media: string } > = [];
 		for ( const [ key, toggle ] of toggles ) {
 			const change = restored[ toggle.index ];
-			if ( unstable.has( key ) || change?.added.includes( toggle.token ) || change?.removed.includes( toggle.token ) ) continue;
+			const memoKey = `${ signatures[toggle.index] }|${ toggle.token }`;
+			if ( unstable.has( key ) || change?.added.includes( toggle.token ) || change?.removed.includes( toggle.token ) ) {
+				options.memo?.set( memoKey, 'rejected' );
+				continue;
+			}
 			const series = presence.get( key )!;
-			if ( ! reused.has( `${ signatures[toggle.index] }|${ toggle.token }` ) ) options.memo?.set( `${ signatures[toggle.index] }|${ toggle.token }`, series );
 			const media = presenceMedia( series );
-			if ( media === '' || media === 'all' ) continue;
+			if ( media === '' || media === 'all' ) {
+				options.memo?.set( memoKey, 'rejected' );
+				continue;
+			}
+			if ( ! reused.has( memoKey ) ) options.memo?.set( memoKey, series );
 			const ordered = [ ...series ].sort( ( a, b ) => a.width - b.width );
 			for ( let i = 1; i < ordered.length; i++ ) {
 				if ( ordered[ i ]!.present !== ordered[ i - 1 ]!.present ) options.breakpoints?.add( ordered[ i ]!.width );

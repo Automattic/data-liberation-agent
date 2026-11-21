@@ -336,3 +336,32 @@ it.each( [
 		await browser.close();
 	}
 }, 60_000 );
+
+// Two route documents share unstable header chrome; approximately 5 seconds.
+it( 'memoizes a shared header toggle rejected by the repeat pass (#2222)', async () => {
+	const browser = await chromium.launch();
+	try {
+		const memo: ViewportClassMemo = new Map();
+		const results = [];
+		for ( const route of [ 'first', 'second' ] ) {
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			await page.setContent( `<style>.header.is-inline{color:red}</style><header class="header">Shared</header><main>${ route }</main><script>
+			let flip=false;
+			addEventListener('resize',()=>{
+				flip=!flip;
+				const fits=innerWidth>=600 && innerWidth<768 || innerWidth>=1600;
+				document.querySelector('header').classList.toggle('is-inline',fits!==flip);
+			});</script>` );
+			results.push( await captureViewportClassStates( page, { settleMs: 0, memo } ) );
+			await page.close();
+		}
+		// Before rejection memoization both routes sampled 37 widths. The first
+		// route still does the same work and learns no aliases or rules.
+		expect( results[ 0 ] ).toEqual( { aliased: 0, rules: 0, sampledWidths: expect.any( Array ) } );
+		expect( results[ 0 ]!.sampledWidths ).toHaveLength( 37 );
+		expect( [ ...memo.values() ] ).toEqual( [ 'rejected' ] );
+		expect( results[ 1 ] ).toEqual( { aliased: 0, rules: 0, sampledWidths: [ 390, 1920 ] } );
+	} finally {
+		await browser.close();
+	}
+}, 60_000 );
