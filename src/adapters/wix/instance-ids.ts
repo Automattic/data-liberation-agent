@@ -21,22 +21,31 @@
  * canonicalizes each route again after its stylesheets became linked files, so
  * the markup then shows only some of the instance's components; renaming it
  * from that subset would leave every external rule pointing at the old name.
+ *
+ * Export passes the text of the stylesheets the route links or imports as
+ * `linkedStylesheets`, which it cannot rename. An instance they select keeps
+ * the name its rules use and only the other instances are named, so a route
+ * that capture kept as captured stays styled.
  */
 const INSTANCE_REFERENCE = /\b(comp-[a-z0-9]+)_r_(comp-[a-z0-9]+)/gi;
 const CANONICAL_INSTANCE = /^comp-dla[0-9a-f]{8}$/i;
+const INSTANCE_TOKEN = /(?<![a-z0-9_-])(comp-[a-z0-9]+)(?![a-z0-9])/gi;
+const NO_STYLESHEETS: readonly string[] = Object.freeze( [] );
 
-export function canonicalizeWixInstanceIds( html: string, document: string = html ): string {
+export function canonicalizeWixInstanceIds( html: string, document: string = html, linkedStylesheets: readonly string[] = NO_STYLESHEETS ): string {
 	const tokenByInstance = new Map( instanceTokens( document ) );
 	if ( document !== html ) {
 		for ( const [ instance, token ] of instanceTokens( html ) ) if ( ! tokenByInstance.has( instance ) ) tokenByInstance.set( instance, token );
 	}
+	const linked = linkedReferences( linkedStylesheets );
+	for ( const instance of tokenByInstance.keys() ) if ( linked.instances.has( instance.toLowerCase() ) ) tokenByInstance.delete( instance );
 	if ( tokenByInstance.size === 0 ) return html;
 	// Two instances scoping the same components on one page would collapse into
 	// one token and merge rules meant for different elements. Keep such a page
 	// exactly as captured rather than guess.
 	if ( new Set( tokenByInstance.values() ).size !== tokenByInstance.size ) return html;
 	const named = new Set( [ ...`${ document }\n${ html }`.matchAll( INSTANCE_REFERENCE ) ].map( ( [ , instance ] ) => instance!.toLowerCase() ).filter( instance => CANONICAL_INSTANCE.test( instance ) ) );
-	if ( [ ...tokenByInstance.values() ].some( token => named.has( token ) ) ) return html;
+	if ( [ ...tokenByInstance.values() ].some( token => named.has( token ) || linked.instances.has( token ) ) ) return html;
 
 	// The instance element carries the bare instance id too (`id="<instance>"`,
 	// `<instance>-container`), and the page stylesheet targets it, so every
@@ -73,13 +82,15 @@ const FORM_CONTROL_COUNTER = /(?<![a-z0-9_-])(checkbox-\d+)(?![a-z0-9_-])/gi;
 const FORM_CONTROL_ID = /\sid=(["'])(checkbox-\d+)\1/gi;
 const FORM_FIELD_HOOK = /data-hook=(["'])(form-field-[^"']+)\1/gi;
 
-export function canonicalizeWixFormControlIds( html: string, document: string = html ): string {
+export function canonicalizeWixFormControlIds( html: string, document: string = html, linkedStylesheets: readonly string[] = NO_STYLESHEETS ): string {
 	const tokenById = formControlTokens( document );
 	if ( ! tokenById ) return html;
 	if ( document !== html ) {
 		const own = formControlTokens( html );
 		for ( const [ id, token ] of own ?? [] ) if ( ! tokenById.has( id ) ) tokenById.set( id, token );
 	}
+	const linked = linkedReferences( linkedStylesheets ).controls;
+	for ( const id of tokenById.keys() ) if ( linked.has( id.toLowerCase() ) ) tokenById.delete( id );
 	if ( tokenById.size === 0 ) return html;
 	if ( new Set( tokenById.values() ).size !== tokenById.size ) return html;
 	return html.replace( FORM_CONTROL_COUNTER, ( match ) => tokenById.get( match ) ?? match );
@@ -107,8 +118,39 @@ function formControlTokens( html: string ): Map< string, string > | undefined {
 }
 
 /** Every Wix runtime-id canonicalization a captured document, or markup captured from it, needs. */
-export function canonicalizeWixCapturedHtml( html: string, document: string = html ): string {
-	return canonicalizeWixFormControlIds( canonicalizeWixInstanceIds( html, document ), canonicalizeWixInstanceIds( document ) );
+export function canonicalizeWixCapturedHtml( html: string, document: string = html, linkedStylesheets: readonly string[] = NO_STYLESHEETS ): string {
+	const page = canonicalizeWixInstanceIds( document, document, linkedStylesheets );
+	const markup = html === document ? page : canonicalizeWixInstanceIds( html, document, linkedStylesheets );
+	return canonicalizeWixFormControlIds( markup, page, linkedStylesheets );
+}
+
+interface LinkedReferences { instances: Set< string >; controls: Set< string > }
+
+// Export passes the same stylesheet strings for every route that loads them, so
+// each sheet is scanned once. Bounded so a long-lived process cannot grow it.
+const sheetReferences = new Map< string, LinkedReferences >();
+const SHEET_REFERENCE_CACHE_LIMIT = 256;
+
+/**
+ * The instance and form control ids linked sheets name, lowercased: each as the
+ * rewrite would match it, so a longer id that only starts with one does not count.
+ */
+function linkedReferences( sheets: readonly string[] ): LinkedReferences {
+	const all: LinkedReferences = { instances: new Set(), controls: new Set() };
+	for ( const sheet of sheets ) {
+		let references = sheetReferences.get( sheet );
+		if ( ! references ) {
+			references = {
+				instances: new Set( [ ...sheet.matchAll( INSTANCE_TOKEN ) ].map( ( [ , id ] ) => id!.toLowerCase() ) ),
+				controls: new Set( [ ...sheet.matchAll( FORM_CONTROL_COUNTER ) ].map( ( [ , id ] ) => id!.toLowerCase() ) ),
+			};
+			if ( sheetReferences.size >= SHEET_REFERENCE_CACHE_LIMIT ) sheetReferences.delete( sheetReferences.keys().next().value! );
+			sheetReferences.set( sheet, references );
+		}
+		for ( const id of references.instances ) all.instances.add( id );
+		for ( const id of references.controls ) all.controls.add( id );
+	}
+	return all;
 }
 
 function escapeRegExp( text: string ): string {

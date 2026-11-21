@@ -87,7 +87,7 @@ interface ExportCaptureOptions {
 	sourceUrl: string;
 	platform: string;
 	/** Idempotent platform projection, also applied after interaction wiring. */
-	canonicalizeHtml?: ( html: string ) => string;
+	canonicalizeHtml?: ( html: string, document?: string, linkedStylesheets?: readonly string[] ) => string;
 	title?: string;
 	summary: Record< string, unknown >;
 	failures: Array< { url: unknown; error: unknown } >;

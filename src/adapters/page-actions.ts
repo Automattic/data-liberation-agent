@@ -80,8 +80,11 @@ export interface LiberationHooks {
    * static copy. Must be deterministic and keep markup and in-document CSS
    * paired. Markup captured from a page (an opened dialog) comes with that
    * page's raw `document`, and must take the names the document gets.
+   * Export passes the text of the sheets the page links or imports as
+   * `linkedStylesheets`, which it cannot rename: an identifier they select must
+   * keep its name.
    */
-  canonicalizeHtml?(html: string, document?: string): string;
+  canonicalizeHtml?(html: string, document?: string, linkedStylesheets?: readonly string[]): string;
   /** Resolve derived runtime media from the member's memoized light render.
    * Undefined declines the member; capture verification remains unchanged. */
   rewriteDerivedMedia?(input: {

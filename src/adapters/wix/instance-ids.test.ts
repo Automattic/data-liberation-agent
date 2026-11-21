@@ -63,6 +63,15 @@ describe( 'canonicalizeWixInstanceIds', () => {
 		expect( canonicalizeWixCapturedHtml( exported ) ).toBe( exported );
 	} );
 
+	it( 'keeps the name of an instance its linked stylesheets select', () => {
+		const exported = page( 'comp-aaaa1111' ).replace( /<style>[\s\S]*?<\/style>/, '<link rel="stylesheet" href="/assets/css/page.css">' ) +
+			'<p class="comp-cccc3333_r_comp-copyright">©</p>';
+		const out = canonicalizeWixCapturedHtml( exported, undefined, [ '.unrelated{color:blue}', '.comp-aaaa1111_r_comp-nav{color:red}' ] );
+		expect( out ).toContain( 'class="comp-aaaa1111_r_comp-nav"' );
+		expect( out ).toMatch( /class="comp-dla[0-9a-f]{8}_r_comp-copyright"/ );
+		expect( canonicalizeWixCapturedHtml( exported, undefined, [ '#comp-aaaa11112{top:0}' ] ) ).not.toContain( 'comp-aaaa1111_r_' );
+	} );
+
 	it( 'leaves a page untouched when a new instance would take a name already on the page', () => {
 		const captured = canonicalizeWixInstanceIds( page( 'comp-aaaa1111' ) );
 		const html = `${ captured }<div class="comp-cccc3333_r_comp-nav comp-cccc3333_r_comp-logo"></div>`;
@@ -95,6 +104,13 @@ describe( 'canonicalizeWixFormControlIds', () => {
 		const token = /id="(checkbox-dla[0-9a-f]{8})"/.exec( html )?.[ 1 ];
 		expect( html ).toContain( `for="${ token }"` );
 		expect( html ).toContain( 'id="checkbox-5-hint"' );
+	} );
+
+	it( 'keeps a counter id a linked stylesheet selects, but not one it only starts', () => {
+		const kept = canonicalizeWixFormControlIds( consent( 5 ), undefined, [ '#checkbox-5{margin:0}' ] );
+		expect( kept ).toContain( 'id="checkbox-5"' );
+		const named = canonicalizeWixFormControlIds( consent( 5 ), undefined, [ '#checkbox-5-hint{margin:0}' ] );
+		expect( named ).toMatch( /id="checkbox-dla[0-9a-f]{8}"/ );
 	} );
 
 	it( 'keeps a document unchanged when a counter checkbox has no enclosing field', () => {

@@ -25,7 +25,8 @@ import { namespaceExportBoxTreeIds } from './export-box-trees.js';
 import { sameOriginPageAnchors } from './screenshot/unscheduled-anchors.js';
 import { isSrcsetShaped, srcsetCandidates } from './srcset.js';
 import { portableVisualIframeWidth } from './visual-iframe-geometry.js';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { linkedStylesheetTexts } from './linked-stylesheets.js';
 import { dirname, join, relative } from 'node:path';
 import * as cheerio from 'cheerio';
 import type { Element } from 'domhandler';
@@ -569,7 +570,7 @@ function uncapturedRouteAnchors(
 
 export interface RenderedRoutes { unresolvedAnchors: RouteLinks['unresolvedAnchors']; diagnostics: RouteDiagnostic[]; responsiveIdentities: { ids: Map<string, string | string[]>; namedAliases: boolean; svgIds: Set<string> } }
 export function renderRoutePages( { canonicalizeHtml, retainedEntries, websiteDir, resourceReplacements, portableUrlByFamily, mixedSrcsetReferences, portableMediaReplacements, replaceResources, replaceMedia, mediaMetadataPathsBySource, portablePathsBySource, routePathOf, capturedRouteKeys, absentRouteKeys, omittedRouteKeys, resourceInputKeys, routeScope, boundaryRoutes, verifiedRouteObservations, sourceRouteLinks, portableServedPaths }: {
- canonicalizeHtml?: ( html: string ) => string;
+ canonicalizeHtml?: ( html: string, document?: string, linkedStylesheets?: readonly string[] ) => string;
  retainedEntries: CaptureEntry[]; websiteDir: string; resourceReplacements: Map<string, string>; portableUrlByFamily: Map<string, string>; mixedSrcsetReferences: MediaCandidates['mixedSrcsetReferences']; portableMediaReplacements: Map<string, string>;
  replaceResources: ReturnType<typeof preparePortableReplacements>; replaceMedia: ReturnType<typeof preparePortableReplacements>; mediaMetadataPathsBySource: Map<string, string>; portablePathsBySource: Map<string, string>; routePathOf: (url: string) => string;
  capturedRouteKeys: Set<string>; absentRouteKeys: Set<string>; omittedRouteKeys: Set<string>; resourceInputKeys: Set<string>; routeScope?: SiteRouteScope; boundaryRoutes: Set<string>; verifiedRouteObservations: RouteLinks['verifiedRouteObservations']; sourceRouteLinks: Map<string, string>; portableServedPaths: Set<string>;
@@ -654,6 +655,25 @@ export function renderRoutePages( { canonicalizeHtml, retainedEntries, websiteDi
 		}
 	}
 	const metadataPathsBySource = new Map( [ ...mediaMetadataPathsBySource, ...portablePathsBySource ] );
+	// Linked sheets are portable files by now; read each from the website tree once.
+	const LOCAL_ORIGIN = 'https://website.invalid';
+	const portableStylesheets = new Map< string, string | undefined >();
+	const readPortableStylesheet = ( url: string ): string | undefined => {
+		const resolved = new URL( url );
+		if ( resolved.origin !== LOCAL_ORIGIN ) return undefined;
+		const file = join( websiteDir, decodeURIComponent( resolved.pathname ) );
+		if ( ! pathWithin( websiteDir, file ) ) return undefined;
+		if ( ! portableStylesheets.has( file ) ) {
+			let text: string | undefined;
+			try {
+				text = statSync( file ).isFile() ? readFileSync( file, 'utf8' ) : undefined;
+			} catch {
+				text = undefined;
+			}
+			portableStylesheets.set( file, text );
+		}
+		return portableStylesheets.get( file );
+	};
 	for ( const entry of retainedEntries ) {
 		const { url, htmlPath } = entry;
 		const routePath = routePathOf( url );
@@ -699,7 +719,11 @@ export function renderRoutePages( { canonicalizeHtml, retainedEntries, websiteDi
 		unresolvedAnchors.push(
 			...unresolvedCapturedAnchors( normalizedHtml, url, `/${ routePath }` )
 		);
-		writeFileSync( destination, namespaceExportBoxTreeIds( wireNativeControlState( wireNativeViewTimelines( withViewportEntrances( canonicalizeHtml ? canonicalizeHtml( normalizedHtml ) : normalizedHtml ) ) ) ) );
+		// The route's stylesheets are linked files by now, and canonicalization
+		// cannot rename their rules: an id a sheet the route links or imports
+		// selects must keep its name.
+		const canonicalHtml = canonicalizeHtml ? canonicalizeHtml( normalizedHtml, undefined, linkedStylesheetTexts( normalizedHtml, `${ LOCAL_ORIGIN }/${ routePath }`, readPortableStylesheet ) ) : normalizedHtml;
+		writeFileSync( destination, namespaceExportBoxTreeIds( wireNativeControlState( wireNativeViewTimelines( withViewportEntrances( canonicalHtml ) ) ) ) );
 		entry.identityHtmlPath = `${ htmlPath }.identity`;
 		writeFileSync( entry.identityHtmlPath, identityHtml );
 	}
