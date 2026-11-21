@@ -31,9 +31,12 @@ export async function discoverCapturedBehavior( directory: string ): Promise< vo
 			const page = await open( FIRST_TIME.timezone );
 			const counterfactualPage = await open( SECOND_TIME.timezone );
 			try {
-				const evidence = await captureSourceBehavior( page, url, { fixedTime: FIRST_TIME.at } );
 				// A second controlled date and timezone separates time-derived text from editorial text.
-				const counterfactual = await captureSourceBehavior( counterfactualPage, url, { fixedTime: SECOND_TIME.at, maxClicks: 0 } );
+				// Each page owns its context and clock, so the two observations run together.
+				const [ evidence, counterfactual ] = await Promise.all( [
+					captureSourceBehavior( page, url, { fixedTime: FIRST_TIME.at } ),
+					captureSourceBehavior( counterfactualPage, url, { fixedTime: SECOND_TIME.at, maxClicks: 0 } ),
+				] );
 				const motion = learnMotion( evidence, counterfactual );
 				learned.push( { url, learned: motion } );
 				observations.push( {
