@@ -882,12 +882,12 @@ export async function boundSharedChromeProbe( startedAt: number, probe: () => Pr
 }
 
 /** Load the entrypoint in one capture profile, as the device-mode probe does, and probe its shared chrome. */
-export async function probeSharedChrome( args: Omit< DeviceComparisonArgs, 'desktop' | 'phone' > & { options: BrowserContextOptions; viewport: 'desktop' | 'mobile' } ): Promise< SharedChromeProbe > {
+export async function probeSharedChrome( args: Omit< DeviceComparisonArgs, 'desktop' | 'phone' > & { options: BrowserContextOptions; viewport: 'desktop' | 'mobile'; additionalStates?: CapturedDialogInteraction[] } ): Promise< SharedChromeProbe > {
 	const contexts: BrowserContext[] = [];
 	try {
 		return await boundSharedChromeProbe( Date.now(), async () => {
 			const { page, target } = await loadForComparison( { ...args, desktop: args.options, phone: args.options }, args.options, args.viewport, 'probe', contexts );
-			return probeChromeOnPage( page, target, {} );
+			return probeChromeOnPage( page, target, { additionalStates: args.additionalStates } );
 		} );
 	} finally {
 		await Promise.all( contexts.map( context => context.close().catch( orElse( undefined ) ) ) );

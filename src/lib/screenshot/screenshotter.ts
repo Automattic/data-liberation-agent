@@ -1304,7 +1304,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	const desktopProfile = viewports.find( viewport => viewport.id === 'desktop' );
 	const phoneProfile = viewports.find( viewport => viewport.id === 'mobile' );
 	const entrypoint = urls.find( url => isSourceCaptureUrl( url, opts.primaryUrl ) ) ?? urls[ 0 ];
-	const sharedChromeEnabled = Boolean( entrypoint && ( opts.sharedChrome ?? ! opts.viewports ) && ( urls.length > 1 || frontier ) );
+	const sharedChromeEnabled = Boolean( entrypoint && ( opts.sharedChrome ?? ! opts.viewports ) );
+	const eagerSharedChrome = sharedChromeEnabled && urls.length > 1;
+	let sharedChromePhoneStates: CapturedDialogInteraction[] | undefined;
 	const sharedChromeResults = new Map< string, SharedChromeProbe >();
 	const rootClassEvidence = new RootClassEvidence();
 	const routeMotion = new RouteMotionEvidence();
@@ -1323,7 +1325,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			telemetryRequest: opts.telemetryRequest,
 		};
 		const probed = await probeDeviceMode( {
-			...comparison, probeDiagnostic: diagnostic => routeDiagnostics.push( { ...diagnostic, url: entrypoint! } ), browser, url: entrypoint, requested, canonicalizeHtml: opts.canonicalizeHtml, sharedChrome: sharedChromeEnabled,
+			...comparison, probeDiagnostic: diagnostic => routeDiagnostics.push( { ...diagnostic, url: entrypoint! } ), browser, url: entrypoint, requested, canonicalizeHtml: opts.canonicalizeHtml, sharedChrome: eagerSharedChrome,
 			deviceDocuments: [
 				...( opts.deviceDocumentSelection ? [ 'documentSelection' ] : [] ),
 				...( opts.additionalProfiles ? [ 'additionalProfiles' ] : [] ),
@@ -1331,7 +1333,10 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			],
 		} );
 		deviceMode = probed.decision;
-		if ( probed.phoneInteractions ) phoneInteractions = { url: probed.url, report: probed.phoneInteractions };
+		if ( probed.phoneInteractions ) {
+			phoneInteractions = { url: probed.url, report: probed.phoneInteractions };
+			sharedChromePhoneStates = probed.phoneInteractions.states;
+		}
 		for ( const [ profile, result ] of probed.sharedChrome ?? [] ) sharedChromeResults.set( profile, result );
 		if ( deviceMode.mode === 'reflow-only' ) {
 			// A reflow route's desktop document also freezes the phone-width reference cell.
@@ -1347,18 +1352,21 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	}
 
 	// --- shared chrome -------------------------------------------------------
-	// The entrypoint's chrome is probed once per built-in profile before any
-	// route, on the device-mode probe's pages when it loaded them, and reused by
-	// every route whose chrome matches (chrome-reuse.ts). A single-route capture
-	// has nothing to share.
+	// Known multi-route inventories probe eagerly, using device-mode pages when
+	// available. A one-route inventory waits until the frontier admits another
+	// route, then probes before that wave starts. No extra renderer joins the pool.
 	const sharedChromeDecisions: Array< { url: string; profile: string } & SharedChromeRouteDecision > = [];
-	if ( sharedChromeEnabled ) {
+	let sharedChromeProbed = false;
+	const ensureSharedChrome = async (): Promise< void > => {
+		if ( ! sharedChromeEnabled || sharedChromeProbed ) return;
+		sharedChromeProbed = true;
 		const profiles = ( reflowViewports ?? viewports ).filter( viewport => ( viewport.id === 'desktop' || viewport.id === 'mobile' ) && ! sharedChromeResults.has( viewport.id ) );
 		const sessionContext = profiles.length ? await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly, governors: opts.governors } ) : undefined;
 		await Promise.all( profiles.map( async viewport => {
 			sharedChromeResults.set( viewport.id, await probeSharedChrome( {
 				probeDiagnostic: diagnostic => routeDiagnostics.push( { ...diagnostic, url: entrypoint! } ),
 				browser, url: entrypoint!, options: profileContextOptions( viewport, sessionContext! ), viewport: viewport.id as 'desktop' | 'mobile',
+				...( viewport.id === 'desktop' && sharedChromePhoneStates ? { additionalStates: sharedChromePhoneStates } : {} ),
 				sourceTelemetry: opts.sourceTelemetry,
 				governors: opts.governors, publicUrlsOnly: opts.publicUrlsOnly ?? false, routeScope: opts.routeScope,
 				cleanupPolicy: opts.cleanupPolicy, removeSelectors: opts.removeSelectors, prepareCapture: opts.prepareCapture, initScript: opts.initScript,
@@ -1372,9 +1380,10 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			sendLog( server, message );
 			process.stderr.write( `${ message }\n` );
 		}
-	}
+	};
+	if ( eagerSharedChrome ) await ensureSharedChrome();
 	const sharedChromeFor = ( viewport: Viewport ): SharedChromeProbe | undefined => {
-		if ( ! sharedChromeEnabled || ( viewport.id !== 'desktop' && viewport.id !== 'mobile' ) ) return undefined;
+		if ( ! sharedChromeProbed || ( viewport.id !== 'desktop' && viewport.id !== 'mobile' ) ) return undefined;
 		return sharedChromeResults.get( viewport.id ) ?? { status: 'skipped', reason: `the entrypoint chrome was not probed for the ${ viewport.id } profile`, durationMs: 0 };
 	};
 
@@ -2131,6 +2140,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		let pendingPrioritized = ! opts.prioritizePendingRoutes;
 		let entrypointSettled = false;
 		while (segStart < urls.length && ! routeBudget?.closed() && ! routeDeadlines.stalled) {
+			if ( segStart > 0 ) await ensureSharedChrome();
 			// Cluster-aware discovery must run between admission batches, not only
 			// after the inventory has already spent the browser window.
 			const waveEnd = opts.groupLinkedRoutes
