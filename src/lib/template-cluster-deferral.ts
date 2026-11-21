@@ -4,6 +4,7 @@ import type { Browser, BrowserContext, BrowserContextOptions } from 'playwright'
 import { mapPool, withTimeout } from './concurrency.js';
 import { safeFetch } from './media-fetch/safe-fetch.js';
 import { pathWithin } from './portable-assets.js';
+import { templateVerificationMember } from './route-budget.js';
 import { normalizedUrl } from './url/route-key.js';
 import type { SiteRouteScope } from '../platform/types.js';
 import type { SourceRequestGovernors } from './source-request-governor.js';
@@ -49,11 +50,6 @@ export interface TemplateClusterDeferralInput {
 	deadline?: number;
 }
 
-/** The cluster's verification member, as route ranking seeds it. */
-function verificationMember( group: Group ): string | undefined {
-	return group.members.filter( url => url !== group.representative ).sort( ( a, b ) => a.localeCompare( b ) )[ 0 ];
-}
-
 export class TemplateClusterDeferral {
 	private readonly captured = new Map< string, string >();
 	private readonly started = new Set< string >();
@@ -74,7 +70,11 @@ export class TemplateClusterDeferral {
 		this.captured.set( normalizedUrl( url ), file );
 		for ( const group of this.groups() ) {
 			if ( group.size < 2 || this.started.has( group.representative ) ) continue;
-			const verifier = verificationMember( group );
+			// The member route ranking admits beside the representative, and the one
+			// post-capture derivation verifies against: any other member is not on
+			// disk until the browser reaches the cluster's tail, so its check (and
+			// the light renders a runtime-rewritten cluster needs) would never run.
+			const verifier = templateVerificationMember( group.members, group.representative );
 			if ( ! verifier || ! this.captured.has( normalizedUrl( group.representative ) ) || ! this.captured.has( normalizedUrl( verifier ) ) ) continue;
 			this.started.add( group.representative );
 			this.checks.push( this.check( group, verifier ).catch( error => {
@@ -170,6 +170,11 @@ export class TemplateClusterDeferral {
 	private async render( url: string ): Promise< MemberDocument > {
 		const deadline = Math.min( this.input.deadline ?? Infinity, Date.now() + TEMPLATE_DEFERRAL_LIMITS.renderMs );
 		if ( this.closing || deadline <= Date.now() ) return { unavailable: 'light render budget exhausted' };
+		// A light render loads the member's full runtime and media beside the
+		// browser pass. Once the source has throttled, every later request is
+		// paced at the learned ceiling, and renders would queue ahead of the
+		// browser pass's own navigations: the members keep browser capture.
+		if ( this.input.governors.forOrigin( this.input.sourceUrl ).throttleEvents > 0 ) return { unavailable: 'source throttled; light renders yield to the browser pass' };
 		const startedAt = Date.now();
 		const left = () => Math.max( 1, deadline - Date.now() );
 		let context: BrowserContext | undefined;
