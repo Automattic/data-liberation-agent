@@ -143,6 +143,7 @@ function sendLog( server: CaptureLogSink | undefined, message: string ): void {
 }
 
 import { assignNodeIds, observeBoxTree, BOX_TREE_STYLES, NODE_ID_ATTRIBUTE } from './box-tree.js';
+import { normalizeRetainedDocument } from './retained-document.js';
 
 /** Failure reason for a route whose source app crashed into its client error shell. */
 const CLIENT_ERROR_SHELL_FAILURE = 'client error shell';
@@ -326,7 +327,7 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 		// The installed source cleanup sweeps first, in this same task: the
 		// settle and media waits above give the source time to mount a widget
 		// after the last sweep, and no source script runs between these two.
-		const result = await page.evaluate( async ( { boxTreeSource, boxTreeProperties, captureBoxes, stampSource, nodeIdAttribute, observeControlSource, controlAttribute, portMapsSource, mapHostSource, iframeEvidenceAttributes, scaffoldingSource, shadowSource, parseSrcsetSource, srcsetShapedSource, initialScrollClassAttribute } ) => {
+		const result = await page.evaluate( async ( { normalizeDocumentSource, boxTreeSource, boxTreeProperties, captureBoxes, stampSource, nodeIdAttribute, observeControlSource, controlAttribute, portMapsSource, mapHostSource, iframeEvidenceAttributes, scaffoldingSource, shadowSource, parseSrcsetSource, srcsetShapedSource, initialScrollClassAttribute } ) => {
 			( window as unknown as { __dlaCleanup?: { sweep: () => void } } ).__dlaCleanup?.sweep();
 			// Independent computed-style sentinels from the styled baseline, before
 			// any serialization-only DOM trials. Never validate evidence against itself.
@@ -575,13 +576,7 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				// DOM insertion permits flow elements in <head>; the HTML parser
 				// does not. Move them in the snapshot only, after positional walks,
 				// so re-parsing cannot push later base/meta/title into the body.
-				const head = snapshot.querySelector( 'head' );
-				const body = snapshot.querySelector( 'body' );
-				if ( head && body ) {
-					const headTags = new Set( 'base basefont bgsound link meta title noscript noframes style script template'.split( ' ' ) );
-					const misplaced = Array.from( head.children ).filter( element => ! headTags.has( element.localName ) );
-					body.prepend( ...misplaced );
-				}
+				( new Function( 'return (' + normalizeDocumentSource + ')' )() as typeof normalizeRetainedDocument )( snapshot );
 				const observe = new Function('return (' + boxTreeSource + ')')() as typeof observeBoxTree;
 				const checkedObservation = (): import('./box-tree.js').BoxTreeObservation => {
 					const observed = observe(snapshot, boxTreeProperties, nodeIdAttribute);
@@ -623,7 +618,7 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				}
 				for ( const { element, parent, next } of detached.reverse() ) parent.insertBefore( element, next );
 			}
-		}, { boxTreeSource: observeBoxTree.toString(), boxTreeProperties: BOX_TREE_STYLES, captureBoxes: Boolean(onBoxTree), stampSource: assignNodeIds.toString(), nodeIdAttribute: NODE_ID_ATTRIBUTE, initialScrollClassAttribute: INITIAL_SCROLL_CLASS_ATTRIBUTE, observeControlSource: observeNativeControlState.toString(), controlAttribute: NATIVE_CONTROL_STATE_ATTRIBUTE, portMapsSource: portRenderedGoogleMaps.toString(), mapHostSource: isGoogleMapHost.toString(), iframeEvidenceAttributes, scaffoldingSource: cleanPortableScaffolding.toString(), shadowSource: portStaticShadowContent.toString(), parseSrcsetSource: parseSrcset.toString(), srcsetShapedSource: isSrcsetShaped.toString() } );
+		}, { normalizeDocumentSource: normalizeRetainedDocument.toString(), boxTreeSource: observeBoxTree.toString(), boxTreeProperties: BOX_TREE_STYLES, captureBoxes: Boolean(onBoxTree), stampSource: assignNodeIds.toString(), nodeIdAttribute: NODE_ID_ATTRIBUTE, initialScrollClassAttribute: INITIAL_SCROLL_CLASS_ATTRIBUTE, observeControlSource: observeNativeControlState.toString(), controlAttribute: NATIVE_CONTROL_STATE_ATTRIBUTE, portMapsSource: portRenderedGoogleMaps.toString(), mapHostSource: isGoogleMapHost.toString(), iframeEvidenceAttributes, scaffoldingSource: cleanPortableScaffolding.toString(), shadowSource: portStaticShadowContent.toString(), parseSrcsetSource: parseSrcset.toString(), srcsetShapedSource: isSrcsetShaped.toString() } );
 		if ( onPainted ) onPainted( await readPaintState( page ) );
 		onBoxTree?.(result.boxNodes);
 		diagnostics?.push( ...result.findings );

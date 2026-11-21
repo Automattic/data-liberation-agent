@@ -102,12 +102,14 @@ export function rankTemplateClusterRoutes(
 	const entryKey = normalizedUrl( entrypoint );
 	const ranked = routes.map( url => {
 		const key = normalizedUrl( url );
-		// Entry, cluster seeds, templates nothing can derive (singletons, nav),
-		// derivable nav, the rest, then cluster members their seeds derive.
+		// Entry, canonical navigation targets (the set HTTP acquisition also
+		// prioritizes), cluster seeds, singletons nothing can derive, the rest,
+		// then cluster members their seeds derive.
 		const tier = key === entryKey ? 0
-			: seeds.has( key ) ? 1
-			: clustered.has( key ) ? ( navigationTargets.has( key ) ? 3 : 5 )
-			: singletons.has( key ) || navigationTargets.has( key ) ? 2 : 4;
+			: navigationTargets.has( key ) ? 1
+			: seeds.has( key ) ? 2
+			: clustered.has( key ) ? 5
+			: singletons.has( key ) ? 3 : 4;
 		const archive = termName?.( url ) !== undefined || /\/(?:tag|category)(?:\/|$)/.test( new URL( url ).pathname );
 		return { url, tier, archive: Number( archive ), seed: seeds.get( key ) ?? 0 };
 	} );

@@ -10,6 +10,7 @@ import { sanitizeFrozenHtml } from './freeze.js';
 import { captureTriggeredDialogs } from './interaction-capture.js';
 import { wireCapturedDialogs } from '../static-dialogs.js';
 import { isGoogleMapHost } from './rendered-google-maps.js';
+import { bindBoxTreeEvidence, captureBoxTree, stampNodeIds, type BoxTreeObservation } from './box-tree.js';
 
 it('keeps map runtime dialogs out of page panels while retaining a real site dialog', async ({ newPage }) => {
 
@@ -112,9 +113,23 @@ it('ports a rendered Google map through portable export without freezing its til
       <div role="region" aria-label="Map"><div class="tiles">Runtime tile content</div></div>
       <a href="https://maps.google.com/maps?ll=-33.8651437,151.2099002&z=12&amp;t=m&amp;hl=en-AU&amp;mapclient=apiv3">Open this area in Google Maps</a>
     </div></div><gmp-internal-dialog><dialog aria-label="Keyboard shortcuts"></dialog></gmp-internal-dialog></div></main>`);
+    await stampNodeIds(page);
     const before = await page.locator('main').innerHTML();
-    const captured = await capturePageHtml(page);
+    let observation: BoxTreeObservation | undefined;
+    const captured = await capturePageHtml(page, undefined, undefined, result => { observation = result; });
+    expect(observation).toHaveProperty('nodes');
+    if (!observation || !('nodes' in observation)) return;
+    const tree = await captureBoxTree(page, captured, { phone: { width: 390, height: 844 } }, { name: 'desktop', nodes: observation.nodes });
+    expect(tree).toBeDefined();
+    expect(Object.keys(tree!.viewports)).toEqual(['desktop', 'phone']);
+    expect(bindBoxTreeEvidence(captured, tree)).toHaveProperty('tree');
+    expect(bindBoxTreeEvidence(sanitizeFrozenHtml(captured), tree)).toHaveProperty('tree');
     const $ = load(captured);
+    const ownerId = $('.gm-style').attr('data-blocks-engine-node-id')!;
+    expect(tree!.nodes[ownerId].children).toEqual([]);
+    expect(tree!.nodes[ownerId].viewports.desktop.border_box).toMatchObject({ width: 640, height: 320 });
+    // Only the marked replacement is exempt; ordinary unstamped source nodes fail.
+    expect(bindBoxTreeEvidence(captured.replace('data-blocks-engine-capture-google-map-embed=""', ''), tree)).toMatchObject({ mismatch: { kind: 'unstamped' } });
     expect($('.gm-style iframe').attr('src')).toBe('https://maps.google.com/maps?ll=-33.8651437%2C151.2099002&z=12&t=m&hl=en-AU&output=embed');
     expect($('.gm-style iframe').attr('title')).toBe('Google Maps');
     expect($('.gm-style iframe').attr('data-blocks-engine-capture-visual-iframe-width')).toBe('640');

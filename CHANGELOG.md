@@ -15,6 +15,70 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.40.12] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- retain normalized box-tree topology across viewports
+
+## [0.40.11] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- list google-map-rules capture attribute
+
+## [0.40.10] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- restore settled top pose after observePage scroll probes
+- skip capture-owned script/style elements in box-tree walks
+
+## [0.40.9] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+- allow capture diagnostics alongside discovery findings
+
+## [0.40.8] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- check deferral against the ranked verification member
+
+## [0.40.7] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- resolve derived members' runtime media from their light render
+- ignore adapter-declared loader attributes in canonical alias proofs
+
+## [0.40.6] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- exclude platform runtime routes from capture
+
+## [0.40.5] - 2026-11-20
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- admit canonical navigation targets before template representatives
+
 ## [0.40.4] - 2026-11-20
 
 ### Changed

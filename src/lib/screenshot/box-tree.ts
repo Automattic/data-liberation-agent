@@ -4,6 +4,7 @@ import { dirname, join, relative } from 'node:path';
 import * as cheerio from 'cheerio';
 import type { AnyNode, Element as TagElement } from 'domhandler';
 import type { Page } from 'playwright';
+import { normalizeRetainedDocument } from './retained-document.js';
 
 export const BOX_TREE_SCHEMA = 'blocks-engine/box-tree/v2';
 export const NODE_ID_ATTRIBUTE = 'data-blocks-engine-node-id';
@@ -74,6 +75,14 @@ export function observeBoxTree(snapshot: Element, properties: readonly string[],
 		}
 		return parts.join('>');
 	};
+	// Keep in step with captureOwned: generated map leaves use their stamped
+	// owner's box; capture-owned script/style elements have no box.
+	const owned = (element: Element) => !element.hasAttribute(attribute) && (
+		((element.localName === 'script' || element.localName === 'style')
+			&& element.getAttributeNames().some(name => name.startsWith('data-blocks-engine-capture-')))
+		|| (element.localName === 'iframe' && element.hasAttribute('data-blocks-engine-capture-google-map-embed')
+			&& element.parentElement?.hasAttribute(attribute))
+	);
 	// A successful response is not proof of application: reinsertion can leave
 	// a link loading, and titled alternate sets can leave it inactive. Do not
 	// read cssRules here: cross-origin sheets are valid, but opaque.
@@ -93,7 +102,7 @@ export function observeBoxTree(snapshot: Element, properties: readonly string[],
 			mismatch: { kind: 'stylesheet', path: 'html>head>link', detail: `author stylesheet not applied: ${link.href}` },
 		};
 	}
-	const retained = [snapshot, ...snapshot.querySelectorAll('*')];
+	const retained = [snapshot, ...snapshot.querySelectorAll('*')].filter(element => !owned(element));
 	const live = new Map(Array.from(document.querySelectorAll('*'), element => [element.getAttribute(attribute), element]));
 	const nodes: BoxTree['nodes'] = {};
 	if (retained.length > 100_000) return { mismatch: { kind: 'oversized', path: snapshot.localName, detail: `${retained.length} elements` } };
@@ -103,7 +112,7 @@ export function observeBoxTree(snapshot: Element, properties: readonly string[],
 		if (!id) return { mismatch: { kind: 'unstamped', path: path(saved) } };
 		if (nodes[id]) return { mismatch: { kind: 'duplicate', id, path: path(saved) } };
 		if (!element) return { mismatch: { kind: 'missing', id, path: path(saved), detail: 'saved node has no live element' } };
-		const children = Array.from(saved.children, child => child.getAttribute(attribute)!);
+		const children = Array.from(saved.children).filter(child => !owned(child)).map(child => child.getAttribute(attribute)!);
 		const rect = element.getBoundingClientRect();
 		const style = getComputedStyle(element);
 		const used_styles = Object.fromEntries(properties.map(property => [property, style.getPropertyValue(property)]));
@@ -137,9 +146,34 @@ export function observeBoxTree(snapshot: Element, properties: readonly string[],
 
 type BoundTree = Omit<BoxTree, 'source_path' | 'source_hash'>;
 
+const CAPTURE_MARKER_PREFIX = 'data-blocks-engine-capture-';
+
+/**
+ * Capture inserts non-rendering script/style elements (the native-control runtime,
+ * width-class rules) after observation. They have no box, so every box-tree walk
+ * skips them. A generated map iframe is also an unobserved leaf: it fills its
+ * stamped owner's observed box. A source element without an id still fails.
+ */
+function captureOwned(element: AnyNode): boolean {
+	if (element.type !== 'tag' && element.type !== 'script' && element.type !== 'style') return false;
+	const { attribs, name, parent } = element as TagElement;
+	if (NODE_ID_ATTRIBUTE in attribs) return false;
+	if (element.type === 'script' || element.type === 'style') return Object.keys(attribs).some(name => name.startsWith(CAPTURE_MARKER_PREFIX));
+	return name === 'iframe' && 'data-blocks-engine-capture-google-map-embed' in attribs
+		&& !!parent && 'attribs' in parent && NODE_ID_ATTRIBUTE in parent.attribs;
+}
+
+function boxElements($: cheerio.CheerioAPI): AnyNode[] {
+	return $('*').toArray().filter(element => !captureOwned(element));
+}
+
+function boxChildren($: cheerio.CheerioAPI, element: AnyNode): Array<string> {
+	return $(element).children().toArray().filter(child => !captureOwned(child)).map(child => $(child).attr(NODE_ID_ATTRIBUTE)!);
+}
+
 function savedPath(element: AnyNode): string {
 	const parts: string[] = [];
-	for (let node: AnyNode | null = element; node && node.type === 'tag' && parts.length < 8; node = node.parent) {
+	for (let node: AnyNode | null = element; node && (node.type === 'tag' || node.type === 'script' || node.type === 'style') && parts.length < 8; node = node.parent) {
 		const tag = node as TagElement;
 		const id = tag.attribs[NODE_ID_ATTRIBUTE];
 		parts.unshift(`${tag.name}${tag.attribs.id ? `#${tag.attribs.id}` : ''}${id ? `[${id}]` : ''}`);
@@ -154,16 +188,15 @@ export function bindBoxTreeEvidence<T extends BoundTree>(html: string, tree: T |
 	const nodes: BoxTree['nodes'] = {};
 	const elements = new Map<string, AnyNode>();
 	let mismatch: BoxTreeMismatch | undefined;
-	$('*').each((_index, element) => {
+	for (const element of boxElements($)) {
 		const id = $(element).attr(NODE_ID_ATTRIBUTE);
 		if (!id) mismatch = { kind: 'unstamped', path: savedPath(element) };
 		else if (nodes[id]) mismatch = { kind: 'duplicate', id, path: savedPath(element) };
 		else if (!tree.nodes[id]) mismatch = { kind: 'extra', id, parent: $(element).parent().attr(NODE_ID_ATTRIBUTE), path: savedPath(element) };
-		if (mismatch) return false;
-		const children = $(element).children().toArray().map(child => $(child).attr(NODE_ID_ATTRIBUTE)!);
-		nodes[id!] = { children, viewports: tree.nodes[id!].viewports };
+		if (mismatch) break;
+		nodes[id!] = { children: boxChildren($, element), viewports: tree.nodes[id!].viewports };
 		elements.set(id!, element);
-	});
+	}
 	if (mismatch) return { mismatch };
 	for (const [id, node] of Object.entries(nodes)) {
 		const expected = tree.nodes[id].children.filter(child => nodes[child]);
@@ -213,16 +246,15 @@ export function settleResize({ quietMs, budgetMs }: typeof RESIZE_SETTLE): Promi
 }
 
 /** Observe extra widths immediately after serialization, keeping only stable ones. */
-export async function captureBoxTree(page: Page, html: string, viewports: BoxTree['viewports'], initial?: { name: string; nodes: BoxTree['nodes'] }, onUnproven?: (mismatch: BoxTreeMismatch) => void): Promise<Omit<BoxTree, 'source_path' | 'source_hash'> | undefined> {
+export async function captureBoxTree(page: Page, html: string, viewports: BoxTree['viewports'], initial?: { name: string; nodes: BoxTree['nodes'] }, onUnproven?: (mismatch: BoxTreeMismatch) => void, onDroppedViewport?: (name: string, mismatch: BoxTreeMismatch) => void): Promise<Omit<BoxTree, 'source_path' | 'source_hash'> | undefined> {
 	const $ = cheerio.load(html);
 	const nodes: BoxTree['nodes'] = {};
 	let mismatch: BoxTreeMismatch | undefined;
-	$('*').each((_index, element) => {
+	for (const element of boxElements($)) {
 		const id = $(element).attr(NODE_ID_ATTRIBUTE);
-		if (!id || nodes[id]) { mismatch = { kind: id ? 'duplicate' : 'unstamped', id, path: savedPath(element) }; return false; }
-		const children = $(element).children().toArray().map(child => $(child).attr(NODE_ID_ATTRIBUTE)!);
-		nodes[id] = { children, viewports: {} };
-	});
+		if (!id || nodes[id]) { mismatch = { kind: id ? 'duplicate' : 'unstamped', id, path: savedPath(element) }; break; }
+		nodes[id] = { children: boxChildren($, element), viewports: {} };
+	}
 	if (!mismatch && Object.keys(nodes).length > 100_000) mismatch = { kind: 'oversized', path: 'html', detail: `${Object.keys(nodes).length} elements` };
 	if (mismatch) { onUnproven?.(mismatch); return; }
 	const original = page.viewportSize();
@@ -239,28 +271,34 @@ export async function captureBoxTree(page: Page, html: string, viewports: BoxTre
 			if (name === initial?.name) continue;
 			await page.setViewportSize(size);
 			await page.evaluate(settleResize, RESIZE_SETTLE);
-			const readObservation = () => page.evaluate(({ attribute, properties, topology, html, observerSource }) => {
+			const readObservation = () => page.evaluate(({ attribute, properties, topology, html, observerSource, normalizeDocumentSource }) => {
 				// A visitor loading at this width sees the end state, not a resize transition mid-flight.
 				for (const animation of document.getAnimations()) if (animation instanceof CSSTransition) animation.finish();
-				const live = new Map(Array.from(document.querySelectorAll('*'), element => [element.getAttribute(attribute), element]));
+				// Compare retained topology on a clone; geometry still comes from the live source.
+				const retained = document.documentElement.cloneNode(true) as Element;
+				(new Function(`return (${normalizeDocumentSource})`)() as typeof normalizeRetainedDocument)(retained);
+				const live = new Map([retained, ...retained.querySelectorAll('*')].map(element => [element.getAttribute(attribute), element]));
 				for (const [id, expected] of Object.entries(topology)) {
 					const element = live.get(id);
-					if (!element) return;
+					if (!element) return { mismatch: { kind: 'missing' as const, id, path: 'html', detail: 'retained node missing at resized viewport' } };
 					// Ignore source-only nodes removed by serialization, but never accept a changed retained tree.
 					const children = Array.from(element.children, child => child.getAttribute(attribute)).filter(child => child && topology[child]);
-					if (JSON.stringify(children) !== JSON.stringify(expected.children)) return;
+					if (JSON.stringify(children) !== JSON.stringify(expected.children)) return { mismatch: {
+						kind: 'moved' as const, id, path: element.localName, detail: `expected children [${expected.children.join(',')}], retained [${children.join(',')}]`,
+					} };
 				}
 				// The protected constructor binds saved probe intrinsics; indirect eval
 				// would resolve built-ins from the source page's mutable globals.
 				const observe = new Function(`return (${observerSource})`)() as typeof observeBoxTree;
 				const observed = observe(new DOMParser().parseFromString(html, 'text/html').documentElement, properties, attribute);
 				return 'mismatch' in observed ? observed : { observations: Object.fromEntries(Object.entries(observed.nodes).map(([id, node]) => [id, node.viewports.capture])) };
-			}, { attribute: NODE_ID_ATTRIBUTE, properties: BOX_TREE_STYLES, topology: nodes, html, observerSource: observeBoxTree.toString() });
+			}, { attribute: NODE_ID_ATTRIBUTE, properties: BOX_TREE_STYLES, topology: nodes, html, observerSource: observeBoxTree.toString(), normalizeDocumentSource: normalizeRetainedDocument.toString() });
 			let reading = await readObservation();
 			if (reading && 'mismatch' in reading && reading.mismatch.kind === 'stylesheet') {
 				await page.waitForTimeout(250);
 				reading = await readObservation();
 			}
+			if (reading && 'mismatch' in reading) onDroppedViewport?.(name, reading.mismatch);
 			if (reading && 'mismatch' in reading && reading.mismatch.kind === 'stylesheet') {
 				onUnproven?.(reading.mismatch);
 				return;

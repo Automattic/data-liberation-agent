@@ -4,6 +4,7 @@
 // path: recognising a platform's CDN is exactly what an adapter is for.
 //
 import type { LiberationHooks } from '../page-actions.js';
+import { rewriteWixDerivedMedia } from './derived-media.js';
 import { resolveEventFormRedirect } from './event-forms.js';
 import { providerCreditRules } from '../../lib/source-cleanup.js';
 import type { Locator, Page } from 'playwright';
@@ -721,6 +722,7 @@ export const capture: LiberationHooks = {
 	additionalProfiles: wixAdditionalProfiles,
 	referenceWidths: [ 390, 768, 1440 ],
   resolveClientRedirect: resolveEventFormRedirect,
+  rewriteDerivedMedia: rewriteWixDerivedMedia,
   // The app-frame seal runs last, on the exact string that is saved (see embeds.ts).
   canonicalizeHtml: ( html, document ) => sealWixAppFrameHtml( canonicalizeWixCapturedHtml( restoreWixBlurredImageSources( preserveWixCollections( html ) ), document ), document ),
   cleanupRules: [
