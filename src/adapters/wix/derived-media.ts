@@ -1,9 +1,13 @@
 import * as cheerio from 'cheerio';
 import { rewriteSrcset } from '../../lib/srcset.js';
 import type { LiberationHooks } from '../page-actions.js';
+import { isWixBlurPlaceholder, wixDeclaredImageSource } from './image-geometry.js';
 
 /** Server declarations own member identity; only that member's light render
- * owns its runtime geometry. Repeated identities pair in occurrence order. */
+ * owns its runtime geometry. Repeated identities pair in occurrence order.
+ * An image the render never hydrated (no source, or still on its blurred
+ * placeholder, e.g. hidden menu chrome) takes its declared source, as
+ * capture's `normalizeWixImageSources` gives it. */
 export const rewriteWixDerivedMedia: NonNullable<LiberationHooks['rewriteDerivedMedia']> = input => {
 	const member = cheerio.load( input.memberServerHtml );
 	const derived = cheerio.load( input.derivedHtml );
@@ -17,7 +21,7 @@ export const rewriteWixDerivedMedia: NonNullable<LiberationHooks['rewriteDerived
 	const uriOf = ( value: string | undefined ): string | undefined => {
 		try {
 			const uri: unknown = JSON.parse( value ?? '' )?.imageData?.uri;
-			return typeof uri === 'string' && /^[a-zA-Z0-9_~.-]+$/.test( uri ) ? uri : undefined;
+			return typeof uri === 'string' && /^(?:[a-zA-Z0-9_~.-]|%[0-9A-Fa-f]{2})+$/.test( uri ) ? uri : undefined;
 		} catch { return undefined; }
 	};
 	const sources = new Map<string, ReturnType<typeof rendered>[]>();
@@ -32,9 +36,17 @@ export const rewriteWixDerivedMedia: NonNullable<LiberationHooks['rewriteDerived
 	for ( let i = 0; i < members.length; i++ ) {
 		const uri = uriOf( member( members[ i ]! ).attr( 'data-image-info' ) );
 		if ( ! uri ) return undefined;
-		const source = sources.get( uri )?.shift()?.find( 'img' );
+		const wrapper = sources.get( uri )?.shift();
+		const source = wrapper?.find( 'img' );
 		const target = derived( targets[ i ]! ).find( 'img' );
-		if ( source?.length !== 1 || target.length !== 1 ) return undefined;
+		if ( ! wrapper || source?.length !== 1 || target.length !== 1 ) return undefined;
+		const src = source.attr( 'src' );
+		if ( source.attr( 'srcset' ) === undefined && ( src === undefined || isWixBlurPlaceholder( src ) ) ) {
+			const declared = wixDeclaredImageSource( wrapper.attr( 'data-image-info' ) ?? '' );
+			if ( ! declared ) return undefined;
+			target.attr( 'src', declared.src ).removeAttr( 'srcset' );
+			continue;
+		}
 		for ( const attribute of [ 'src', 'srcset' ] ) {
 			const value = source.attr( attribute );
 			if ( ! value ) {

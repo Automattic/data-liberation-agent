@@ -86,9 +86,10 @@ describe( 'wix beforeFluid image geometry', () => {
 			const blur = `https://static.wixstatic.com/media/${ media }/v1/fill/w_78,h_52,al_c,q_80,usm_0.66_1.00_0.01,blur_2,enc_avif,quality_auto/${ media }`;
 			const sharp = `https://static.wixstatic.com/media/${ media }/v1/fill/w_1440,h_348,al_c,q_85,enc_avif,quality_auto/${ media }`;
 			const declared = JSON.stringify( { containerId: 'comp-a', alignType: 'center', displayMode: 'fill', targetWidth: 1189, targetHeight: 348, isLQIP: true, imageData: { width: 6000, height: 4000, uri: media, displayMode: 'fill' } } ).replace( /"/g, '&quot;' );
-			await tab.setContent( `<!doctype html><html><body><main><div data-blocks-engine-capture-captured-slide="1"><wow-image data-image-info="${ declared }"><img src="${ blur }" width="1189" height="348" alt="Slide"></wow-image></div><wow-image data-image-info="${ declared }"><img src="${ sharp }" alt="Hydrated"></wow-image></main></body></html>` );
+			await tab.setContent( `<!doctype html><html><body><main><div data-blocks-engine-capture-captured-slide="1"><wow-image data-image-info="${ declared }"><img src="${ blur }" width="1189" height="348" alt="Slide"></wow-image></div><wow-image data-image-info="${ declared }"><img src="${ sharp }" alt="Hydrated"></wow-image><wow-image data-image-info="${ declared }" style="visibility: hidden"><picture><img src="${ blur }" alt="Hidden"></picture></wow-image></main></body></html>` );
 			await wixAdapter.liberation!.beforeSerialize!( tab, { url: 'https://example.com/', viewport: 'desktop', serverHtml: '<html></html>' } );
 			expect( await tab.locator( 'img[alt="Slide"]' ).getAttribute( 'src' ) ).toBe( `https://static.wixstatic.com/media/${ media }/v1/fill/w_1189,h_348,al_c,q_85,enc_avif,quality_auto/${ media }` );
+			expect( await tab.locator( 'img[alt="Hidden"]' ).getAttribute( 'src' ) ).toBe( await tab.locator( 'img[alt="Slide"]' ).getAttribute( 'src' ) );
 			expect( await tab.locator( 'img[alt="Hydrated"]' ).getAttribute( 'src' ) ).toBe( sharp );
 		} finally { await tab.close(); }
 	}, 30_000 );
@@ -120,9 +121,11 @@ describe( 'serialized Wix image sources', () => {
 
 	it( 'points a declared image still on its blurred placeholder at its declared source', () => {
 		const html = `<main><wow-image class="image" data-image-info="${ remounted }" data-has-ssr-src=""><img src="${ blur }" alt="Item" style="width: 700px; height: 391px; object-fit: contain;"></wow-image>`
-			+ `<wow-image data-image-info="${ targeted }"><img src="${ blur.replace( /&/g, '&amp;' ) }" alt="Cover"></wow-image></main>`;
+			+ `<wow-image data-image-info="${ targeted }"><img src="${ blur.replace( /&/g, '&amp;' ) }" alt="Cover"></wow-image>`
+			+ `<wow-image data-image-info="${ targeted }"><picture><img src="${ blur }" alt="Wrapped"></picture></wow-image></main>`;
 		const out = canonicalize( html );
 		expect( out ).not.toContain( 'blur_2' );
+		expect( out ).toContain( `<picture><img src="https://static.wixstatic.com/media/${ media }/v1/fill/w_700,h_391,al_c,q_85,enc_avif,quality_auto/${ media }" alt="Wrapped"></picture>` );
 		expect( out ).toContain( `<img src="https://static.wixstatic.com/media/${ media }" alt="Item" style="width: 700px; height: 391px; object-fit: contain;">` );
 		expect( out ).toContain( `<img src="https://static.wixstatic.com/media/${ media }/v1/fill/w_700,h_391,al_c,q_85,enc_avif,quality_auto/${ media }" alt="Cover">` );
 	} );

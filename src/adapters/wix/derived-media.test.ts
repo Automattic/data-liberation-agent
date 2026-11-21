@@ -9,8 +9,8 @@ const page = ( content: string ) => `<html><head><title>Article</title></head><b
 const source = {
 	repServerHtml: page( image( 'first.jpg' ) ),
 	repProcessedHtml: page( image( 'first.jpg', rendition( 'first.jpg' ) ) ),
-	memberServerHtml: page( `<p>Member</p>${ image( 'second.jpg' ) }${ image( 'second.jpg' ) }` ),
-	memberRenderedHtml: page( `<p>Member</p>${ image( 'second.jpg', rendition( 'second.jpg' ) ) }${ image( 'second.jpg', rendition( 'second.jpg', 684 ) ) }` ),
+	memberServerHtml: page( `<p>Member</p>${ image( 'second%7Emv2.jpg' ) }${ image( 'second%7Emv2.jpg' ) }` ),
+	memberRenderedHtml: page( `<p>Member</p>${ image( 'second%7Emv2.jpg', rendition( 'second%7Emv2.jpg' ) ) }${ image( 'second%7Emv2.jpg', rendition( 'second%7Emv2.jpg', 684 ) ) }` ),
 	baseUrl: 'https://fixture.example/article',
 	contentSlotSelector: '#content',
 };
@@ -23,17 +23,26 @@ describe( 'member light-render media', () => {
 		expect( result.ok ).toBe( true );
 		if ( ! result.ok ) return;
 		expect( compareDerivedWithCapture( { derivedHtml: result.html, realHtml: source.memberRenderedHtml, baseUrl: source.baseUrl } ).equal ).toBe( true );
-		expect( cheerio.load( result.html )( 'img' ).map( ( _, node ) => node.attribs.src ).get() ).toEqual( [ rendition( 'second.jpg' ), rendition( 'second.jpg', 684 ) ] );
+		expect( cheerio.load( result.html )( 'img' ).map( ( _, node ) => node.attribs.src ).get() ).toEqual( [ rendition( 'second%7Emv2.jpg' ), rendition( 'second%7Emv2.jpg', 684 ) ] );
 	} );
 
-	it.each( [ undefined, page( image( 'second.jpg' ) ), page( image( 'second.jpg', rendition( 'second.jpg' ).replace( 'q_85', 'blur_2' ) ) ) ] )( 'declines missing, partial or blurred light renders', memberRenderedHtml => {
+	it.each( [ undefined, page( image( 'second%7Emv2.jpg' ) ) ] )( 'declines missing or partial light renders', memberRenderedHtml => {
 		expect( deriveMemberDocument( { ...source, memberRenderedHtml, rewriteDerivedMedia: rewriteWixDerivedMedia } ) ).toMatchObject( { ok: false, gate: { code: 'runtime_media_unmapped' } } );
 	} );
 
 	it( 'retargets retained card identities and copies srcsets without weakening verification', () => {
-		const memberRenderedHtml = page( image( 'second.jpg', rendition( 'second.jpg' ) ).replace( '<img ', `<img srcset="${ rendition( 'second.jpg' ) } 1x, ${ rendition( 'second.jpg', 684 ) } 2x" ` ) );
-		const result = deriveMemberDocument( { ...source, contentSlotSelector: undefined, memberServerHtml: page( image( 'second.jpg' ) ), memberRenderedHtml, rewriteDerivedMedia: rewriteWixDerivedMedia } );
+		const memberRenderedHtml = page( image( 'second%7Emv2.jpg', rendition( 'second%7Emv2.jpg' ) ).replace( '<img ', `<img srcset="${ rendition( 'second%7Emv2.jpg' ) } 1x, ${ rendition( 'second%7Emv2.jpg', 684 ) } 2x" ` ) );
+		const result = deriveMemberDocument( { ...source, contentSlotSelector: undefined, memberServerHtml: page( image( 'second%7Emv2.jpg' ) ), memberRenderedHtml, rewriteDerivedMedia: rewriteWixDerivedMedia } );
 		expect( result.ok && compareDerivedWithCapture( { derivedHtml: result.html, realHtml: memberRenderedHtml, baseUrl: source.baseUrl } ).equal ).toBe( true );
 		expect( rewriteWixDerivedMedia( { ...source, memberRenderedHtml: memberRenderedHtml.replaceAll( 'static.wixstatic.com', 'other.example' ), derivedHtml: memberRenderedHtml } ) ).toBeUndefined();
+	} );
+
+	it.each( [
+		[ 'never hydrated, sized', { targetWidth: 450, targetHeight: 253 }, undefined, 'https://static.wixstatic.com/media/second%7Emv2.jpg/v1/fill/w_450,h_253,al_c,q_85,enc_avif,quality_auto/second%7Emv2.jpg' ],
+		[ 'hidden on its blurred placeholder, unsized', {}, rendition( 'second%7Emv2.jpg' ).replace( 'q_85', 'blur_2' ), 'https://static.wixstatic.com/media/second%7Emv2.jpg' ],
+	] )( 'gives an image the render left %s its declared source, as capture does', ( _case, size, src, expected ) => {
+		const declared = `<wow-image data-image-info='${ JSON.stringify( { ...size, imageData: { uri: 'second%7Emv2.jpg' } } ) }'><picture><img alt="Photo"${ src ? ` src="${ src }"` : '' }></picture></wow-image>`;
+		const result = deriveMemberDocument( { ...source, memberRenderedHtml: page( `<p>Member</p>${ image( 'second%7Emv2.jpg', rendition( 'second%7Emv2.jpg' ) ) }${ declared }` ), rewriteDerivedMedia: rewriteWixDerivedMedia } );
+		expect( result.ok && cheerio.load( result.html )( 'img' ).map( ( _, node ) => node.attribs.src ).get() ).toEqual( [ rendition( 'second%7Emv2.jpg' ), expected ] );
 	} );
 } );
