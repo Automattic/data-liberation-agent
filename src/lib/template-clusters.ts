@@ -38,6 +38,7 @@ export const TEMPLATE_CLUSTER_LIMITS = {
  * `metrics.gate`; the loss-ledger codes live in capture.ts.
  */
 export type GateCode =
+	| 'runtime_media_unmapped' /** Adapter could not resolve member runtime media. */
 	| 'cluster_key_mismatch' /** H_M's fingerprint is not the cluster's key. */
 	| 'slot_anchor_unmapped' /** a slot has no matching anchor in `D_R`. */
 	| 'runtime_slot_content' /** a slot carries scripts, handlers or embeds capture never observed. */
@@ -554,7 +555,16 @@ export function deriveMemberDocument( input: {
 	 * the server diff never sees; the member shows its own there (#1813).
 	 */
 	featuredImages?: { representative?: string; member?: string };
+	memberRenderedHtml?: string;
+	rewriteDerivedMedia?: import('../adapters/page-actions.js').LiberationHooks['rewriteDerivedMedia'];
 } ): MemberDerivation {
+	const finish = ( html: string, stats: SlotStats, unobservedSlots: number ): MemberDerivation => {
+		const derivedHtml = withMemberFeaturedImage( html, input.featuredImages );
+		const rewritten = input.rewriteDerivedMedia ? input.rewriteDerivedMedia( { ...input, derivedHtml } ) : derivedHtml;
+		return rewritten === undefined
+			? { ok: false, gate: { code: 'runtime_media_unmapped', reason: 'member runtime media unavailable or unresolved in light render' } }
+			: { ok: true, html: rewritten, stats, unobservedSlots };
+	};
 	const keyOf = ( html: string ): string => {
 		let normalized = input.contentSlotSelector ? withEmptySlot( html, input.contentSlotSelector ) : html;
 		if ( input.memberHeadSlotSelector ) {
@@ -594,7 +604,7 @@ export function deriveMemberDocument( input: {
 	if ( ! slots.length ) {
 		// Nothing to transplant: the member is the representative byte for byte
 		// in content. That is a legitimate derived member with zero slots.
-		return { ok: true, html: withMemberFeaturedImage( input.repProcessedHtml, input.featuredImages ), stats: { slots: 0, subtreeSlots: 0 }, unobservedSlots: 0 };
+		return finish( input.repProcessedHtml, { slots: 0, subtreeSlots: 0 }, 0 );
 	}
 	const mounts = hydratedMounts( repBody, processedBody, anchorCounts );
 	const located = slots.map( slot => ( { slot, anchor: slotAnchor( slot.repNode, repBody, anchorCounts ) } ) );
@@ -683,7 +693,7 @@ export function deriveMemberDocument( input: {
 		else repProcessed( 'head' ).append( replacements.map( node => member.html( node ) ).join( '' ) );
 		originals.remove();
 	}
-	return { ok: true, html: withMemberFeaturedImage( repProcessed.html(), input.featuredImages ), stats: { slots: slots.length, subtreeSlots }, unobservedSlots };
+	return finish( repProcessed.html(), { slots: slots.length, subtreeSlots }, unobservedSlots );
 }
 
 /**

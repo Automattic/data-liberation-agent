@@ -653,6 +653,7 @@ async function runCaptureWebsite(
 		? new ( await import( './template-cluster-deferral.js' ) ).TemplateClusterDeferral( {
 				sourceUrl, outputDir, routeScope, governors: sourceGovernors,
 				templateIdentity: adapter.templateIdentity, styleNormalization: adapter.templateStyleNormalization,
+				rewriteDerivedMedia: adapter.liberation?.rewriteDerivedMedia?.bind( adapter.liberation ),
 				// Light renders stop with the capture window, or the default one without a time budget.
 				deadline: timeBudget?.abandonAt ?? startedAt + DEFAULT_CAPTURE_TIME_BUDGET_MS,
 			}, () => clusterRankingGroups )
@@ -817,6 +818,7 @@ async function runCaptureWebsite(
 				sourceUrl,
 				outputDir,
 				report: templateGrouping.report,
+				rewriteDerivedMedia: adapter.liberation?.rewriteDerivedMedia?.bind( adapter.liberation ),
 				routeScope,
 				timeBudgetMs: options.timeBudgetMs,
 				frontierUrls: screenshotResult.linkedPageCoverage?.requiredUrls ?? [],
@@ -1267,6 +1269,7 @@ export async function deriveTemplateClusterMembers( input: {
 	acquireRemaining?: ( members: readonly import('./template-cluster-fallback.js').EscalatedMember[] ) => Promise< import('./template-cluster-fallback.js').EscalationFallback >;
 	/** The adapter's HTTP acquisition profile: escalated members fall back to it instead of being omitted. */
 	acquisition?: import('../platform/acquisition.js').HttpAcquisitionProfile;
+	rewriteDerivedMedia?: import('../adapters/page-actions.js').LiberationHooks['rewriteDerivedMedia'];
 	/** The browser pass's deferral: its light renders verify and supply clusters whose runtime rewrites server content. */
 	deferral?: import('./template-cluster-deferral.js').TemplateClusterDeferral;
 } ): Promise< TemplateClusterDerivation > {
@@ -1485,8 +1488,10 @@ export async function deriveTemplateClusterMembers( input: {
 						sourceUnavailable( verificationUrl, `verification member ${ verificationFetch.unavailable }` );
 						continue;
 					}
+					const media = input.rewriteDerivedMedia ? await input.deferral?.document( verificationUrl, 'rendered' ) : undefined;
+					const mediaContext = { rewriteDerivedMedia: input.rewriteDerivedMedia, memberRenderedHtml: media && 'html' in media ? media.html : undefined };
 					let memberHtml = verificationFetch.html;
-					let derivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml: memberHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, featuredImages: { representative: repFeed?.image, member: verificationFeed?.image }, ...( feedHtml ? { contentSlotSelector, memberHeadSlotSelector: contentSource?.memberHeadSlotSelector } : {} ) } );
+					let derivation = deriveMemberDocument( { ...mediaContext, repServerHtml, repProcessedHtml, memberServerHtml: memberHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, featuredImages: { representative: repFeed?.image, member: verificationFeed?.image }, ...( feedHtml ? { contentSlotSelector, memberHeadSlotSelector: contentSource?.memberHeadSlotSelector } : {} ) } );
 					if ( feedHtml && ( ! derivation.ok || ! compareDerivedWithCapture( { derivedHtml: derivation.html, realHtml, repServerHtml, memberServerHtml: memberHtml, styleNormalization: input.styleNormalization, runtimeStateClasses: input.runtimeStateClasses, baseUrl: group.representative } ).equal ) ) {
 						feedVerified = false;
 						diagnostics.push( { code: ROUTE_TEMPLATE_ESCALATED, url: verificationUrl, reason: 'feed template verification mismatch; using governed page acquisition for this cluster' } );
@@ -1496,7 +1501,7 @@ export async function deriveTemplateClusterMembers( input: {
 							continue;
 						}
 						memberHtml = fallback.html;
-						derivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml: memberHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, featuredImages: { representative: repFeed?.image, member: verificationFeed?.image } } );
+						derivation = deriveMemberDocument( { ...mediaContext, repServerHtml, repProcessedHtml, memberServerHtml: memberHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, featuredImages: { representative: repFeed?.image, member: verificationFeed?.image } } );
 					}
 					if ( derivation.ok ) {
 						const comparison = compareDerivedWithCapture( { derivedHtml: derivation.html, realHtml, repServerHtml, memberServerHtml: memberHtml, styleNormalization: input.styleNormalization, runtimeStateClasses: input.runtimeStateClasses, baseUrl: group.representative } );
@@ -1520,7 +1525,7 @@ export async function deriveTemplateClusterMembers( input: {
 					if ( ! verified ) {
 						const [ repRender, memberRender ] = input.deferral ? await Promise.all( [ input.deferral.document( group.representative, 'rendered' ), input.deferral.document( verificationUrl, 'rendered' ) ] ) : [];
 						if ( repRender && memberRender && 'html' in repRender && 'html' in memberRender ) {
-							const renderedDerivation = deriveMemberDocument( { repServerHtml: repRender.html, repProcessedHtml, memberServerHtml: memberRender.html, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization } );
+							const renderedDerivation = deriveMemberDocument( { ...mediaContext, repServerHtml: repRender.html, repProcessedHtml, memberServerHtml: memberRender.html, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization } );
 							const comparison = renderedDerivation.ok ? compareDerivedWithCapture( { derivedHtml: renderedDerivation.html, realHtml, repServerHtml: repRender.html, memberServerHtml: memberRender.html, styleNormalization: input.styleNormalization, baseUrl: group.representative } ) : undefined;
 							if ( comparison?.equal ) {
 								verified = rendered = true;
@@ -1571,7 +1576,10 @@ export async function deriveTemplateClusterMembers( input: {
 					// The browser pass's deferral check already holds most member documents.
 					const memberSource = rendered ? 'rendered' : 'server';
 					const response = feedHtml ? { html: feedHtml } : input.deferral ? await input.deferral.document( url, memberSource ) : await sourceDocument( url );
+					const media = input.rewriteDerivedMedia ? await input.deferral?.document( url, 'rendered' ) : undefined;
+					const mediaContext = { rewriteDerivedMedia: input.rewriteDerivedMedia, memberRenderedHtml: media && 'html' in media ? media.html : undefined };
 					input.deferral?.release( url, memberSource );
+					input.deferral?.release( url, 'rendered' );
 					if ( 'unavailable' in response ) {
 						record.unavailable.push( { url, reason: response.unavailable } );
 						unavailableCount++;
@@ -1581,12 +1589,12 @@ export async function deriveTemplateClusterMembers( input: {
 					// A synthesized member is the representative's template by
 					// construction: its key is compared outside the content slot.
 					const slotSelector = feedHtml ? { contentSlotSelector, memberHeadSlotSelector: contentSource?.memberHeadSlotSelector } : {};
-					const desktopDerivation = deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, featuredImages: { representative: repFeed?.image, member: memberFeed?.image }, ...slotSelector } );
+					const desktopDerivation = deriveMemberDocument( { ...mediaContext, repServerHtml, repProcessedHtml, memberServerHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, featuredImages: { representative: repFeed?.image, member: memberFeed?.image }, ...slotSelector } );
 					const mobileDerivation = desktopDerivation.ok && repProcessedMobileHtml !== undefined
-						? deriveMemberDocument( { repServerHtml, repProcessedHtml: repProcessedMobileHtml, memberServerHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, featuredImages: { representative: repFeed?.image, member: memberFeed?.image }, ...slotSelector } )
+						? deriveMemberDocument( { ...mediaContext, repServerHtml, repProcessedHtml: repProcessedMobileHtml, memberServerHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, featuredImages: { representative: repFeed?.image, member: memberFeed?.image }, ...slotSelector } )
 						: undefined;
 					const widthDerivations = mobileDerivation?.ok
-						? repWidthDocuments.map( document => ( { ...document, derivation: deriveMemberDocument( { repServerHtml, repProcessedHtml: document.html, memberServerHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, featuredImages: { representative: repFeed?.image, member: memberFeed?.image }, ...slotSelector } ) } ) )
+						? repWidthDocuments.map( document => ( { ...document, derivation: deriveMemberDocument( { ...mediaContext, repServerHtml, repProcessedHtml: document.html, memberServerHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, featuredImages: { representative: repFeed?.image, member: memberFeed?.image }, ...slotSelector } ) } ) )
 						: [];
 					const derivation = [ mobileDerivation, ...widthDerivations.map( width => width.derivation ) ].find( candidate => candidate && ! candidate.ok ) ?? desktopDerivation;
 					lap( 'derive' );

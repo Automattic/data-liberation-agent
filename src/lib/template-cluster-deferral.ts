@@ -23,7 +23,7 @@ import type { TemplateGroup, TemplateIdentity, TemplateStyleNormalization } from
 export const TEMPLATE_DEFERRAL_LIMITS = {
 	/** One member document fetch, as in template derivation. */
 	requestTimeoutMs: 15_000,
-	/** One light render: navigation, a short network settle, one DOM read. */
+	/** One light render: navigation, short settle, bounded hydration, one DOM read. */
 	renderMs: 45_000,
 	settleMs: 2_000,
 	/** Light renders run alongside the browser pass. */
@@ -44,6 +44,7 @@ export interface TemplateClusterDeferralInput {
 	governors: SourceRequestGovernors;
 	templateIdentity?: TemplateIdentity;
 	styleNormalization?: TemplateStyleNormalization;
+	rewriteDerivedMedia?: import('../adapters/page-actions.js').LiberationHooks['rewriteDerivedMedia'];
 	/** No light render starts after this instant. */
 	deadline?: number;
 }
@@ -112,13 +113,14 @@ export class TemplateClusterDeferral {
 		const repProcessedHtml = this.capturedHtml( group.representative );
 		const realHtml = this.capturedHtml( verifier );
 		if ( repProcessedHtml === undefined || realHtml === undefined ) return;
-		const derive = ( repServerHtml: string, memberServerHtml: string ) => deriveMemberDocument( { repServerHtml, repProcessedHtml, memberServerHtml, baseUrl: group.representative, templateIdentity: this.input.templateIdentity, styleNormalization: this.input.styleNormalization } );
+		const derive = ( repServerHtml: string, memberServerHtml: string, memberRenderedHtml?: string ) => deriveMemberDocument( { rewriteDerivedMedia: this.input.rewriteDerivedMedia, memberRenderedHtml, repServerHtml, repProcessedHtml, memberServerHtml, baseUrl: group.representative, templateIdentity: this.input.templateIdentity, styleNormalization: this.input.styleNormalization } );
 		let source: MemberDocumentSource | undefined;
 		let repServerHtml = '';
 		for ( const candidate of [ 'server', 'rendered' ] as const ) {
 			const [ rep, member ] = await Promise.all( [ this.document( group.representative, candidate ), this.document( verifier, candidate ) ] );
 			if ( ! ( 'html' in rep ) || ! ( 'html' in member ) ) continue;
-			const derivation = derive( rep.html, member.html );
+			const media = this.input.rewriteDerivedMedia ? await this.document( verifier, 'rendered' ) : undefined;
+			const derivation = derive( rep.html, member.html, media && 'html' in media ? media.html : undefined );
 			if ( derivation.ok && compareDerivedWithCapture( { derivedHtml: derivation.html, realHtml, repServerHtml: rep.html, memberServerHtml: member.html, styleNormalization: this.input.styleNormalization, baseUrl: group.representative } ).equal ) {
 				source = candidate;
 				repServerHtml = rep.html;
@@ -131,11 +133,13 @@ export class TemplateClusterDeferral {
 		}
 		const startedAt = Date.now();
 		const pending = group.members.filter( url => ! this.captured.has( normalizedUrl( url ) ) );
-		await mapPool( pending, source === 'rendered' ? TEMPLATE_DEFERRAL_LIMITS.renderConcurrency : this.input.governors.forOrigin( this.input.sourceUrl ).concurrency, async url => {
+		await mapPool( pending, source === 'rendered' || this.input.rewriteDerivedMedia ? TEMPLATE_DEFERRAL_LIMITS.renderConcurrency : this.input.governors.forOrigin( this.input.sourceUrl ).concurrency, async url => {
 			if ( this.captured.has( normalizedUrl( url ) ) ) return;
 			const member = await this.document( url, source );
-			if ( 'html' in member && derive( repServerHtml, member.html ).ok ) this.deferred.add( normalizedUrl( url ) );
-			else this.release( url, source );
+			const media = this.input.rewriteDerivedMedia ? await this.document( url, 'rendered' ) : undefined;
+			if ( 'html' in member && derive( repServerHtml, member.html, media && 'html' in media ? media.html : undefined ).ok ) this.deferred.add( normalizedUrl( url ) );
+			// Keep the memoized result (including unavailable/declined renders):
+			// post-capture derivation must not navigate this member a second time.
 		} );
 		const deferred = pending.filter( url => this.defers( url ) ).length;
 		process.stderr.write( `[template-clusters] deferral: ${ group.representative } verified from ${ source } documents; ${ deferred } of ${ pending.length } pending members deferred, ${ Date.now() - startedAt }ms\n` );
@@ -157,7 +161,7 @@ export class TemplateClusterDeferral {
 	}
 
 	/**
-	 * A light render: navigation, a bounded network settle and one DOM read,
+	 * A light render: navigation, bounded settle/media hydration and one DOM read,
 	 * without the full capture's probes, width sweep or serialization, which
 	 * the representative's captured document already supplies. For runtimes
 	 * that rewrite server content per member (a gallery counter, a status line
@@ -166,6 +170,7 @@ export class TemplateClusterDeferral {
 	private async render( url: string ): Promise< MemberDocument > {
 		const deadline = Math.min( this.input.deadline ?? Infinity, Date.now() + TEMPLATE_DEFERRAL_LIMITS.renderMs );
 		if ( this.closing || deadline <= Date.now() ) return { unavailable: 'light render budget exhausted' };
+		const startedAt = Date.now();
 		const left = () => Math.max( 1, deadline - Date.now() );
 		let context: BrowserContext | undefined;
 		try {
@@ -182,11 +187,30 @@ export class TemplateClusterDeferral {
 			const status = navigation.response?.status() ?? 0;
 			if ( status < 200 || status >= 300 ) return { unavailable: `HTTP ${ status }` };
 			await page.waitForLoadState( 'networkidle', { timeout: Math.min( TEMPLATE_DEFERRAL_LIMITS.settleMs, left() ) } ).catch( () => {} );
+			// Media may hydrate only on intersection. One bounded viewport walk,
+			// inside this same render, keeps a single final DOM serialization.
+			if ( this.input.rewriteDerivedMedia ) {
+				const hydrationStartedAt = Date.now();
+				await withTimeout( page.evaluate( async () => {
+					const x = scrollX, y = scrollY;
+					try {
+						for ( let step = 0; step < 40; step++ ) {
+							const top = step * innerHeight * 0.8;
+							scrollTo( 0, top );
+							await new Promise( resolve => setTimeout( resolve, 100 ) );
+							if ( top + innerHeight >= document.documentElement.scrollHeight ) break;
+						}
+					} finally { scrollTo( x, y ); }
+					await new Promise( resolve => setTimeout( resolve, 200 ) );
+				} ), left(), 'light render media hydration' );
+				process.stderr.write( `[timing] template light-render hydration ${ url } ${ Date.now() - hydrationStartedAt }ms\n` );
+			}
 			return { html: await withTimeout( page.content(), left(), 'light render DOM read' ) };
 		} catch ( error ) {
 			return { unavailable: error instanceof Error ? error.message : String( error ) };
 		} finally {
 			await context?.close().catch( () => {} );
+			process.stderr.write( `[timing] template light-render ${ url } ${ Date.now() - startedAt }ms\n` );
 		}
 	}
 }
