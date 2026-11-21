@@ -69,6 +69,13 @@ describe( 'canonicalizeWixInstanceIds', () => {
 		expect( canonicalizeWixInstanceIds( html ) ).toBe( html );
 	} );
 
+	it( 'derives scope identity only from element ids and classes, not dead inline selectors', () => {
+		const source = page( 'comp-aaaa1111' );
+		const inline = canonicalizeWixInstanceIds( source.replace( '</style>', '.comp-aaaa1111_r_comp-dead{display:none}</style>' ) );
+		const linked = canonicalizeWixInstanceIds( source.replace( /<style>[\s\S]*?<\/style>/, '<link rel="stylesheet" href="/page.css">' ) );
+		expect( /<body>[\s\S]*<\/body>/.exec( inline )?.[ 0 ] ).toBe( /<body>[\s\S]*<\/body>/.exec( linked )?.[ 0 ] );
+	} );
+
 	it( 'leaves markup without instance references unchanged', () => {
 		const html = '<div id="comp-abc" class="comp-abc-container">x</div>';
 		expect( canonicalizeWixInstanceIds( html ) ).toBe( html );
