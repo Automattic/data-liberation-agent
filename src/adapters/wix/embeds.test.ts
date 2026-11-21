@@ -5,6 +5,7 @@ import { it } from '../../../test/browser.js';
 import { capture } from './capture.js';
 import { applySourceCleanup, cleanupPolicy, readSourceCleanup } from '../../lib/source-cleanup.js';
 import { portWixRuntimeEmbeds } from './embeds.js';
+import { capturePageHtml } from '../../lib/screenshot/screenshotter.js';
 import { wixAdapter } from './index.js';
 import {
 	googleMapsEmbedUrl,
@@ -17,6 +18,7 @@ import {
 	wixAppMapView,
 	wixEmbedNote,
 	wixFaqItems,
+	sealWixAppFrameHtml,
 } from './embeds.js';
 
 const MAP_WRAPPER =
@@ -33,6 +35,8 @@ const APP_WIDGET = `https://dev-wix-languages.appspot.com/widget?pageId=vt13i&co
 const APP_MAP = `https://events.wixapps.net/events-server/html/google-map-v2?locale=de&lat=51.3396955&lng=12.3730747&instance=${ INSTANCE }`;
 const FAQ_INSTANCE = `sig.${ base64Url( { instanceId: '00000000-0000-4000-8000-000000000001', appDefId: '14c92d28-031e-7910-c9a8-a670011e062d' } ) }`;
 const FAQ_WIDGET = `https://faq-app.example.test/render/FaqOoi?compId=comp-faq&instance=${ FAQ_INSTANCE }`;
+/** What capture saves for the page now: the real serializer, then Wix's canonicalization. */
+const savedHtml = async ( page: Page ) => capture.canonicalizeHtml!( await capturePageHtml( page ) );
 const HTML_EMBED = 'https://www-example-hoa-test.filesusr.com/html/cf2dfb_0123456789abcdef0123456789abcdef.html';
 
 describe( 'isWixGoogleMapFrame', () => {
@@ -84,6 +88,26 @@ describe( 'wixFaqItems', () => {
 		expect( wixFaqItems( item( [ { tag: 'p', children: 'not a list' } ] ) ) ).toBe( 'unsupported' );
 		const deep = Array.from( { length: 40 } ).reduce< unknown >( ( child ) => ( { tag: 'div', children: [ child ] } ), { text: 'deep' } );
 		expect( wixFaqItems( item( [ deep ] ) ) ).toBe( 'unsupported' );
+	} );
+} );
+
+describe( 'sealWixAppFrameHtml', () => {
+	const frame = ( attributes: string ) => `<iframe title="PDF File Viewer" ${ attributes }></iframe>`;
+	const widget = APP_WIDGET.replace( /&/g, '&amp;' );
+
+	it( 'turns a painted app frame into the note at its recorded size and drops an unpainted one', () => {
+		const html = sealWixAppFrameHtml( `<p>${ frame( `src="${ widget }" data-blocks-engine-capture-visual-iframe-width="180" data-blocks-engine-capture-visual-iframe-height="120" data-blocks-engine-node-id="n7"` ) }${ frame( `src="${ widget }"` ) }</p>` );
+		expect( html ).not.toContain( 'instance=' );
+		expect( html ).toContain( 'max-width:180px;min-height:120px' );
+		expect( html ).toContain( 'data-blocks-engine-node-id="n7"' );
+		expect( html.match( /role="note"/g ) ).toHaveLength( 1 );
+		expect( html ).toContain( `>${ wixEmbedNote( 'PDF File Viewer' ) }</div>` );
+	} );
+
+	it( 'keeps pages, public embeds and ported maps byte for byte', () => {
+		const page = `<iframe src="${ HTML_EMBED }?instance=1"></iframe><iframe src="https://maps.google.com/maps?q=1%2C2&amp;output=embed"></iframe>`;
+		expect( sealWixAppFrameHtml( page ) ).toBe( page );
+		expect( sealWixAppFrameHtml( '<p>no frames</p>' ) ).toBe( '<p>no frames</p>' );
 	} );
 } );
 
@@ -202,7 +226,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime embed
 			expect( await notes.count() ).toBe( 1 );
 			expect( await notes.first().textContent() ).toBe( wixEmbedNote( 'PDF File Viewer' ) );
 			expect( await notes.first().evaluate( ( note ) => [ note.getBoundingClientRect().width, note.getBoundingClientRect().height ] ) ).toEqual( [ 180, 180 ] );
-			const html = await page.content();
+			const html = await savedHtml( page );
 			expect( html ).not.toContain( 'instance=' );
 			expect( html ).not.toContain( 'appspot.com' );
 			// A Wix HTML embed is a public file and keeps working as it is.
@@ -379,10 +403,16 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime embed
 			return;
 		}
 		const widget = variant === 'never' ? '<div id="root"></div>' : `<!doctype html><div id="root"></div><script>${ tamper }
-			fetch( '/_api/faq-server/v2/question-entries/query', { method: 'POST', body: '{}' } ).then( response => response.json() ).then( ( { entries } ) => {
-				document.getElementById( 'root' ).insertAdjacentHTML( 'beforeend', '<div data-hook="faq-root">' + ${ tabs }'<div data-hook="widget-accordion-wrapper">' + entries.map( ( entry, index ) =>
+			const render = ( entries ) => {
+				const root = document.getElementById( 'root' );
+				root.replaceChildren();
+				root.insertAdjacentHTML( 'beforeend', '<div data-hook="faq-root">' + ${ tabs }'<div data-hook="widget-accordion-wrapper">' + entries.map( ( entry, index ) =>
 					'<button data-hook="accordion-item-header" aria-expanded="' + ( index === 0 ) + '" aria-controls="item-' + index + '"><h3 data-hook="title">' + entry.question + '</h3><svg data-hook="expandIcon"></svg></button>' +
 					'<div id="' + ${ panelId } + '" data-hook="accordion-item-content" style="display:' + ( index === 0 ? 'block' : 'none' ) + '">' + ${ answer } + '</div>' ).join( '' ) + '</div></div>' );
+			};
+			fetch( '/_api/faq-server/v2/question-entries/query', { method: 'POST', body: '{}' } ).then( response => response.json() ).then( ( { entries } ) => {
+				// 'staggered': one complete question first, the next page of questions 800 ms later.
+				${ variant === 'staggered' ? 'render( entries.slice( 0, 1 ) ); setTimeout( () => render( entries ), 800 );' : 'render( entries );' }
 			} );
 		</script>`;
 		await route.fulfill( { contentType: 'text/html', body: widget } );
@@ -442,21 +472,25 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime embed
 		}, 300 ), faqFrame() );
 		await portWixRuntimeEmbeds( page, { faqRenderMilliseconds: 4_000 } );
 		await expectPortedFaq( page );
-		// A frame mounted after the port is sealed too, before any serialization.
-		await page.evaluate( ( src ) => { const late = document.createElement( 'iframe' ); late.title = 'Wix FAQ'; late.src = src; document.body.append( late ); }, faqFrame() );
-		await expect.poll( () => page.locator( '[data-blocks-engine-capture-unported-embed="wix"]' ).count() ).toBe( 1 );
-		expect( await page.content() ).not.toContain( 'instance=' );
+		// A frame mounted after the port never reaches the saved HTML with its token.
+		await page.evaluate( ( src ) => { const late = document.createElement( 'iframe' ); late.title = 'Wix FAQ'; late.src = src; late.style.cssText = 'width:600px;height:400px'; document.body.append( late ); }, faqFrame() );
+		const html = await savedHtml( page );
+		expect( html ).not.toContain( 'instance=' );
+		expect( html ).toContain( wixEmbedNote( 'Wix FAQ' ) );
 	}, 30_000 );
 
-	it( 'removes FAQ frames that never show without spending the wait on them', async ({ newPage }) => {
+	it( 'shares one wait across FAQ frames that never show, and saves them without their token', async ({ newPage }) => {
 		const page = await newPage();
 		await routeFaqApp( page );
 		await page.setContent( `${ FRAME_STYLE }<div style="display:none"><iframe title="Wix FAQ" src="${ faqFrame( 'never' ) }"></iframe></div>
 			<iframe title="Wix FAQ" style="height:0" src="${ faqFrame( 'never' ) }"></iframe>` );
 		const startedAt = Date.now();
-		await portWixRuntimeEmbeds( page, { faqRenderMilliseconds: 5_000 } );
-		expect( Date.now() - startedAt ).toBeLessThan( 2_000 );
-		expect( await page.locator( 'iframe, [data-blocks-engine-capture-unported-embed], [data-blocks-engine-capture-ported-embed]' ).count() ).toBe( 0 );
+		await portWixRuntimeEmbeds( page, { faqRenderMilliseconds: 1_500 } );
+		expect( Date.now() - startedAt ).toBeLessThan( 2_500 );
+		const html = await savedHtml( page );
+		expect( html ).not.toContain( 'instance=' );
+		expect( html ).not.toContain( '<iframe' );
+		expect( html ).not.toContain( 'data-blocks-engine-capture-unported-embed' );
 	}, 30_000 );
 
 	it( 'ports a FAQ frame Wix reveals once loaded, but not one that stays hidden', async ({ newPage }) => {
@@ -468,9 +502,82 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime embed
 		await portWixRuntimeEmbeds( page, { faqRenderMilliseconds: 4_000 } );
 		await expectPortedFaq( page );
 
-		await page.setContent( `${ FRAME_STYLE }<iframe title="Wix FAQ" style="visibility:hidden" src="${ faqFrame() }"></iframe>` );
-		await portWixRuntimeEmbeds( page, { faqRenderMilliseconds: 1_500 } );
-		expect( await page.locator( 'iframe, details, [data-blocks-engine-capture-unported-embed], [data-blocks-engine-capture-ported-embed]' ).count() ).toBe( 0 );
+		for ( const hidden of [ 'visibility:hidden', 'opacity:0' ] ) {
+			await page.setContent( `${ FRAME_STYLE }<iframe title="Wix FAQ" style="${ hidden }" src="${ faqFrame() }"></iframe>` );
+			await portWixRuntimeEmbeds( page, { faqRenderMilliseconds: 2_500 } );
+			expect( await page.locator( 'details, [data-blocks-engine-capture-ported-embed]' ).count(), hidden ).toBe( 0 );
+			const html = await savedHtml( page );
+			expect( html, hidden ).not.toContain( 'instance=' );
+			expect( html, hidden ).not.toContain( '<iframe' );
+		}
+	}, 30_000 );
+
+	it( 'ports a FAQ that was inside display:none and is revealed during the wait', async ({ newPage }) => {
+		const page = await newPage();
+		await routeFaqApp( page );
+		await page.setContent( `${ FRAME_STYLE }<div id="host" style="display:none"><iframe title="Wix FAQ" src="${ faqFrame() }"></iframe></div>` );
+		await page.evaluate( () => setTimeout( () => { document.getElementById( 'host' )!.style.display = 'block'; }, 300 ) );
+		await portWixRuntimeEmbeds( page, { faqRenderMilliseconds: 4_000 } );
+		await expectPortedFaq( page );
+	}, 30_000 );
+
+	it( 'waits for a FAQ whose questions arrive in batches', async ({ newPage }) => {
+		const page = await newPage();
+		await routeFaqApp( page );
+		await page.setContent( `${ FRAME_STYLE }<iframe title="Wix FAQ" src="${ faqFrame( 'staggered' ) }"></iframe>` );
+		await portWixRuntimeEmbeds( page, { faqRenderMilliseconds: 5_000 } );
+		await expectPortedFaq( page );
+	}, 30_000 );
+
+	it( 'reconciles late FAQ mounts, remounts after a port and late Events maps until the deadline', async ({ newPage }) => {
+		const page = await newPage();
+		await routeFaqApp( page );
+		await page.route( /events\.wixapps\.net|maps\.google\.com/, ( route ) => route.fulfill( { contentType: 'text/html', body: '<p>map</p>' } ) );
+		const frame = `<iframe title="Wix FAQ" src="${ faqFrame() }"></iframe>`;
+		await page.setContent( `${ FRAME_STYLE }<div id="a">${ frame }</div><div id="b">${ frame }</div><div id="c">${ frame }</div><div id="d"></div><div id="e">${ frame }</div><div id="map"></div>` );
+		await page.evaluate( ( { faq, map } ) => {
+			const mount = ( id: string, src: string, title: string ) => {
+				const element = document.createElement( 'iframe' );
+				element.title = title;
+				element.src = src;
+				document.getElementById( id )!.replaceChildren( element );
+			};
+			// A fourth FAQ mounts a second in, and an Events venue map during the wait.
+			setTimeout( () => mount( 'd', faq, 'Wix FAQ' ), 1_000 );
+			setTimeout( () => mount( 'map', map, 'Map' ), 600 );
+			// Wix remounts #e's widget after it was ported.
+			const watch = setInterval( () => {
+				if ( ! document.querySelector( '#e > [data-blocks-engine-capture-ported-embed]' ) ) return;
+				clearInterval( watch );
+				setTimeout( () => mount( 'e', faq, 'Wix FAQ' ), 200 );
+			}, 50 );
+		}, { faq: faqFrame(), map: APP_MAP } );
+		await portWixRuntimeEmbeds( page, { faqRenderMilliseconds: 6_000 } );
+		for ( const id of [ 'a', 'b', 'c', 'd', 'e' ] ) {
+			expect( await page.locator( `#${ id } > [data-blocks-engine-capture-ported-embed="wix-faq"] summary` ).count(), id ).toBe( 2 );
+		}
+		expect( await page.locator( '#map > iframe' ).getAttribute( 'data-blocks-engine-capture-ported-embed' ) ).toBe( 'wix-google-map' );
+		expect( await page.locator( '[data-blocks-engine-capture-unported-embed]' ).count() ).toBe( 0 );
+		expect( await savedHtml( page ) ).not.toContain( 'instance=' );
+	}, 30_000 );
+
+	it( 'saves no app frame token after a same-URL reload drops the runtime port', async ({ newPage, serve }) => {
+		const { origin } = await serve( ( _request, response ) => {
+			response.setHeader( 'content-type', 'text/html' );
+			response.end( `<style>body{margin:0}iframe{border:0;display:block;width:180px;height:180px}</style><iframe title="PDF File Viewer" src="${ APP_WIDGET.replace( /&/g, '&amp;' ) }"></iframe><div style="display:none"><iframe title="Hidden" src="${ APP_WIDGET.replace( /&/g, '&amp;' ) }"></iframe></div><iframe id="html-embed" title="Embedded Content" src="${ HTML_EMBED }"></iframe>` );
+		} );
+		const page = await newPage();
+		await page.route( /appspot\.com|filesusr\.com/, ( route ) => route.fulfill( { contentType: 'text/html', body: '<p>widget</p>' } ) );
+		await page.goto( origin );
+		await capture.beforeSerialize!( page, { url: page.url(), viewport: 'desktop' } );
+		// The source reloads itself after the hook ran: its own document, frames and tokens are back.
+		await page.reload();
+		const html = await savedHtml( page );
+		expect( html ).not.toContain( 'instance=' );
+		expect( html.match( /data-blocks-engine-capture-unported-embed="wix"/g ) ).toHaveLength( 1 );
+		expect( html ).toContain( wixEmbedNote( 'PDF File Viewer' ) );
+		// Public embeds are kept as they are.
+		expect( html ).toContain( `src="${ HTML_EMBED }"` );
 	}, 30_000 );
 
 	it( 'leaves the note rather than empty or partial answers', async ({ newPage }) => {
@@ -481,7 +588,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime embed
 			await portWixRuntimeEmbeds( page, { faqRenderMilliseconds: 1_500 } );
 			expect( await page.locator( '[data-blocks-engine-capture-ported-embed], details' ).count(), variant ).toBe( 0 );
 			expect( await page.locator( '[data-blocks-engine-capture-unported-embed="wix"]' ).textContent(), variant ).toBe( wixEmbedNote( 'Wix FAQ' ) );
-			expect( await page.content(), variant ).not.toContain( 'instance=' );
+			expect( await savedHtml( page ), variant ).not.toContain( 'instance=' );
 		}
 	}, 30_000 );
 } );

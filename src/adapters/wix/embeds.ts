@@ -48,8 +48,14 @@ const EVENT_MAP_MOUNT_MILLISECONDS = 8_000;
  */
 const FAQ_RENDER_MILLISECONDS = 8_000;
 const FAQ_POLL_MILLISECONDS = 250;
+/**
+ * The FAQ app keeps querying its server after it has rendered, so no request
+ * says it is done: its questions count as complete once they have not
+ * changed for this long.
+ */
+const FAQ_QUIET_MILLISECONDS = 1_000;
 /** Bounds on what a frame's answer tree may carry before it is refused outright. */
-const FAQ_LIMITS = { nodes: 5_000, depth: 24, text: 20_000, question: 500 };
+const FAQ_LIMITS = { nodes: 5_000, depth: 24, text: 20_000, question: 500, href: 2_048 };
 
 /** Wix FAQ, the App Market app whose widget frame renders the site's questions and answers. */
 export const WIX_FAQ_APP_DEF_ID = '14c92d28-031e-7910-c9a8-a670011e062d';
@@ -416,7 +422,7 @@ export function wixFaqItems( raw: unknown ): WixFaqItem[] | 'pending' | 'unsuppo
 
 /** An absolute link the copy can keep. The frame is the app host's, so a relative link would point there, not at the site. */
 function faqLink( href: unknown ): string | undefined {
-	if ( typeof href !== 'string' ) return undefined;
+	if ( typeof href !== 'string' || href.length > FAQ_LIMITS.href ) return undefined;
 	try {
 		const url = new URL( href );
 		return FAQ_LINK_PROTOCOLS.has( url.protocol ) ? url.href : undefined;
@@ -465,53 +471,58 @@ function installWixFaq( frame: Element, args: { items: WixFaqItem[]; attribute: 
 }
 
 /**
- * Runs in the page: `none` for a frame with no box or inside `display:none`,
- * which never shows; `hidden` for `visibility:hidden`, which Wix keeps on an
- * app frame until it has loaded; `shown` otherwise.
+ * Runs in the page: whether a frame paints, by the same test the serializer
+ * uses to keep a frame's visual evidence (a box, and visible by
+ * `display`, `visibility` and `opacity`). Wix keeps an app frame hidden until
+ * it has loaded, so this is asked again on every read rather than once.
  */
-function frameDisplay( frame: Element ): 'none' | 'hidden' | 'shown' {
+function framePaints( frame: Element ): boolean {
 	const bounds = frame.getBoundingClientRect();
-	if ( bounds.width <= 0 || bounds.height <= 0 || ! frame.checkVisibility() ) return 'none';
-	return frame.checkVisibility( { visibilityProperty: true } ) ? 'shown' : 'hidden';
+	return bounds.width > 0 && bounds.height > 0 && frame.checkVisibility( { checkOpacity: true, checkVisibilityCSS: true } );
+}
+
+/** Runs in the page: a stable per-element number, kept as a property so it is never serialized. */
+function frameKey( frame: Element ): number {
+	const scope = window as unknown as { blocksEngineWixFrameKeys?: number };
+	const element = frame as Element & { blocksEngineWixFrameKey?: number };
+	element.blocksEngineWixFrameKey ??= ( scope.blocksEngineWixFrameKeys = ( scope.blocksEngineWixFrameKeys ?? 0 ) + 1 );
+	return element.blocksEngineWixFrameKey;
 }
 
 /**
- * Carry one Wix FAQ widget frame's questions into the page, polling until
- * the frame shows and every question has its answer, or the shared deadline
- * passes. A frame that never shows (no box, `display:none`) is removed without
- * waiting. Leaves the frame in place when nothing was carried;
- * `sealWixAppFrames` then replaces it with the note, or removes it if hidden.
+ * Read one Wix FAQ frame and port it once its questions are complete: every
+ * question has an answer, the frame paints, and nothing has changed for
+ * `FAQ_QUIET_MILLISECONDS`. A frame still incomplete at the deadline gets the note.
  */
-async function portWixFaqFrame( handle: ElementHandle< Element >, deadline: number ): Promise< void > {
-	if ( await handle.evaluate( frameDisplay ).catch( () => 'none' ) === 'none' ) {
-		// Another viewport's copy or a collapsed panel: nothing would show, and the token must not be kept.
-		await handle.evaluate( ( frame ) => frame.remove() ).catch( () => undefined );
+async function stepWixFaqFrame( handle: ElementHandle< Element >, seen: Map< number, { signature: string; since: number } >, quietMilliseconds: number ): Promise< void > {
+	const key = await handle.evaluate( frameKey ).catch( () => 0 );
+	if ( ! key || ! await handle.evaluate( ( frame ) => frame.isConnected ).catch( () => false ) ) return;
+	// Re-resolved on every read: the frame can navigate while it loads.
+	const frame = await handle.contentFrame().catch( () => null );
+	const items = wixFaqItems( frame ? await frame.evaluate( readWixFaqFrame ).catch( () => null ) : null );
+	if ( ! Array.isArray( items ) || ! await handle.evaluate( framePaints ).catch( () => false ) ) {
+		seen.delete( key );
 		return;
 	}
-	for ( ;; ) {
-		if ( ! await handle.evaluate( ( frame ) => frame.isConnected ).catch( () => false ) ) return;
-		// Re-resolved on every read: the frame can navigate while it loads.
-		const frame = await handle.contentFrame().catch( () => null );
-		const items = wixFaqItems( frame ? await frame.evaluate( readWixFaqFrame ).catch( () => null ) : null );
-		// A frame that stays hidden is not carried as a visible FAQ.
-		if ( Array.isArray( items ) && await handle.evaluate( frameDisplay ).catch( () => 'none' ) === 'shown' ) {
-			await handle.evaluate( installWixFaq, { items, attribute: WIX_PORTED_EMBED_ATTRIBUTE } ).catch( () => false );
-			return;
-		}
-		if ( items === 'unsupported' || Date.now() >= deadline ) return;
-		await new Promise( ( resolve ) => setTimeout( resolve, FAQ_POLL_MILLISECONDS ) );
+	const signature = JSON.stringify( items );
+	const previous = seen.get( key );
+	if ( previous?.signature !== signature ) {
+		seen.set( key, { signature, since: Date.now() } );
+		return;
 	}
+	if ( Date.now() - previous.since >= quietMilliseconds ) await handle.evaluate( installWixFaq, { items, attribute: WIX_PORTED_EMBED_ATTRIBUTE } ).catch( () => false );
 }
 
 /**
- * Runs in the page: replace every App Market frame (one whose `src` carries a
- * signed `instance` naming an `appDefId`) with the note, or remove it when it
- * does not render, and keep doing so for frames Wix mounts or re-points later,
- * so no frame's token reaches a serialized document whatever extraction did.
- * Pinned chat layers are left to source cleanup, which removes them whole.
+ * Runs in the page: replace each App Market frame that paints (one whose
+ * `src` carries a signed `instance` naming an `appDefId`) with the note, so
+ * the page shows an honest gap from here on. Frames that do not paint are
+ * left for the serialized-HTML seal (`sealWixAppFrameHtml`), which decides
+ * on the document as it is saved. Pinned chat layers are left to source
+ * cleanup, which removes them whole.
  */
-function sealWixAppFrames( args: { attribute: string; pinned: string; named: string; plain: string; style: string[] } ): void {
-	const scope = globalThis as typeof globalThis & { __name?: ( fn: unknown ) => unknown; __blocksEngineWixAppFrameSeal?: MutationObserver };
+function noteWixAppFrames( args: { attribute: string; pinned: string; named: string; plain: string; style: string[] } ): void {
+	const scope = globalThis as typeof globalThis & { __name?: ( fn: unknown ) => unknown };
 	if ( typeof scope.__name === 'undefined' ) scope.__name = ( fn ) => fn;
 	const appFrame = ( frame: Element ) => {
 		try {
@@ -524,13 +535,10 @@ function sealWixAppFrames( args: { attribute: string; pinned: string; named: str
 			return false;
 		}
 	};
-	const seal = ( frame: Element ) => {
-		if ( ! frame.isConnected || frame.closest( args.pinned ) || ! appFrame( frame ) ) return;
+	for ( const frame of document.querySelectorAll( 'iframe[src]' ) ) {
+		if ( frame.closest( args.pinned ) || ! appFrame( frame ) ) continue;
 		const bounds = frame.getBoundingClientRect();
-		if ( bounds.width <= 0 || bounds.height <= 0 || ! frame.checkVisibility( { visibilityProperty: true } ) ) {
-			frame.remove();
-			return;
-		}
+		if ( ! ( bounds.width > 0 && bounds.height > 0 && frame.checkVisibility( { checkOpacity: true, checkVisibilityCSS: true } ) ) ) continue;
 		const label = ( frame.getAttribute( 'title' ) ?? '' ).replace( /\s+/g, ' ' ).trim().slice( 0, 80 );
 		const note = document.createElement( 'div' );
 		note.setAttribute( args.attribute, 'wix' );
@@ -540,20 +548,42 @@ function sealWixAppFrames( args: { attribute: string; pinned: string; named: str
 		if ( font ) note.style.fontFamily = font;
 		note.textContent = label ? args.named.replace( '\u0000', label ) : args.plain;
 		frame.replaceWith( note );
-	};
-	const sweep = ( node: Node ) => {
-		if ( node instanceof HTMLIFrameElement ) seal( node );
-		else if ( node instanceof Element ) node.querySelectorAll( 'iframe[src]' ).forEach( seal );
-	};
-	sweep( document.documentElement );
-	if ( scope.__blocksEngineWixAppFrameSeal ) return;
-	scope.__blocksEngineWixAppFrameSeal = new MutationObserver( ( records ) => {
-		for ( const record of records ) {
-			if ( record.type === 'attributes' ) sweep( record.target );
-			else record.addedNodes.forEach( sweep );
-		}
+	}
+}
+
+const IFRAME_ELEMENT = /<iframe\b([^>]*)>[\s\S]*?<\/iframe\s*>/gi;
+const VISUAL_IFRAME_WIDTH = 'data-blocks-engine-capture-visual-iframe-width';
+const VISUAL_IFRAME_HEIGHT = 'data-blocks-engine-capture-visual-iframe-height';
+
+function serializedAttribute( attributes: string, name: string ): string | undefined {
+	const match = new RegExp( `\\s${ name.replace( /[-]/g, '\\-' ) }\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i' ).exec( attributes );
+	const value = match ? match[ 1 ] ?? match[ 2 ] ?? match[ 3 ] : undefined;
+	return value?.replace( /&quot;/g, '"' ).replace( /&#39;/g, "'" ).replace( /&lt;/g, '<' ).replace( /&gt;/g, '>' ).replace( /&amp;/g, '&' );
+}
+
+const escapeHtml = ( text: string ) => text.replace( /&/g, '&amp;' ).replace( /</g, '&lt;' ).replace( />/g, '&gt;' ).replace( /"/g, '&quot;' );
+
+/**
+ * The one place no App Market frame's signed token can be saved, whatever the
+ * live document did after the runtime port (a same-URL reload, a remount): run
+ * on every serialized HTML string. A frame the serializer recorded as painted
+ * (its visual-iframe width and height) becomes the note at that size; any
+ * other app frame is dropped. Ordinary embeds and ported maps carry no token
+ * and are kept byte for byte.
+ */
+export function sealWixAppFrameHtml( html: string ): string {
+	if ( ! html.includes( 'instance=' ) ) return html;
+	return html.replace( IFRAME_ELEMENT, ( element, attributes: string ) => {
+		const src = serializedAttribute( attributes, 'src' ) ?? '';
+		if ( ! wixAppInstance( src ) ) return element;
+		const width = Number( serializedAttribute( attributes, VISUAL_IFRAME_WIDTH ) );
+		const height = Number( serializedAttribute( attributes, VISUAL_IFRAME_HEIGHT ) );
+		if ( ! ( width > 0 && height > 0 ) ) return '';
+		const nodeId = serializedAttribute( attributes, 'data-blocks-engine-node-id' );
+		const label = ( serializedAttribute( attributes, 'title' ) ?? '' ).replace( /\s+/g, ' ' ).trim().slice( 0, 80 );
+		const style = [ ...NOTE_STYLE, `max-width:${ Math.round( width ) }px`, `min-height:${ Math.round( height ) }px`, 'font-family:inherit' ].join( ';' );
+		return `<div ${ WIX_UNPORTED_EMBED_ATTRIBUTE }="wix" role="note" style="${ escapeHtml( style ) }"${ nodeId ? ` data-blocks-engine-node-id="${ escapeHtml( nodeId ) }"` : '' }>${ escapeHtml( wixEmbedNote( label || undefined ) ) }</div>`;
 	} );
-	scope.__blocksEngineWixAppFrameSeal.observe( document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: [ 'src' ] } );
 }
 
 /** Runs in the page: whether every Wix Events venue map has mounted its map. */
@@ -621,11 +651,52 @@ export async function portWixEventMaps( page: Page, mountMilliseconds = EVENT_MA
 	}
 }
 
+/** Point Wix map frames at Google Maps embeds; frames already pointed elsewhere no longer match. */
+async function portWixMapFrames( page: Page ): Promise< void > {
+	for ( const handle of await page.$$( 'iframe[src]' ) ) {
+		const src = ( await handle.getAttribute( 'src' ).catch( () => null ) ) ?? '';
+		const title = ( await handle.getAttribute( 'title' ).catch( () => null ) ) ?? '';
+		if ( isWixGoogleMapFrame( src, page.url() ) ) {
+			const frame = await handle.contentFrame().catch( () => null );
+			if ( frame ) {
+				await frame.evaluate( () => {
+					const scope = globalThis as typeof globalThis & { __name?: ( fn: unknown ) => unknown };
+					if ( typeof scope.__name === 'undefined' ) scope.__name = ( fn ) => fn;
+				} ).catch( () => undefined );
+			}
+			const view = frame ? await wixMapView( frame ) : null;
+			const language = parseUrl( src, page.url() )?.searchParams.get( 'language' ) ?? undefined;
+			const embed = view ? googleMapsEmbedUrl( view, language ) : null;
+			if ( embed ) await pointAtGoogleMap( handle, embed );
+			else await handle.evaluate( installWixEmbedNote, { note: wixEmbedNote( title || 'Google Maps' ), attribute: WIX_UNPORTED_EMBED_ATTRIBUTE, style: NOTE_STYLE } );
+		} else if ( wixAppMapView( src, page.url() ) ) {
+			const url = parseUrl( src, page.url() );
+			const language = ( url?.searchParams.get( 'locale' ) || url?.searchParams.get( 'language' ) ) ?? undefined;
+			const embed = googleMapsEmbedUrl( wixAppMapView( src, page.url() )!, language );
+			if ( embed ) await pointAtGoogleMap( handle, embed );
+		}
+	}
+}
+
+/** The page's live Wix FAQ app frames, outside pinned chat layers. */
+async function wixFaqFrames( page: Page ): Promise< ElementHandle< Element >[] > {
+	const frames: ElementHandle< Element >[] = [];
+	for ( const handle of await page.$$( 'iframe[src]' ) ) {
+		const src = ( await handle.getAttribute( 'src' ).catch( () => null ) ) ?? '';
+		if ( wixAppInstance( src, page.url() )?.appDefId !== WIX_FAQ_APP_DEF_ID ) continue;
+		if ( await handle.evaluate( ( frame, selector ) => Boolean( frame.closest( selector ) ), WIX_PINNED_CHAT_SELECTOR ).catch( () => true ) ) continue;
+		frames.push( handle );
+	}
+	return frames;
+}
+
 /**
- * Port Wix map wrappers to Google Maps embeds and replace App Market widgets
- * with a visible note. Runs on the live DOM right before it is frozen.
+ * Port Wix map wrappers to Google Maps embeds, carry Wix FAQ frames as
+ * disclosures and replace other App Market widgets with a visible note. Runs
+ * on the live DOM right before it is frozen; `sealWixAppFrameHtml` then
+ * guarantees the saved HTML, whatever the live document does next.
  */
-export async function portWixRuntimeEmbeds( page: Page, { faqRenderMilliseconds = FAQ_RENDER_MILLISECONDS } = {} ): Promise< void > {
+export async function portWixRuntimeEmbeds( page: Page, { faqRenderMilliseconds = FAQ_RENDER_MILLISECONDS, faqQuietMilliseconds = FAQ_QUIET_MILLISECONDS } = {} ): Promise< void > {
 	try {
 		// tsx instruments nested functions with __name(); the built bundle does not.
 		await page.evaluate( () => {
@@ -652,60 +723,26 @@ export async function portWixRuntimeEmbeds( page: Page, { faqRenderMilliseconds 
 				await handle.evaluate( installWixEmbedNote, { note: wixEmbedNote( label ), attribute: WIX_UNPORTED_EMBED_ATTRIBUTE, style: NOTE_STYLE, sizedByHost: true } );
 			}
 		}
-		for ( const handle of await page.$$( 'iframe[src]' ) ) {
-			const src = ( await handle.getAttribute( 'src' ).catch( () => null ) ) ?? '';
-			const title = ( await handle.getAttribute( 'title' ).catch( () => null ) ) ?? '';
-			if ( isWixGoogleMapFrame( src, page.url() ) ) {
-				const frame = await handle.contentFrame().catch( () => null );
-				if ( frame ) {
-					await frame.evaluate( () => {
-						const scope = globalThis as typeof globalThis & { __name?: ( fn: unknown ) => unknown };
-						if ( typeof scope.__name === 'undefined' ) scope.__name = ( fn ) => fn;
-					} ).catch( () => undefined );
-				}
-				const view = frame ? await wixMapView( frame ) : null;
-				const language = parseUrl( src, page.url() )?.searchParams.get( 'language' ) ?? undefined;
-				const embed = view ? googleMapsEmbedUrl( view, language ) : null;
-				if ( embed ) await pointAtGoogleMap( handle, embed );
-				else await handle.evaluate( installWixEmbedNote, { note: wixEmbedNote( title || 'Google Maps' ), attribute: WIX_UNPORTED_EMBED_ATTRIBUTE, style: NOTE_STYLE } );
-			} else if ( wixAppMapView( src, page.url() ) ) {
-				const url = parseUrl( src, page.url() );
-				const language = ( url?.searchParams.get( 'locale' ) || url?.searchParams.get( 'language' ) ) ?? undefined;
-				const embed = googleMapsEmbedUrl( wixAppMapView( src, page.url() )!, language );
-				if ( embed ) await pointAtGoogleMap( handle, embed );
+		await portWixMapFrames( page );
+		// A page with a FAQ frame is reconciled until one shared deadline: frames
+		// Wix mounts, remounts or reveals meanwhile are read too, and a map that
+		// mounts during the wait is still pointed at Google Maps.
+		if ( ( await wixFaqFrames( page ) ).length ) {
+			const deadline = Date.now() + faqRenderMilliseconds;
+			const seen = new Map< number, { signature: string; since: number } >();
+			while ( Date.now() < deadline ) {
+				for ( const handle of await wixFaqFrames( page ) ) await stepWixFaqFrame( handle, seen, faqQuietMilliseconds );
+				await portWixMapFrames( page );
+				await new Promise( ( resolve ) => setTimeout( resolve, FAQ_POLL_MILLISECONDS ) );
 			}
-		}
-		// Every eligible FAQ frame shares one deadline. A frame Wix replaced while
-		// another was awaited is live again, so frames are re-resolved after each pass.
-		const faqDeadline = Date.now() + faqRenderMilliseconds;
-		for ( let pass = 0; pass < 3; pass++ ) {
-			let found = false;
-			for ( const handle of await page.$$( 'iframe[src]' ) ) {
-				const src = ( await handle.getAttribute( 'src' ).catch( () => null ) ) ?? '';
-				if ( wixAppInstance( src, page.url() )?.appDefId !== WIX_FAQ_APP_DEF_ID ) continue;
-				if ( await handle.evaluate( ( frame, selector ) => Boolean( frame.closest( selector ) ), WIX_PINNED_CHAT_SELECTOR ).catch( () => true ) ) continue;
-				// A frame already read to its end is not waited on again; a property, so it is never serialized.
-				const fresh = await handle.evaluate( ( frame ) => {
-					const element = frame as Element & { blocksEngineWixFaqRead?: boolean };
-					if ( element.blocksEngineWixFaqRead ) return false;
-					element.blocksEngineWixFaqRead = true;
-					return true;
-				} ).catch( () => false );
-				if ( ! fresh ) continue;
-				found = true;
-				await portWixFaqFrame( handle, faqDeadline );
-			}
-			if ( ! found ) break;
 		}
 	} finally {
-		// Token removal never depends on extraction, or on the steps above
-		// succeeding: whatever app frame is left, now or later, becomes the note.
-		await page.evaluate( sealWixAppFrames, {
+		await page.evaluate( noteWixAppFrames, {
 			attribute: WIX_UNPORTED_EMBED_ATTRIBUTE,
 			pinned: WIX_PINNED_CHAT_SELECTOR,
 			named: wixEmbedNote( '\u0000' ),
 			plain: wixEmbedNote(),
 			style: NOTE_STYLE,
-		} );
+		} ).catch( () => undefined );
 	}
 }
