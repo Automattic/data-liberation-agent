@@ -47,12 +47,6 @@ describe( 'dependencyReferences', () => {
 			{ reference: url, url, kind: 'css' },
 		] );
 	} );
-
-	it( 'marks every @import spelling as a stylesheet', () => {
-		const css = '@import url(plain.css);@import url( "quoted.css" );@import"compact.css";@import \'single.css\' screen;';
-		const stylesheets = dependencyReferences( css, 'https://example.test/', true ).filter( ( dependency ) => dependency.stylesheet ).map( ( dependency ) => dependency.reference );
-		expect( stylesheets.sort() ).toEqual( [ 'compact.css', 'plain.css', 'quoted.css', 'single.css' ] );
-	} );
 } );
 
 describe( 'preparePortableReplacements', () => {

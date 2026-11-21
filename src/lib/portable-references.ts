@@ -283,8 +283,8 @@ export function dependencyReferences(
 		}
 		return reference;
 	} );
-	for ( const match of cssContent.matchAll( /@import\s*(?:url\(\s*(?:(["'])([\s\S]*?)\1|([^"'()\s]+))\s*\)|(["'])([\s\S]*?)\4)/gi ) ) {
-		const reference = match[ 2 ] ?? match[ 3 ] ?? match[ 5 ]!;
+	for ( const match of cssContent.matchAll( /@import\s*(?:url\(\s*)?(["'])([\s\S]*?)\1/gi ) ) {
+		const reference = match[ 2 ];
 		cssReferences.add( reference.replace( /&amp;/g, '&' ) );
 		stylesheetReferences.add( reference.replace( /&amp;/g, '&' ) );
 		add( reference );

@@ -25,8 +25,7 @@ import { namespaceExportBoxTreeIds } from './export-box-trees.js';
 import { sameOriginPageAnchors } from './screenshot/unscheduled-anchors.js';
 import { isSrcsetShaped, srcsetCandidates } from './srcset.js';
 import { portableVisualIframeWidth } from './visual-iframe-geometry.js';
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { linkedStylesheetTexts } from './linked-stylesheets.js';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import * as cheerio from 'cheerio';
 import type { Element } from 'domhandler';
@@ -655,25 +654,11 @@ export function renderRoutePages( { canonicalizeHtml, retainedEntries, websiteDi
 		}
 	}
 	const metadataPathsBySource = new Map( [ ...mediaMetadataPathsBySource, ...portablePathsBySource ] );
-	// Linked sheets are portable files by now; read each from the website tree once.
-	const LOCAL_ORIGIN = 'https://website.invalid';
-	const portableStylesheets = new Map< string, string | undefined >();
-	const readPortableStylesheet = ( url: string ): string | undefined => {
-		const resolved = new URL( url );
-		if ( resolved.origin !== LOCAL_ORIGIN ) return undefined;
-		const file = join( websiteDir, decodeURIComponent( resolved.pathname ) );
-		if ( ! pathWithin( websiteDir, file ) ) return undefined;
-		if ( ! portableStylesheets.has( file ) ) {
-			let text: string | undefined;
-			try {
-				text = statSync( file ).isFile() ? readFileSync( file, 'utf8' ) : undefined;
-			} catch {
-				text = undefined;
-			}
-			portableStylesheets.set( file, text );
-		}
-		return portableStylesheets.get( file );
-	};
+	// Every stylesheet is a file in the website tree by now, and canonicalization
+	// cannot rename the rules in those files. Pass all of them, once, for every
+	// route: an id any of them selects keeps its captured name on every route,
+	// so routes agree on it and a fragment link into another route still resolves.
+	const exportedStylesheets = canonicalizeHtml ? stylesheetFiles( websiteDir ) : [];
 	for ( const entry of retainedEntries ) {
 		const { url, htmlPath } = entry;
 		const routePath = routePathOf( url );
@@ -719,15 +704,38 @@ export function renderRoutePages( { canonicalizeHtml, retainedEntries, websiteDi
 		unresolvedAnchors.push(
 			...unresolvedCapturedAnchors( normalizedHtml, url, `/${ routePath }` )
 		);
-		// The route's stylesheets are linked files by now, and canonicalization
-		// cannot rename their rules: an id a sheet the route links or imports
-		// selects must keep its name.
-		const canonicalHtml = canonicalizeHtml ? canonicalizeHtml( normalizedHtml, undefined, linkedStylesheetTexts( normalizedHtml, `${ LOCAL_ORIGIN }/${ routePath }`, readPortableStylesheet ) ) : normalizedHtml;
+		const canonicalHtml = canonicalizeHtml ? canonicalizeHtml( normalizedHtml, undefined, exportedStylesheets ) : normalizedHtml;
 		writeFileSync( destination, namespaceExportBoxTreeIds( wireNativeControlState( wireNativeViewTimelines( withViewportEntrances( canonicalHtml ) ) ) ) );
 		entry.identityHtmlPath = `${ htmlPath }.identity`;
 		writeFileSync( entry.identityHtmlPath, identityHtml );
 	}
 	return { unresolvedAnchors, diagnostics, responsiveIdentities };
+}
+
+/** The text of every `.css` file under `root`; one that cannot be read is skipped. */
+function stylesheetFiles( root: string ): string[] {
+	const texts: string[] = [];
+	const visit = ( directory: string ): void => {
+		let entries;
+		try {
+			entries = readdirSync( directory, { withFileTypes: true } );
+		} catch {
+			return;
+		}
+		for ( const entry of entries ) {
+			const path = join( directory, entry.name );
+			if ( entry.isDirectory() ) visit( path );
+			else if ( entry.isFile() && entry.name.toLowerCase().endsWith( '.css' ) ) {
+				try {
+					texts.push( readFileSync( path, 'utf8' ) );
+				} catch {
+					// An unreadable sheet selects nothing we can see.
+				}
+			}
+		}
+	};
+	visit( root );
+	return texts;
 }
 
 export function projectPortableWebsite( { websiteDir, stageDir, sourceUrl, responsiveIdentities, responsiveBodyClassProjections, collapsedBodyClassProjections, sourceHashesByPortablePath, retainedEntries, routePathOf, interactionPages, scrollStatesPages, structuredContent, routes, portableRedirects, productMediaPaths }: {

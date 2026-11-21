@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { exportWebsiteCapture } from '../../lib/capture-export.js';
+import { checkSelfConsistency } from '../../lib/fidelity/self-consistency.js';
 import { canonicalizeWixCapturedHtml } from './instance-ids.js';
 
 const dirs: string[] = [];
@@ -108,6 +109,22 @@ describe( 'Wix export canonicalization with linked page stylesheets', () => {
 		expect( exported[ '/blog/' ]!.html ).toMatch( /<link[^>]*rel="stylesheet"[^>]*href="\/assets\/css\/capture-[0-9a-f]+\.css"/ );
 		expect( headerOf( exported[ '/blog/' ]!.html ) ).toBe( headerOf( exported[ '/blog/tags/news/' ]!.html ) );
 		expect( exported[ '/blog/' ]!.loadedCss ).toContain( '.comp-bbbb2222_r_comp-badge{width:10px}' );
+	} );
+
+	it( 'keeps an id a stylesheet selects on every route, so fragment links into it resolve', () => {
+		// Both routes hold the same section instance. Only the target loads a
+		// stylesheet that selects it; the other route links to it by fragment.
+		const style = '<style>#comp-aaaa1111_r_comp-menu{display:flex}.comp-aaaa1111_r_comp-item{color:rgb(1,2,3)}</style>';
+		const section = '<section id="comp-bbbb2222"><p class="comp-bbbb2222_r_comp-text">Offer</p></section>';
+		const exported = exportRoutes( [
+			{ url: `${ ORIGIN }/`, slug: 'homepage', html: route( 'comp-aaaa1111', style, 'Home', '', `${ section }<a href="/target/#comp-bbbb2222">See the offer</a>` ) },
+			{ url: `${ ORIGIN }/target/`, slug: 'target', html: route( 'comp-aaaa1111', style, 'Target', '<link rel="stylesheet" href="https://example.com/offer.css">', section ) },
+		], { [ `${ ORIGIN }/offer.css` ]: '#comp-bbbb2222{border:1px solid}' } );
+		expect( exported[ '/target/' ]!.html ).toContain( '<section id="comp-bbbb2222">' );
+		expect( exported[ '/target/' ]!.loadedCss ).toContain( '#comp-bbbb2222{border:1px solid}' );
+		expect( exported[ '/' ]!.html ).toContain( '#comp-bbbb2222"' );
+		const report = checkSelfConsistency( join( dirs.at( -1 )!, 'website' ), new Map( [ [ '/', 'index.html' ], [ '/target/', 'target/index.html' ] ] ) );
+		expect( report.findings.filter( finding => finding.kind === 'anchor-missing' ) ).toEqual( [] );
 	} );
 
 	it( 'keeps the names of instances that imported stylesheets select', () => {

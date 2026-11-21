@@ -22,10 +22,11 @@
  * the markup then shows only some of the instance's components; renaming it
  * from that subset would leave every external rule pointing at the old name.
  *
- * Export passes the text of the stylesheets the route links or imports as
+ * Export passes the text of the stylesheet files it emitted as
  * `linkedStylesheets`, which it cannot rename. An instance they select keeps
- * the name its rules use and only the other instances are named, so a route
- * that capture kept as captured stays styled.
+ * the name its rules use on every route, so routes agree on its name (and a
+ * fragment link into another route still resolves); only the other instances
+ * are named, so a route that capture kept as captured stays styled.
  */
 const INSTANCE_REFERENCE = /\b(comp-[a-z0-9]+)_r_(comp-[a-z0-9]+)/gi;
 const CANONICAL_INSTANCE = /^comp-dla[0-9a-f]{8}$/i;
@@ -130,8 +131,7 @@ export function canonicalizeWixCapturedHtml( html: string, document: string = ht
 
 interface LinkedReferences { instances: Set< string >; controls: Set< string > }
 
-// Export passes the same stylesheet strings for every route that loads them, so
-// each sheet is scanned once. Bounded so a long-lived process cannot grow it.
+// Each sheet is scanned once. Bounded so a long-lived process cannot grow it.
 const sheetReferences = new Map< string, LinkedReferences >();
 const SHEET_REFERENCE_CACHE_LIMIT = 256;
 
@@ -139,7 +139,11 @@ const SHEET_REFERENCE_CACHE_LIMIT = 256;
  * The instance and form control ids linked sheets name, lowercased: each as the
  * rewrite would match it, so a longer id that only starts with one does not count.
  */
+let lastReferences: { sheets: readonly string[]; references: LinkedReferences } | undefined;
+
 function linkedReferences( sheets: readonly string[] ): LinkedReferences {
+	// Export passes one list for every route, so the union is built once.
+	if ( lastReferences?.sheets === sheets ) return lastReferences.references;
 	const all: LinkedReferences = { instances: new Set(), controls: new Set() };
 	for ( const sheet of sheets ) {
 		let references = sheetReferences.get( sheet );
@@ -154,6 +158,7 @@ function linkedReferences( sheets: readonly string[] ): LinkedReferences {
 		for ( const id of references.instances ) all.instances.add( id );
 		for ( const id of references.controls ) all.controls.add( id );
 	}
+	lastReferences = { sheets, references: all };
 	return all;
 }
 
