@@ -10,6 +10,7 @@ import { accessGateRemoval, readSourceCleanup, sweepSourceCleanup, type CleanupP
 import { slugify } from '../url/index.js';
 import { SiteAnalysisAggregator } from './aggregator.js';
 import { captureChromeFidelity } from './capture-chrome-fidelity.js';
+import { CHROME_HYDRATION_LANDMARKS, CHROME_HYDRATION_TIMEOUT_MS, waitForChromePlaceholderLinks } from './chrome-hydration.js';
 import { normalizeCaptureState, normalizeGeneratedIds, SCRIPT_MOTION_BUDGET_MS, settleScriptMotion } from './capture-state.js';
 import { snapshotComponents, type ComponentBaseline } from './component-states.js';
 import {
@@ -559,6 +560,20 @@ export function baselineSteps(
 			id: 'script-motion', bound: { evaluateMs: SCRIPT_MOTION_BUDGET_MS + evaluateTimeoutMs }, onFailure: 'best-effort', run: async () => {
 				await sampleMotion();
 				await settleScriptEntrances();
+			}
+		},
+		{
+			// Chrome controls a runtime fills in after load (a header cart widget)
+			// must be hydrated in every document of every route, or identical chrome
+			// serializes differently per route (see chrome-hydration.ts).
+			id: 'chrome-hydration', bound: { evaluateMs: CHROME_HYDRATION_TIMEOUT_MS + evaluateTimeoutMs }, onFailure: 'best-effort', run: async () => {
+				const outcome = await page.evaluate( waitForChromePlaceholderLinks, { timeoutMs: CHROME_HYDRATION_TIMEOUT_MS, landmarks: CHROME_HYDRATION_LANDMARKS } );
+				if ( ! outcome?.placeholders ) return;
+				process.stderr.write( `[timing] chrome-hydration ${ JSON.stringify( { url, viewport: viewport.id, ...outcome } ) }\n` );
+				if ( outcome.pending > 0 ) args.diagnostics?.push( {
+					code: 'chrome_hydration_pending',
+					reason: `${ url } (${ viewport.id }): ${ outcome.pending } chrome placeholder link(s) still had no destination or name after ${ outcome.waitedMs }ms: ${ outcome.pendingLinks.join( ', ' ) }`,
+				} );
 			}
 		},
 		{

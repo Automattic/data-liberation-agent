@@ -14,6 +14,8 @@
  * - `layout-geometry`: optional layout geometry capture and sidecar write.
  * - `root-class`: optional source width ladder and root-class contracts.
  * - `script-motion`: entrance settling after the root-class resize ladder.
+ * - `chrome-hydration`: bounded wait for nameless placeholder links in site
+ *   chrome to hydrate (#1261).
  * - `baseline-snapshot`: initial component / document evidence and serialization.
  * These end at `observe-source`; optional steps only enter when performed.
  *
