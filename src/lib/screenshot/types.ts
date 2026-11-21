@@ -83,7 +83,7 @@ export interface ScreenshotOpts {
 	 * Fired once per route whose documents were saved, with their paths
 	 * relative to `outputDir` and whether the capture already stored a URL's bytes.
 	 */
-	onRouteCaptured?: ( url: string, documents: string[], stored: ( resourceUrl: string ) => boolean ) => void;
+	onRouteCaptured?: ( url: string, documents: string[], stored: ( resourceUrl: string ) => boolean, profiles?: import('./manifest-queue.js').ManifestEntry['profiles'] ) => void;
 	/**
 	 * Learn how the source sizes itself by sweeping viewport widths with its
 	 * runtime alive, then emit the learned CSS instead of the pixels that

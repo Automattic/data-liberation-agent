@@ -48,6 +48,22 @@ export interface RenderProfile {
 
 type Group = Pick< TemplateGroup, 'size' | 'representative' | 'members' >;
 
+/** A captured route's document profiles, as the browser pass stored them. */
+export type CapturedProfiles = NonNullable< import('./screenshot/manifest-queue.js').ManifestEntry['profiles'] >;
+
+/**
+ * A representative profile document post-capture derivation also derives for
+ * every member (the phone document of a dual-device capture). `server` is set
+ * when the profile's identity received its own server document: the member's
+ * profile document then derives from that pair, with a light render as that
+ * profile for its runtime media.
+ */
+interface ProfileDocument {
+	repProcessedHtml: string;
+	render: RenderProfile;
+	server?: { userAgent: string; repServerHtml: string };
+}
+
 export interface TemplateClusterDeferralInput {
 	sourceUrl: string;
 	outputDir: string;
@@ -71,6 +87,7 @@ function verificationMember( group: Group ): string | undefined {
 
 export class TemplateClusterDeferral {
 	private readonly captured = new Map< string, string >();
+	private readonly capturedProfiles = new Map< string, CapturedProfiles >();
 	private readonly started = new Set< string >();
 	private readonly deferred = new Set< string >();
 	private readonly documents = new Map< string, Promise< MemberDocument > >();
@@ -82,11 +99,11 @@ export class TemplateClusterDeferral {
 	constructor( private readonly input: TemplateClusterDeferralInput, private readonly groups: () => readonly Group[] ) {}
 
 	/** The browser pass captured `url`; `htmlPath` is its desktop document. */
-	routeCaptured( url: string, htmlPath: string | undefined ): void {
-		if ( ! htmlPath ) return;
-		const file = resolve( this.input.outputDir, htmlPath );
-		if ( ! pathWithin( this.input.outputDir, file ) ) return;
+	routeCaptured( url: string, htmlPath: string | undefined, profiles?: CapturedProfiles ): void {
+		const file = this.outputFile( htmlPath );
+		if ( ! file ) return;
 		this.captured.set( normalizedUrl( url ), file );
+		if ( profiles ) this.capturedProfiles.set( normalizedUrl( url ), profiles );
 		for ( const group of this.groups() ) {
 			if ( group.size < 2 || this.started.has( group.representative ) ) continue;
 			const verifier = verificationMember( group );
@@ -128,7 +145,7 @@ export class TemplateClusterDeferral {
 		const repProcessedHtml = this.capturedHtml( group.representative );
 		const realHtml = this.capturedHtml( verifier );
 		if ( repProcessedHtml === undefined || realHtml === undefined ) return;
-		const derive = ( repServerHtml: string, memberServerHtml: string, memberRenderedHtml?: string ) => deriveMemberDocument( { rewriteDerivedMedia: this.input.rewriteDerivedMedia, memberRenderedHtml, repServerHtml, repProcessedHtml, memberServerHtml, baseUrl: group.representative, templateIdentity: this.input.templateIdentity, styleNormalization: this.input.styleNormalization } );
+		const derive = ( repServerHtml: string, memberServerHtml: string, memberRenderedHtml?: string, documents: { repProcessedHtml?: string; clusterKeyDocuments?: { repServerHtml: string; memberServerHtml: string } } = {} ) => deriveMemberDocument( { rewriteDerivedMedia: this.input.rewriteDerivedMedia, memberRenderedHtml, repServerHtml, repProcessedHtml, memberServerHtml, baseUrl: group.representative, templateIdentity: this.input.templateIdentity, styleNormalization: this.input.styleNormalization, ...documents } );
 		let source: MemberDocumentSource | undefined;
 		let repServerHtml = '';
 		for ( const candidate of [ 'server', 'rendered' ] as const ) {
@@ -147,17 +164,68 @@ export class TemplateClusterDeferral {
 			return;
 		}
 		const startedAt = Date.now();
+		// A deferred member leaves the browser pass, so every document
+		// post-capture derivation derives for it must pass here first.
+		const profiles = await this.profileDocuments( group.representative, source === 'server' ? repServerHtml : undefined );
 		const pending = group.members.filter( url => ! this.captured.has( normalizedUrl( url ) ) );
 		await mapPool( pending, source === 'rendered' || this.input.rewriteDerivedMedia ? TEMPLATE_DEFERRAL_LIMITS.renderConcurrency : this.input.governors.forOrigin( this.input.sourceUrl ).concurrency, async url => {
 			if ( this.captured.has( normalizedUrl( url ) ) ) return;
 			const member = await this.document( url, source );
 			const media = this.input.rewriteDerivedMedia ? await this.document( url, 'rendered' ) : undefined;
-			if ( 'html' in member && derive( repServerHtml, member.html, media && 'html' in media ? media.html : undefined ).ok ) this.deferred.add( normalizedUrl( url ) );
-			// Keep the memoized result (including unavailable/declined renders):
+			const mediaHtml = media && 'html' in media ? media.html : undefined;
+			if ( ! ( 'html' in member ) || ! derive( repServerHtml, member.html, mediaHtml ).ok ) return;
+			for ( const profile of profiles ) {
+				if ( ! profile.server ) {
+					if ( ! derive( repServerHtml, member.html, mediaHtml, { repProcessedHtml: profile.repProcessedHtml } ).ok ) return;
+					continue;
+				}
+				const [ memberServer, render ] = await Promise.all( [
+					this.fetch( url, profile.server.userAgent ),
+					this.input.rewriteDerivedMedia ? this.document( url, 'rendered', profile.render ) : undefined,
+				] );
+				if ( ! ( 'html' in memberServer ) ) return;
+				const clusterKeyDocuments = { repServerHtml, memberServerHtml: member.html };
+				if ( ! derive( profile.server.repServerHtml, memberServer.html, render && 'html' in render ? render.html : undefined, { repProcessedHtml: profile.repProcessedHtml, clusterKeyDocuments } ).ok ) return;
+			}
+			this.deferred.add( normalizedUrl( url ) );
+			// Keep the memoized results (including unavailable/declined renders):
 			// post-capture derivation must not navigate this member a second time.
 		} );
 		const deferred = pending.filter( url => this.defers( url ) ).length;
 		process.stderr.write( `[template-clusters] deferral: ${ group.representative } verified from ${ source } documents; ${ deferred } of ${ pending.length } pending members deferred, ${ Date.now() - startedAt }ms\n` );
+	}
+
+	/**
+	 * The representative's profile documents post-capture derivation derives
+	 * members for: each non-desktop captured document, with its own server
+	 * pair where the profile's identity received a different server document.
+	 * Without `repServerHtml` (a cluster verified from rendered documents),
+	 * profiles derive from the desktop pair.
+	 */
+	private async profileDocuments( representative: string, repServerHtml: string | undefined ): Promise< ProfileDocument[] > {
+		const { compareServerHtml } = await import( './screenshot/device-mode.js' );
+		const servers = new Map< string, Promise< string | undefined > >();
+		const documents: ProfileDocument[] = [];
+		for ( const [ key, profile ] of Object.entries( this.capturedProfiles.get( normalizedUrl( representative ) ) ?? {} ) ) {
+			const file = key === 'desktop' ? undefined : this.outputFile( profile.html );
+			if ( ! file || ! existsSync( file ) ) continue;
+			const { userAgent } = profile;
+			if ( repServerHtml !== undefined && userAgent && ! servers.has( userAgent ) ) {
+				servers.set( userAgent, this.fetch( representative, userAgent ).then( fetched => 'html' in fetched && compareServerHtml( repServerHtml, fetched.html ) === 'different' ? fetched.html : undefined ) );
+			}
+			const server = userAgent ? await servers.get( userAgent ) : undefined;
+			documents.push( {
+				repProcessedHtml: readFileSync( file, 'utf8' ),
+				render: { id: key, identity: profile.identity, viewport: profile.viewport },
+				...( server !== undefined && userAgent ? { server: { userAgent, repServerHtml: server } } : {} ),
+			} );
+		}
+		return documents;
+	}
+
+	private outputFile( path: string | undefined ): string | undefined {
+		const file = path ? resolve( this.input.outputDir, path ) : undefined;
+		return file && pathWithin( this.input.outputDir, file ) ? file : undefined;
 	}
 
 	private capturedHtml( url: string ): string | undefined {
@@ -165,9 +233,9 @@ export class TemplateClusterDeferral {
 		return file && existsSync( file ) ? readFileSync( file, 'utf8' ) : undefined;
 	}
 
-	private async fetch( url: string ): Promise< MemberDocument > {
+	private async fetch( url: string, userAgent?: string ): Promise< MemberDocument > {
 		try {
-			const response = await safeFetch( url, { governors: this.input.governors, timeoutMs: TEMPLATE_DEFERRAL_LIMITS.requestTimeoutMs, attribution: { phase: 'template-clusters', url } } );
+			const response = await safeFetch( url, { governors: this.input.governors, timeoutMs: TEMPLATE_DEFERRAL_LIMITS.requestTimeoutMs, attribution: { phase: 'template-clusters', url }, ...( userAgent ? { headers: { 'User-Agent': userAgent } } : {} ) } );
 			if ( response.status < 200 || response.status >= 300 ) return { unavailable: `HTTP ${ response.status }` };
 			return { html: response.body.toString( 'utf8' ) };
 		} catch ( error ) {
