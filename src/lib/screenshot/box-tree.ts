@@ -74,9 +74,14 @@ export function observeBoxTree(snapshot: Element, properties: readonly string[],
 		}
 		return parts.join('>');
 	};
-	// Keep in step with captureOwned: capture-owned script/style elements have no box.
-	const owned = (element: Element) => (element.localName === 'script' || element.localName === 'style')
-		&& !element.hasAttribute(attribute) && element.getAttributeNames().some(name => name.startsWith('data-blocks-engine-capture-'));
+	// Keep in step with captureOwned: generated map leaves use their stamped
+	// owner's box; capture-owned script/style elements have no box.
+	const owned = (element: Element) => !element.hasAttribute(attribute) && (
+		((element.localName === 'script' || element.localName === 'style')
+			&& element.getAttributeNames().some(name => name.startsWith('data-blocks-engine-capture-')))
+		|| (element.localName === 'iframe' && element.hasAttribute('data-blocks-engine-capture-google-map-embed')
+			&& element.parentElement?.hasAttribute(attribute))
+	);
 	// A successful response is not proof of application: reinsertion can leave
 	// a link loading, and titled alternate sets can leave it inactive. Do not
 	// read cssRules here: cross-origin sheets are valid, but opaque.
@@ -145,12 +150,16 @@ const CAPTURE_MARKER_PREFIX = 'data-blocks-engine-capture-';
 /**
  * Capture inserts non-rendering script/style elements (the native-control runtime,
  * width-class rules) after observation. They have no box, so every box-tree walk
- * skips them; a source element without a node id still fails by name.
+ * skips them. A generated map iframe is also an unobserved leaf: it fills its
+ * stamped owner's observed box. A source element without an id still fails.
  */
 function captureOwned(element: AnyNode): boolean {
-	if (element.type !== 'script' && element.type !== 'style') return false;
-	const { attribs } = element as TagElement;
-	return !(NODE_ID_ATTRIBUTE in attribs) && Object.keys(attribs).some(name => name.startsWith(CAPTURE_MARKER_PREFIX));
+	if (element.type !== 'tag' && element.type !== 'script' && element.type !== 'style') return false;
+	const { attribs, name, parent } = element as TagElement;
+	if (NODE_ID_ATTRIBUTE in attribs) return false;
+	if (element.type === 'script' || element.type === 'style') return Object.keys(attribs).some(name => name.startsWith(CAPTURE_MARKER_PREFIX));
+	return name === 'iframe' && 'data-blocks-engine-capture-google-map-embed' in attribs
+		&& !!parent && 'attribs' in parent && NODE_ID_ATTRIBUTE in parent.attribs;
 }
 
 function boxElements($: cheerio.CheerioAPI): AnyNode[] {
