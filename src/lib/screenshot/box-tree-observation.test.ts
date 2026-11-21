@@ -119,6 +119,31 @@ it('names the first node at which saved bytes and the observed tree disagree', (
 	expect(describeBoxTreeMismatch(mismatch(doc('<p data-blocks-engine-node-id="n3"></p><p data-blocks-engine-node-id="n4"></p><script></script>'))!)).toBe('unstamped node at html[n0]>body[n2]>script');
 });
 
+// One Chromium pass (~1 second). A finite CSS entrance restarted near
+// serialization was recorded at frame zero (opacity 0) at the capture width and
+// mid-flight at the next, and the importer painted the hero invisible (#2195).
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('observes finite entrances at their end pose at every width', async () => {
+	const browser = await chromium.launch({ headless: true });
+	try {
+		const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+		await page.setContent('<!doctype html><html><head><title>Hero</title><style>@keyframes up{from{opacity:0;transform:translateY(28px)}to{opacity:1;transform:none}}@keyframes spin{to{transform:rotate(1turn)}}h1{animation:up 20s forwards}i{display:block;width:9px;height:9px;animation:spin 20s linear infinite}</style></head><body><h1>Your hair</h1><i></i></body></html>');
+		await stampNodeIds(page);
+		let observation: BoxTreeObservation | undefined;
+		const html = await capturePageHtml(page, [], undefined, observed => { observation = observed; });
+		const nodes = observation && 'nodes' in observation ? observation.nodes : {};
+		const tree = await captureBoxTree(page, html, { desktop: { width: 1440, height: 900 }, tablet: { width: 768, height: 1024 } }, { name: 'desktop', nodes });
+		const id = (tag: string) => html.match(new RegExp(`<${tag} [^>]*data-blocks-engine-node-id="([^"]+)"`))![1];
+		for (const viewport of ['desktop', 'tablet']) {
+			const styles = tree!.nodes[id('h1')].viewports[viewport].used_styles;
+			expect({ viewport, opacity: styles.opacity, transform: styles.transform }).toEqual({ viewport, opacity: '1', transform: 'matrix(1, 0, 0, 1, 0, 0)' });
+		}
+		// Perpetual motion is not given an end it never reaches.
+		expect(await page.evaluate(() => document.querySelector('i')!.getAnimations()[0].playState)).toBe('running');
+	} finally {
+		await browser.close();
+	}
+});
+
 // One Chromium pass (~1 second). The native-control runtime is appended after
 // observation (#2187), so a page with a stateful checkbox lost its box tree.
 it.skipIf(process.env.SKIP_BROWSER_TESTS)('binds a page whose stateful checkbox adds the native-control runtime', async () => {
