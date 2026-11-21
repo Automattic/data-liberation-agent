@@ -427,6 +427,7 @@ export async function observePage(
 				if ( pose.x || pose.y || pose.innerY ) throw new Error( `Observation pose unproven: baseline callback left the document scrolled to (${ pose.x }, ${ pose.y }), inner scroller at ${ pose.innerY }` );
 			}
 		}
+		const clickUnresolved = ! localOrigin && ! captureSession;
 		const measured = await page.evaluate( async ( { clickUnresolved, skipScrollProbe }: { clickUnresolved: boolean; skipScrollProbe: boolean } ) => {
 			const globalWithName = globalThis as typeof globalThis & { __name?: (fn: unknown) => unknown };
 			if (typeof globalWithName.__name === 'undefined') globalWithName.__name = fn => fn;
@@ -1077,7 +1078,14 @@ export async function observePage(
 				hashTargets,
 				internalPaths,
 			};
-		}, { clickUnresolved: ! localOrigin && ! captureSession, skipScrollProbe } );
+		}, { clickUnresolved, skipScrollProbe } );
+		// The in-page scroll and fragment probes park the document back at its
+		// pose with a bare scrollTo: no settle, and a throttled or debounced
+		// scroll handler may still hold its scrolled state (a sticky header in
+		// its scrolled look). Restore the rest pose the same way the sweep does,
+		// so anything rendered after observation — the frozen screenshot, the
+		// dialog probes — sees the document as a visitor at the top does.
+		if ( ! skipScrollProbe || clickUnresolved ) await restoreTopScrollState( page );
 
 		const internalRoutes: InternalRouteOutcome[] = [];
 		if ( localOrigin ) {
@@ -1634,6 +1642,15 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 	};
 }
 
+/** A capture exported with deferReference freezes its declared reference cells before its first comparison. */
+async function finishDeferredReference( directory: string, log?: ( message: string ) => void ): Promise< void > {
+	const statePath = join( directory, 'reference-stage.json' );
+	if ( ! existsSync( statePath ) || ( JSON.parse( readFileSync( statePath, 'utf8' ) ) as { status?: string } ).status !== 'pending' ) return;
+	log?.( '[compare] freezing deferred reference cells' );
+	const { runReferenceStage } = await import( './reference-stage.js' );
+	await runReferenceStage( directory );
+}
+
 /** Frozen stages share the live observer and registered scoring path; no source browser is created. */
 async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'capture' | 'materialization' ): Promise<FidelityReport> {
 	const concurrency = options.concurrency ?? 3;
@@ -1644,6 +1661,7 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 	if ( stage === 'capture' && options.candidateUrl ) throw new Error( 'candidateUrl requires materialization or drift stage' );
 	const { websiteDir, receiptPath } = resolveCheckDirectory( options.directory );
 	const directory = dirname( receiptPath );
+	await finishDeferredReference( directory, options.log );
 	const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) ) as CaptureReceipt;
 	const sources = routeSourceMap( receipt );
 	let widths = options.widths ?? [ ...REFERENCE_WIDTHS ];

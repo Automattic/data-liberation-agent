@@ -10,6 +10,7 @@ import { accessGateRemoval, readSourceCleanup, sweepSourceCleanup, type CleanupP
 import { slugify } from '../url/index.js';
 import { SiteAnalysisAggregator } from './aggregator.js';
 import { captureChromeFidelity } from './capture-chrome-fidelity.js';
+import { CHROME_HYDRATION_LANDMARKS, CHROME_HYDRATION_TIMEOUT_MS, waitForChromePlaceholderLinks } from './chrome-hydration.js';
 import { normalizeCaptureState, normalizeGeneratedIds, SCRIPT_MOTION_BUDGET_MS, settleScriptMotion } from './capture-state.js';
 import { snapshotComponents, type ComponentBaseline } from './component-states.js';
 import {
@@ -562,6 +563,20 @@ export function baselineSteps(
 			}
 		},
 		{
+			// Chrome controls a runtime fills in after load (a header cart widget)
+			// must be hydrated in every document of every route, or identical chrome
+			// serializes differently per route (see chrome-hydration.ts).
+			id: 'chrome-hydration', bound: { evaluateMs: CHROME_HYDRATION_TIMEOUT_MS + evaluateTimeoutMs }, onFailure: 'best-effort', run: async () => {
+				const outcome = await page.evaluate( waitForChromePlaceholderLinks, { timeoutMs: CHROME_HYDRATION_TIMEOUT_MS, landmarks: CHROME_HYDRATION_LANDMARKS } );
+				if ( ! outcome?.placeholders ) return;
+				process.stderr.write( `[timing] chrome-hydration ${ JSON.stringify( { url, viewport: viewport.id, ...outcome } ) }\n` );
+				if ( outcome.pending > 0 ) args.diagnostics?.push( {
+					code: 'chrome_hydration_pending',
+					reason: `${ url } (${ viewport.id }): ${ outcome.pending } chrome placeholder link(s) still had no destination or name after ${ outcome.waitedMs }ms: ${ outcome.pendingLinks.join( ', ' ) }`,
+				} );
+			}
+		},
+		{
 			id: 'baseline-snapshot', onFailure: 'throw', run: async () => {
 				// Initial component states are immutable evidence, read before exploration.
 				await sampleMotion();
@@ -599,7 +614,9 @@ export function baselineSteps(
 				}
 				const observed: BoxTreeObservation | undefined = boxNodes;
 				if (observed && 'mismatch' in observed) state.boxTreeMismatch = observed.mismatch;
-				else if (observed) state.boxTree = await captureBoxTree(page, state.initialDocument, boxViewports(), { name: viewport.id, nodes: observed.nodes }, mismatch => { state.boxTreeMismatch = mismatch; });
+				else if (observed) state.boxTree = await captureBoxTree(page, state.initialDocument, boxViewports(), { name: viewport.id, nodes: observed.nodes }, mismatch => { state.boxTreeMismatch = mismatch; }, (name, mismatch) => {
+					args.diagnostics?.push({ code: 'box_tree_viewport_dropped', reason: `${name}: ${describeBoxTreeMismatch(mismatch)}` });
+				});
 				if ( await args.absentDocument?.( state.initialDocument ) ) {
 					fail( 'goto', 'HTTP 404 (render matches absent nonce sibling)' );
 					state.stopped = true;

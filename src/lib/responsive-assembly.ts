@@ -6,6 +6,7 @@ import postcss from 'postcss';
 import selectorParser from 'postcss-selector-parser';
 import type { AnyNode, Element } from 'domhandler';
 import { escapeHtmlAttr } from './html-escape.js';
+import { NODE_ID_ATTRIBUTE } from './screenshot/box-tree.js';
 import { appendScrollDrivenAnimations } from './scroll-driven-animations.js';
 import { cssIdentifier, parseCss, parseSelectorList, projectStylesheet, scopeCss, type UnparseableStylesheetSink } from './replicate/css-scope.js';
 import { FLUID_RULES_STYLE_ATTRIBUTE } from './screenshot/fluid-capture.js';
@@ -21,6 +22,7 @@ import {
 	isStableIdentityId,
 	isUnstableResponsiveId,
 	learnedTransformSelectors,
+	placeholderLinkSide,
 	RESPONSIVE_DESKTOP_ONLY_CLASS,
 	RESPONSIVE_MOBILE_ONLY_CLASS,
 	RESPONSIVE_PROJECTION_CLASS_PREFIX,
@@ -740,6 +742,27 @@ export function identitySubsetMerge(
 		m: cheerio.Cheerio< Element >,
 		path: string
 	): void => {
+		// A placeholder link is its control before the runtime filled it in, so
+		// the linked rendering serves both widths: the placeholder's subtree is
+		// an earlier state, not per-viewport presentation to project or hide.
+		// A subtree holding identified components keeps the identity rules below.
+		const placeholder = placeholderLinkSide( d.get( 0 )!, m.get( 0 )! );
+		const holdsIdentity = ( node: cheerio.Cheerio< Element > ) => node.find( '*' ).toArray().some( child => identityOf( child ) );
+		if ( placeholder && ! holdsIdentity( d ) && ! holdsIdentity( m ) ) {
+			if ( placeholder === 'desktop' ) {
+				// The adopted nodes are the phone capture's elements: their capture ids
+				// take its namespace so they neither collide with nor borrow desktop
+				// evidence (the desktop box observed the placeholder).
+				d.get( 0 )!.attribs = { ...m.get( 0 )!.attribs };
+				d.html( m.html() ?? '' );
+				d.find( `[${ NODE_ID_ATTRIBUTE }]` ).addBack( `[${ NODE_ID_ATTRIBUTE }]` ).each( ( _index, node ) => {
+					if ( ! isElementNode( node ) ) return;
+					const id = node.attribs[ NODE_ID_ATTRIBUTE ];
+					if ( ! id.startsWith( 'mobile:' ) ) node.attribs[ NODE_ID_ATTRIBUTE ] = `mobile:${ id }`;
+				} );
+			}
+			return;
+		}
 		// Stable ids cannot override each document's resolved URL identity: a
 		// component whose viewports link or embed different destinations (a
 		// rotating partner strip) ships once per viewport, like a re-parented one.
@@ -1847,36 +1870,61 @@ export function routePhoneDocumentFragments( html: string, documentPath: string,
 		changed = true;
 	} );
 	const idCounts = new Map<string, number>();
+	// Every id lookup goes through this index: a page duplicates thousands of
+	// ids across its device documents, and rescanning a document per id is
+	// quadratic. Renames and inserted targets keep it current.
+	const elementsById = new Map<string, Element[]>();
+	const indexId = ( element: Element, id: string ): void => {
+		const elements = elementsById.get( id );
+		if ( elements ) elements.push( element );
+		else elementsById.set( id, [ element ] );
+	};
 	$( '[id]' ).each( ( _index, element ) => {
 		const id = $( element ).attr( 'id' )!;
 		idCounts.set( id, ( idCounts.get( id ) ?? 0 ) + 1 );
+		indexId( element, id );
 	} );
+	const desktopRoots = new Set( $( `.${ DESKTOP_DOCUMENT_CLASS }` ).toArray() );
+	const insideAny = ( element: Element, roots: ReadonlySet<unknown> ): boolean => {
+		for ( let node = element.parent; node; node = node.parent ) if ( roots.has( node ) ) return true;
+		return false;
+	};
+	/** `scope.find( '[id]' )` filtered to one id. */
+	const withId = ( scope: cheerio.Cheerio< Element >, id: string ): cheerio.Cheerio< Element > => {
+		const roots = new Set( scope.toArray() );
+		return $( ( elementsById.get( id ) ?? [] ).filter( element => insideAny( element, roots ) ) );
+	};
 	let responsiveFragments = false;
 	const variantTarget = ( { document, suffix }: typeof variants[ number ], fragment: string ): boolean => {
 		const variantId = `${ fragment }${ suffix }`;
 		const ownId = ( id: string ) => renamed.get( id )?.find( candidate => candidate.endsWith( suffix ) ) ?? id;
-		if ( document.find( '[id]' ).filter( ( _i, candidate ) => $( candidate ).attr( 'id' ) === variantId ).length === 0 ) {
+		if ( withId( document, variantId ).length === 0 ) {
 			// Ordinary authored fragments have no adapter marker. Their variant
 			// target still carries the original id and collides with the desktop
 			// copy; preserve its associations when assigning the variant identity.
-			const authored = document.find( '[id]' ).filter( ( _i, candidate ) => $( candidate ).attr( 'id' ) === fragment );
+			const authored = withId( document, fragment );
 			if ( authored.length === 1 && ( idCounts.get( fragment ) ?? 0 ) < 2 ) return false;
 			if ( authored.length === 1 ) {
 				authored.attr( 'id', variantId );
+				const element = authored.get( 0 )!;
+				elementsById.set( fragment, elementsById.get( fragment )!.filter( candidate => candidate !== element ) );
+				indexId( element, variantId );
 				renamed.set( fragment, [ ...( renamed.get( fragment ) ?? [] ), variantId ] );
 				changed = true;
 			}
 			const sourceId = sourceIds.get( fragment );
 			const counterpart = authored.length === 1 ? authored : sourceId
-				? document.find( '[id]' ).filter( ( _i, candidate ) => $( candidate ).attr( 'id' ) === ownId( sourceId ) )
+				? withId( document, ownId( sourceId ) )
 				: $();
 			if ( counterpart.length !== 1 ) return false;
-			if ( authored.length !== 1 ) counterpart.before(
-				`<span id="${ escapeHtmlAttr( variantId ) }" data-blocks-engine-capture-anchor-target="${ escapeHtmlAttr( fragment ) }" aria-hidden="true"></span>`
-			);
+			if ( authored.length !== 1 ) {
+				const target = $( `<span id="${ escapeHtmlAttr( variantId ) }" data-blocks-engine-capture-anchor-target="${ escapeHtmlAttr( fragment ) }" aria-hidden="true"></span>` );
+				counterpart.before( target );
+				indexId( target.get( 0 ) as Element, variantId );
+			}
 		}
-		const desktopTarget = $( `.${ DESKTOP_DOCUMENT_CLASS } [id]` ).filter( ( _i, element ) => $( element ).attr( 'id' ) === fragment );
-		const ownTarget = document.find( '[id]' ).filter( ( _i, element ) => $( element ).attr( 'id' ) === variantId );
+		const desktopTarget = $( ( elementsById.get( fragment ) ?? [] ).filter( element => insideAny( element, desktopRoots ) ) );
+		const ownTarget = withId( document, variantId );
 		if ( ownTarget.length === 1 ) {
 			if ( desktopTarget.length === 1 ) desktopTarget.attr( 'data-blocks-engine-capture-responsive-fragment', fragment );
 			ownTarget.attr( 'data-blocks-engine-capture-responsive-fragment', fragment );

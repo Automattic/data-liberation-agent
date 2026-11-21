@@ -1,3 +1,5 @@
+import * as cheerio from 'cheerio';
+
 /**
  * Wix repeats every repeater/section component under a page-specific instance
  * prefix — `<page instance>_r_<component>` — in element ids, class names and the
@@ -17,12 +19,13 @@
  * its `document`: a fragment holds only some of an instance's components, and
  * named on its own it would no longer match the page CSS that styles it.
  *
- * An instance already named by this canonicalization keeps its name. The export
- * canonicalizes each route again after its stylesheets became linked files, so
- * the markup then shows only some of the instance's components; renaming it
- * from that subset would leave every external rule pointing at the old name.
+ * An instance already named by this canonicalization keeps its name. Export
+ * applies the hook before splitting shared inline styles into linked files;
+ * subsequent calls must preserve names already used by external rules.
  */
-const INSTANCE_REFERENCE = /\b(comp-[a-z0-9]+)_r_(comp-[a-z0-9]+)/gi;
+
+// A hyphen is a boundary too: Wix derives ids such as img-comp-X_r_comp-Y.
+const INSTANCE_REFERENCE = /(?<![a-z0-9])(comp-[a-z0-9]+)_r_(comp-[a-z0-9]+)/gi;
 const CANONICAL_INSTANCE = /^comp-dla[0-9a-f]{8}$/i;
 
 export function canonicalizeWixInstanceIds( html: string, document: string = html ): string {
@@ -40,10 +43,11 @@ export function canonicalizeWixInstanceIds( html: string, document: string = htm
 
 	// The instance element carries the bare instance id too (`id="<instance>"`,
 	// `<instance>-container`), and the page stylesheet targets it, so every
-	// whole-token occurrence of an instance id is rewritten, not only the
+	// whole-token occurrence (including Wix's img-, portal- and bgMedia_ derived ids and their
+	// selectors/references) is rewritten, not only the
 	// `_r_` references. A longer id that merely starts with it is left alone.
 	const instancePattern = new RegExp(
-		`(?<![a-z0-9_-])(${ [ ...tokenByInstance.keys() ].map( escapeRegExp ).join( '|' ) })(?![a-z0-9])`,
+		`(?<![a-z0-9])(${ [ ...tokenByInstance.keys() ].map( escapeRegExp ).join( '|' ) })(?![a-z0-9])`,
 		'gi'
 	);
 	return html.replace( instancePattern, ( match ) => tokenByInstance.get( match ) ?? match );
@@ -51,7 +55,13 @@ export function canonicalizeWixInstanceIds( html: string, document: string = htm
 
 function instanceTokens( html: string ): Map< string, string > {
 	const componentsByInstance = new Map< string, Set< string > >();
-	for ( const [ , instance, component ] of html.matchAll( INSTANCE_REFERENCE ) ) {
+	// Styles may contain dead selectors, and may already be linked on another
+	// route. Only rendered markup defines the scope's identity.
+	const $ = cheerio.load( html );
+	const references = $( '[id], [class]' ).toArray().map( element =>
+		`${ $( element ).attr( 'id' ) ?? '' } ${ $( element ).attr( 'class' ) ?? '' }`
+	).join( ' ' );
+	for ( const [ , instance, component ] of references.matchAll( INSTANCE_REFERENCE ) ) {
 		if ( CANONICAL_INSTANCE.test( instance! ) ) continue;
 		const components = componentsByInstance.get( instance! ) ?? new Set< string >();
 		components.add( component!.toLowerCase() );

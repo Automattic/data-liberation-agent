@@ -1,7 +1,7 @@
-import { afterAll, beforeAll, describe, expect } from 'vitest';
+import { afterAll, beforeAll, describe, expect, vi } from 'vitest';
 import { it } from '../../../test/browser.js';
 import { createServer, type Server } from 'node:http';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
 import * as cheerio from 'cheerio';
@@ -353,7 +353,7 @@ body{margin:0;font:16px Arial}header{display:flex;gap:16px;align-items:center;he
 .mobile-nav a{display:block}main{min-height:1400px}@media (min-width:768px){.toggle,.mobile-nav{display:none}}
 </style></head><body><header class="site-header"><a href="/">Brand</a><nav aria-label="Main"><a href="/">Home</a><a href="/privacy">Privacy</a></nav>
 <div class="actions"><button type="button" class="toggle" aria-expanded="false" aria-controls="mobile-nav"><span>Open menu</span></button></div></header>
-<main><h1>${ path || 'home' }</h1><p>Body copy for ${ path || 'home' }.</p></main><footer>Footer</footer><script>
+<main><h1>${ path || 'home' }</h1><p>Body copy for ${ path || 'home' }.</p></main><footer><p>Footer: our shared site information, contact details, accessibility statement and copyright notice for every visitor. Contact our team for assistance with orders, account settings, delivery questions and general enquiries. We welcome feedback about this website and our services. Read our policies for information about privacy, security and accessibility. Our office is open during normal business hours and our support team will respond as soon as possible.</p></footer><script>
 const header = document.querySelector('header'), toggle = document.querySelector('.toggle');
 toggle.addEventListener('click', () => {
 	const open = toggle.getAttribute('aria-expanded') !== 'true';
@@ -374,13 +374,13 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'shared chrome wit
 	beforeAll( async () => {
 		server = createServer( ( request, response ) => {
 			const path = new URL( request.url ?? '/', 'http://fixture' ).pathname.slice( 1 );
-			if ( ! [ '', 'privacy' ].includes( path ) ) {
+			if ( ! [ '', 'privacy', 'solo' ].includes( path ) ) {
 				response.statusCode = 404;
 				response.end( 'not found' );
 				return;
 			}
 			response.setHeader( 'content-type', 'text/html; charset=utf-8' );
-			response.end( mountedMenuPage( path ) );
+			response.end( path === 'solo' ? mountedMenuPage( path ).replaceAll( 'href="/"', 'href="/solo"' ).replaceAll( 'href="/privacy"', 'href="/solo"' ) : mountedMenuPage( path ) );
 		} );
 		await new Promise< void >( resolve => server.listen( 0, '127.0.0.1', resolve ) );
 		origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
@@ -399,6 +399,53 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'shared chrome wit
 		await new Promise< void >( resolve => server.close( () => resolve() ) );
 		rmSync( outputDir, { recursive: true, force: true } );
 	} );
+
+	// Two real captures (~30 s), sharing the eager fixture above.
+	it( 'does not probe a single-route frontier', async () => {
+		const dir = mkdtempSync( join( parent, 'chrome-solo-' ) );
+		const messages: string[] = [];
+		const stderr = vi.spyOn( process.stderr, 'write' ).mockImplementation( chunk => { messages.push( String( chunk ) ); return true; } );
+		try {
+			const captured = await captureScreenshots( {
+				urls: [ url( 'solo' ) ], primaryUrl: url( 'solo' ), outputDir: dir, linkedPages: {},
+				settleMs: 0, learnFluid: false, force: true,
+				viewports: [ { id: 'desktop', width: 1440, height: 900 } ], sharedChrome: true,
+			} );
+			expect( captured.captured ).toBe( 1 );
+			expect( messages.filter( message => message.startsWith( '[shared-chrome]' ) ) ).toEqual( [] );
+			expect( captured.sharedChrome ).toBeUndefined();
+		} finally {
+			stderr.mockRestore();
+			rmSync( dir, { recursive: true, force: true } );
+		}
+	}, 90_000 );
+
+	it( 'probes once after frontier admission and emits the same shared parts as eager capture', async () => {
+		const dir = mkdtempSync( join( parent, 'chrome-frontier-' ) );
+		const messages: string[] = [];
+		const stderr = vi.spyOn( process.stderr, 'write' ).mockImplementation( chunk => { messages.push( String( chunk ) ); return true; } );
+		try {
+			const captured = await captureScreenshots( {
+				urls: [ url( '' ) ], primaryUrl: url( '' ), outputDir: dir, linkedPages: {},
+				settleMs: 50, learnFluid: false, force: true, deviceMode: 'auto',
+			} );
+			expect( captured.captured ).toBe( 2 );
+			expect( messages.filter( message => message.startsWith( '[shared-chrome]' ) ) ).toHaveLength( 1 );
+			const manifest = JSON.parse( readFileSync( join( dir, 'screenshots', 'manifest.json' ), 'utf8' ) ).entries as Record< string, ManifestEntry >;
+			// Unlike eager capture, the entrypoint probed its own controls.
+			expect( manifest[ url( '' ) ]!.sharedChrome ).toBeUndefined();
+			expect( manifest[ url( 'privacy' ) ]!.sharedChrome ).toMatchObject( { chromeReused: true } );
+			expect( manifest[ url( 'privacy' ) ]!.interactions!.states.some( state => state.reusedFrom === url( '' ) && state.trigger.label === 'Open menu' ) ).toBe( true );
+			exportWebsiteCapture( { outputDir: dir, sourceUrl: url( '' ), platform: 'neutral', summary: {}, failures: [] } );
+			const parts = ( root: string ) => readdirSync( join( root, 'website', 'parts' ) ).sort().map( name => [ name, readFileSync( join( root, 'website', 'parts', name ), 'utf8' ) ] );
+			expect( parts( dir ) ).toEqual( parts( outputDir ) );
+			expect( parts( dir ).some( ( [ name ] ) => name!.startsWith( 'header-' ) ) ).toBe( true );
+			expect( parts( dir ).some( ( [ name ] ) => name!.startsWith( 'footer-' ) ) ).toBe( true );
+		} finally {
+			stderr.mockRestore();
+			rmSync( dir, { recursive: true, force: true } );
+		}
+	}, 180_000 );
 
 	it( 'stores shared components once while preserving every route component in order', () => {
 		const report = JSON.parse( readFileSync( join( outputDir, 'interaction-states.json' ), 'utf8' ) ) as {

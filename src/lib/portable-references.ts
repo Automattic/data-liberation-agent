@@ -432,15 +432,17 @@ function removeDanglingVisualMediaSource(
 	);
 }
 
-export function replaceDanglingCssUrl(
+export function replaceDanglingCssUrls(
 	html: string,
-	reference: string,
+	references: readonly string[],
 	rejectedKeys?: Set< string >
 ): string {
+	if ( references.length === 0 ) return html;
 	// An empty data: URL is a valid, zero-byte resource, so the browser reports a
 	// clean load for an asset the capture never got. about:blank cannot be fetched
 	// as a subresource, keeping the loss visible instead of silently successful.
-	return preparePortableReplacements( new Map( [ [ reference, 'about:blank' ] ] ), rejectedKeys )( html );
+	// One pass for the batch: each pass rescans the whole document.
+	return preparePortableReplacements( new Map( references.map( reference => [ reference, 'about:blank' ] ) ), rejectedKeys )( html );
 }
 
 /** Whether a rendered reference names one of the excluded source URLs, escaped

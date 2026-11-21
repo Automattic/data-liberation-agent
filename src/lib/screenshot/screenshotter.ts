@@ -143,6 +143,7 @@ function sendLog( server: CaptureLogSink | undefined, message: string ): void {
 }
 
 import { assignNodeIds, observeBoxTree, BOX_TREE_STYLES, NODE_ID_ATTRIBUTE } from './box-tree.js';
+import { normalizeRetainedDocument } from './retained-document.js';
 
 /** Failure reason for a route whose source app crashed into its client error shell. */
 const CLIENT_ERROR_SHELL_FAILURE = 'client error shell';
@@ -326,7 +327,7 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 		// The installed source cleanup sweeps first, in this same task: the
 		// settle and media waits above give the source time to mount a widget
 		// after the last sweep, and no source script runs between these two.
-		const result = await page.evaluate( async ( { boxTreeSource, boxTreeProperties, captureBoxes, stampSource, nodeIdAttribute, observeControlSource, controlAttribute, portMapsSource, mapHostSource, iframeEvidenceAttributes, scaffoldingSource, shadowSource, parseSrcsetSource, srcsetShapedSource, initialScrollClassAttribute } ) => {
+		const result = await page.evaluate( async ( { normalizeDocumentSource, boxTreeSource, boxTreeProperties, captureBoxes, stampSource, nodeIdAttribute, observeControlSource, controlAttribute, portMapsSource, mapHostSource, iframeEvidenceAttributes, scaffoldingSource, shadowSource, parseSrcsetSource, srcsetShapedSource, initialScrollClassAttribute } ) => {
 			( window as unknown as { __dlaCleanup?: { sweep: () => void } } ).__dlaCleanup?.sweep();
 			// Independent computed-style sentinels from the styled baseline, before
 			// any serialization-only DOM trials. Never validate evidence against itself.
@@ -575,13 +576,7 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				// DOM insertion permits flow elements in <head>; the HTML parser
 				// does not. Move them in the snapshot only, after positional walks,
 				// so re-parsing cannot push later base/meta/title into the body.
-				const head = snapshot.querySelector( 'head' );
-				const body = snapshot.querySelector( 'body' );
-				if ( head && body ) {
-					const headTags = new Set( 'base basefont bgsound link meta title noscript noframes style script template'.split( ' ' ) );
-					const misplaced = Array.from( head.children ).filter( element => ! headTags.has( element.localName ) );
-					body.prepend( ...misplaced );
-				}
+				( new Function( 'return (' + normalizeDocumentSource + ')' )() as typeof normalizeRetainedDocument )( snapshot );
 				const observe = new Function('return (' + boxTreeSource + ')')() as typeof observeBoxTree;
 				const checkedObservation = (): import('./box-tree.js').BoxTreeObservation => {
 					const observed = observe(snapshot, boxTreeProperties, nodeIdAttribute);
@@ -623,7 +618,7 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				}
 				for ( const { element, parent, next } of detached.reverse() ) parent.insertBefore( element, next );
 			}
-		}, { boxTreeSource: observeBoxTree.toString(), boxTreeProperties: BOX_TREE_STYLES, captureBoxes: Boolean(onBoxTree), stampSource: assignNodeIds.toString(), nodeIdAttribute: NODE_ID_ATTRIBUTE, initialScrollClassAttribute: INITIAL_SCROLL_CLASS_ATTRIBUTE, observeControlSource: observeNativeControlState.toString(), controlAttribute: NATIVE_CONTROL_STATE_ATTRIBUTE, portMapsSource: portRenderedGoogleMaps.toString(), mapHostSource: isGoogleMapHost.toString(), iframeEvidenceAttributes, scaffoldingSource: cleanPortableScaffolding.toString(), shadowSource: portStaticShadowContent.toString(), parseSrcsetSource: parseSrcset.toString(), srcsetShapedSource: isSrcsetShaped.toString() } );
+		}, { normalizeDocumentSource: normalizeRetainedDocument.toString(), boxTreeSource: observeBoxTree.toString(), boxTreeProperties: BOX_TREE_STYLES, captureBoxes: Boolean(onBoxTree), stampSource: assignNodeIds.toString(), nodeIdAttribute: NODE_ID_ATTRIBUTE, initialScrollClassAttribute: INITIAL_SCROLL_CLASS_ATTRIBUTE, observeControlSource: observeNativeControlState.toString(), controlAttribute: NATIVE_CONTROL_STATE_ATTRIBUTE, portMapsSource: portRenderedGoogleMaps.toString(), mapHostSource: isGoogleMapHost.toString(), iframeEvidenceAttributes, scaffoldingSource: cleanPortableScaffolding.toString(), shadowSource: portStaticShadowContent.toString(), parseSrcsetSource: parseSrcset.toString(), srcsetShapedSource: isSrcsetShaped.toString() } );
 		if ( onPainted ) onPainted( await readPaintState( page ) );
 		onBoxTree?.(result.boxNodes);
 		diagnostics?.push( ...result.findings );
@@ -1309,7 +1304,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	const desktopProfile = viewports.find( viewport => viewport.id === 'desktop' );
 	const phoneProfile = viewports.find( viewport => viewport.id === 'mobile' );
 	const entrypoint = urls.find( url => isSourceCaptureUrl( url, opts.primaryUrl ) ) ?? urls[ 0 ];
-	const sharedChromeEnabled = Boolean( entrypoint && ( opts.sharedChrome ?? ! opts.viewports ) && ( urls.length > 1 || frontier ) );
+	const sharedChromeEnabled = Boolean( entrypoint && ( opts.sharedChrome ?? ! opts.viewports ) );
+	const eagerSharedChrome = sharedChromeEnabled && urls.length > 1;
+	let sharedChromePhoneStates: CapturedDialogInteraction[] | undefined;
 	const sharedChromeResults = new Map< string, SharedChromeProbe >();
 	const rootClassEvidence = new RootClassEvidence();
 	const routeMotion = new RouteMotionEvidence();
@@ -1328,7 +1325,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			telemetryRequest: opts.telemetryRequest,
 		};
 		const probed = await probeDeviceMode( {
-			...comparison, probeDiagnostic: diagnostic => routeDiagnostics.push( { ...diagnostic, url: entrypoint! } ), browser, url: entrypoint, requested, canonicalizeHtml: opts.canonicalizeHtml, sharedChrome: sharedChromeEnabled,
+			...comparison, probeDiagnostic: diagnostic => routeDiagnostics.push( { ...diagnostic, url: entrypoint! } ), browser, url: entrypoint, requested, canonicalizeHtml: opts.canonicalizeHtml, sharedChrome: eagerSharedChrome,
 			deviceDocuments: [
 				...( opts.deviceDocumentSelection ? [ 'documentSelection' ] : [] ),
 				...( opts.additionalProfiles ? [ 'additionalProfiles' ] : [] ),
@@ -1336,7 +1333,10 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			],
 		} );
 		deviceMode = probed.decision;
-		if ( probed.phoneInteractions ) phoneInteractions = { url: probed.url, report: probed.phoneInteractions };
+		if ( probed.phoneInteractions ) {
+			phoneInteractions = { url: probed.url, report: probed.phoneInteractions };
+			sharedChromePhoneStates = probed.phoneInteractions.states;
+		}
 		for ( const [ profile, result ] of probed.sharedChrome ?? [] ) sharedChromeResults.set( profile, result );
 		if ( deviceMode.mode === 'reflow-only' ) {
 			// A reflow route's desktop document also freezes the phone-width reference cell.
@@ -1352,18 +1352,21 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	}
 
 	// --- shared chrome -------------------------------------------------------
-	// The entrypoint's chrome is probed once per built-in profile before any
-	// route, on the device-mode probe's pages when it loaded them, and reused by
-	// every route whose chrome matches (chrome-reuse.ts). A single-route capture
-	// has nothing to share.
+	// Known multi-route inventories probe eagerly, using device-mode pages when
+	// available. A one-route inventory waits until the frontier admits another
+	// route, then probes before that wave starts. No extra renderer joins the pool.
 	const sharedChromeDecisions: Array< { url: string; profile: string } & SharedChromeRouteDecision > = [];
-	if ( sharedChromeEnabled ) {
+	let sharedChromeProbed = false;
+	const ensureSharedChrome = async (): Promise< void > => {
+		if ( ! sharedChromeEnabled || sharedChromeProbed ) return;
+		sharedChromeProbed = true;
 		const profiles = ( reflowViewports ?? viewports ).filter( viewport => ( viewport.id === 'desktop' || viewport.id === 'mobile' ) && ! sharedChromeResults.has( viewport.id ) );
 		const sessionContext = profiles.length ? await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly, governors: opts.governors } ) : undefined;
 		await Promise.all( profiles.map( async viewport => {
 			sharedChromeResults.set( viewport.id, await probeSharedChrome( {
 				probeDiagnostic: diagnostic => routeDiagnostics.push( { ...diagnostic, url: entrypoint! } ),
 				browser, url: entrypoint!, options: profileContextOptions( viewport, sessionContext! ), viewport: viewport.id as 'desktop' | 'mobile',
+				...( viewport.id === 'desktop' && sharedChromePhoneStates ? { additionalStates: sharedChromePhoneStates } : {} ),
 				sourceTelemetry: opts.sourceTelemetry,
 				governors: opts.governors, publicUrlsOnly: opts.publicUrlsOnly ?? false, routeScope: opts.routeScope,
 				cleanupPolicy: opts.cleanupPolicy, removeSelectors: opts.removeSelectors, prepareCapture: opts.prepareCapture, initScript: opts.initScript,
@@ -1377,9 +1380,10 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			sendLog( server, message );
 			process.stderr.write( `${ message }\n` );
 		}
-	}
+	};
+	if ( eagerSharedChrome ) await ensureSharedChrome();
 	const sharedChromeFor = ( viewport: Viewport ): SharedChromeProbe | undefined => {
-		if ( ! sharedChromeEnabled || ( viewport.id !== 'desktop' && viewport.id !== 'mobile' ) ) return undefined;
+		if ( ! sharedChromeProbed || ( viewport.id !== 'desktop' && viewport.id !== 'mobile' ) ) return undefined;
 		return sharedChromeResults.get( viewport.id ) ?? { status: 'skipped', reason: `the entrypoint chrome was not probed for the ${ viewport.id } profile`, durationMs: 0 };
 	};
 
@@ -2136,6 +2140,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		let pendingPrioritized = ! opts.prioritizePendingRoutes;
 		let entrypointSettled = false;
 		while (segStart < urls.length && ! routeBudget?.closed() && ! routeDeadlines.stalled) {
+			if ( segStart > 0 ) await ensureSharedChrome();
 			// Cluster-aware discovery must run between admission batches, not only
 			// after the inventory has already spent the browser window.
 			const waveEnd = opts.groupLinkedRoutes

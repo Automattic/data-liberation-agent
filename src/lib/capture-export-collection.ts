@@ -380,7 +380,7 @@ export function collectCapturedRoutes( { entries, sourceUrl, routeScope, failure
 			}
 			for ( const profile of Object.values( entry.profiles ?? {} ) ) {
 				for ( const diagnostic of profile.diagnostics ?? [] ) {
-					if ( diagnostic.code === 'device_document_incomplete' || diagnostic.code === 'source_mobile_redirect' ) routeCaptureDiagnostics.push( { ...diagnostic, url } );
+					if ( diagnostic.code === 'device_document_incomplete' || diagnostic.code === 'source_mobile_redirect' || diagnostic.code === 'box_tree_unproven' ) routeCaptureDiagnostics.push( { ...diagnostic, url } );
 				}
 			}
 			const acquiredDesktopHtml = readFileSync(capturedHtmlPath, 'utf8');

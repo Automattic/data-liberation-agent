@@ -148,6 +148,37 @@ describe( 'viewport URL correspondence', () => {
 		}
 	} );
 
+	// A widget that has not hydrated yet renders its control as a placeholder
+	// link (no href, no live text); the other capture holds the hydrated link.
+	it.each( [ 'mobile', 'desktop' ] as const )( 'ships the linked rendering at both widths when the %s capture holds a placeholder link', ( placeholderSide ) => {
+		const control = ( linked: boolean ) => linked
+			? '<a class="control" role="button" href="/basket/" aria-label="Basket, 0 items" data-blocks-engine-node-id="n7"><span class="frame" style="padding-bottom:120%"><svg viewBox="0 0 10 12"><path d="M0 0h10v12H0z"></path><text x="5" y="8">0</text></svg></span></a>'
+			: '<a class="control" role="button"><span class="frame" style="padding-bottom:120%"><svg viewBox="0 0 10 12"><path d="M0 0h10v12H0z"></path></svg></span></a>';
+		const page = ( linked: boolean ) => `<html><head></head><body><header id="chrome"><div id="basket"><div class="widget">${ control( linked ) }</div></div></header><main id="main"><h1>Shared</h1></main></body></html>`;
+		const desktop = page( placeholderSide !== 'desktop' ), mobile = page( placeholderSide !== 'mobile' );
+		const assembly = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile } );
+		expect( assembly.hasMobileDocument ).toBe( false );
+		expect( assembly.evidence ).toMatchObject( { outcome: 'collapsed-identity-subset' } );
+		expect( assembly.evidence?.divergedComponents ).toBeUndefined();
+		const $ = cheerio.load( assembly.html );
+		expect( $( 'a.control' ).map( ( _, node ) => $( node ).attr( 'href' ) ).get() ).toEqual( [ '/basket/' ] );
+		expect( $( 'a.control' ).attr( 'aria-label' ) ).toBe( 'Basket, 0 items' );
+		// The live count renders at both widths, not only beside the linked side.
+		expect( $( 'a.control text' ).length ).toBe( 1 );
+		expect( $( 'a.control [class*="-only"], a.control[class*="-only"]' ).length ).toBe( 0 );
+		// Capture ids keep naming the capture that observed the element.
+		expect( $( 'a.control' ).attr( 'data-blocks-engine-node-id' ) ).toBe( placeholderSide === 'desktop' ? 'mobile:n7' : 'n7' );
+	} );
+
+	it( 'keeps a placeholder link whose text the linked rendering does not carry per viewport', () => {
+		const page = ( control: string ) => `<html><head></head><body><div id="promo"><div class="widget">${ control }</div></div><main id="main"><h1>Shared</h1></main></body></html>`;
+		const desktop = page( '<a class="control" href="/sale/">Shop the sale</a>' );
+		const mobile = page( '<a class="control">Sold out</a>' );
+		const assembly = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile } );
+		const $ = cheerio.load( assembly.html );
+		expect( $( 'a.control' ).map( ( _, node ) => $( node ).text() ).get() ).toEqual( [ 'Shop the sale', 'Sold out' ] );
+	} );
+
 	it( 'pairs an image whose srcset renditions differ per viewport', () => {
 		const page = ( rendition: string ) => `<html><body><main><h1>Post</h1></main><aside><div id="Image3"><h2>Ad</h2><img id="Image3_img" src="https://cdn.test/a=s300" srcset="https://cdn.test/a=${ rendition } 1600w"></div></aside></body></html>`;
 		const merged = correspondenceMerge( page( 'w1600' ), page( 's1600' ), 767 );

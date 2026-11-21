@@ -83,6 +83,7 @@ export function portRenderedGoogleMaps(
     frame.src = embed.href;
     frame.title = 'Google Maps';
     frame.className = 'data-blocks-engine-capture-google-map-embed';
+    frame.setAttribute('data-blocks-engine-capture-google-map-embed', '');
     frame.width = String(Math.max(1, Math.round(bounds.width)));
     frame.height = String(Math.max(1, Math.round(bounds.height)));
     frame.setAttribute(evidenceAttributes.src, frame.src);
@@ -106,6 +107,7 @@ export function portRenderedGoogleMaps(
     // Export strips inline iframe styles. An ordinary sheet keeps the bounded
     // surface filling its original responsive owner after that sanitization.
     const style = source.createElement('style');
+    style.setAttribute('data-blocks-engine-capture-google-map-rules', '');
     style.textContent = '.data-blocks-engine-capture-google-map-embed{display:block;width:100%;height:100%;border:0}';
     snapshot.querySelector('head')?.appendChild(style);
   }

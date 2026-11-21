@@ -358,7 +358,7 @@ export function wireCapturedDialogs(
 				if ( !trigger.attr( 'aria-haspopup' ) ) trigger.attr( 'aria-haspopup', dropdown ? 'menu' : 'dialog' );
 				return;
 			}
-			const panelId = reusePanel && state.dialog?.id && existingPanel.length === 1 ? state.dialog.id : nextDialogId( $ );
+			const panelId = reusePanel && state.dialog?.id && existingPanel.length === 1 ? state.dialog.id : stableDialogId( $, trigger, state, label );
 			const sourcePlaced = Boolean( observed?.parent );
 			// Modality follows the observed source presentation: a dropdown leaves
 			// the page interactive, so it does not claim aria-modal.
@@ -580,10 +580,40 @@ function restoreRestingPanel( resting: cheerio.Cheerio<AnyNode>, panel = resting
 	return panel;
 }
 
-function nextDialogId( $: cheerio.CheerioAPI ): string {
-	let index = 0;
-	while ( $( `#data-blocks-engine-capture-dialog-${ index }` ).length ) index++;
-	return `data-blocks-engine-capture-dialog-${ index }`;
+/**
+ * A generated panel id names its control, not its position in this route's
+ * wiring order (#1261). Identical chrome on two routes then gets the same id
+ * for the same control even when one route also wires a page-local dialog
+ * first, or the second document of a responsive pair: the key is the control's
+ * accessible label and tag, the captured panel's role, label and presentation,
+ * and the responsive document it sits in. Source ids are excluded because
+ * builders rename them per route. Same-keyed controls within one document take
+ * a counted suffix in document order.
+ */
+function stableDialogId(
+	$: cheerio.CheerioAPI,
+	trigger: cheerio.Cheerio<AnyNode>,
+	state: CapturedDialogInteraction,
+	label: string
+): string {
+	// The desktop document is the default one: its controls key as a single
+	// document's do, so one route's desktop copy matches another's only copy.
+	const document = trigger.closest( '.data-blocks-engine-capture-mobile-document,[class*="data-blocks-engine-capture-middle"]' );
+	const scope = ( document.attr( 'class' ) ?? '' ).match( /data-blocks-engine-capture-(mobile|middle(?:-\d+)?)-document/ )?.[ 1 ] ?? '';
+	const element = trigger.get( 0 );
+	const key = [
+		element && element.type === 'tag' ? element.tagName : '',
+		normalizedText( label ),
+		state.dialog?.role ?? '',
+		normalizedText( state.dialog?.ariaLabel ?? '' ),
+		state.dialog?.presentation ?? '',
+		state.kind ?? 'dialog',
+		scope,
+	].join( '\u0000' );
+	const base = `data-blocks-engine-capture-dialog-${ createHash( 'sha256' ).update( key ).digest( 'hex' ).slice( 0, 10 ) }`;
+	let id = base;
+	for ( let index = 2; $( `#${ id }` ).length || $( `[data-blocks-engine-capture-dialog-trigger="${ id }"]` ).length; index++ ) id = `${ base }-${ index }`;
+	return id;
 }
 
 function gallerySurface($: cheerio.CheerioAPI, trigger: cheerio.Cheerio<AnyNode>) {

@@ -15,6 +15,103 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.40.21] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+- batch consecutive dangling CSS url rewrites into one pass
+
+### Fixed
+- canonicalize hyphen-prefixed instance references
+
+## [0.40.20] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+- settle one-sided cross-width motion candidates without the confirm window
+
+## [0.40.19] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+- index ids when routing phone document fragments
+- Capture shared site chrome consistently across routes
+
+## [0.40.18] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+- observe slot runtime in linear time
+
+## [0.40.17] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+- Keep the box-tree node id on rebuilt visual iframes
+
+## [0.40.16] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- pair a placeholder link with its linked rendering across viewports
+
+## [0.40.15] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- canonicalize instance ids before linking capture stylesheets
+
+## [0.40.14] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+- Capture probes shared chrome only once a second route will reuse it
+- Wix discovery reads navigation and site name from the entry document
+
+## [0.40.13] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+- Behavior discovery observes the time counterfactual concurrently
+- Site preview waits only for images inside its viewport
+- Wix discovery: do not retry a definitive sitemap client error
+- Compare freezes a pending deferred reference before comparing
+
+## [0.40.12] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- retain normalized box-tree topology across viewports
+
+## [0.40.11] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- list google-map-rules capture attribute
+
+## [0.40.10] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- restore settled top pose after observePage scroll probes
+- skip capture-owned script/style elements in box-tree walks
+
+## [0.40.9] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+- allow capture diagnostics alongside discovery findings
+
 ## [0.40.8] - 2026-11-21
 
 ### Changed
