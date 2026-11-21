@@ -266,6 +266,9 @@ export async function captureBoxTree(page: Page, html: string, viewports: BoxTre
 		stable[initial.name] = original;
 		for (const [id, node] of Object.entries(nodes)) node.viewports[initial.name] = bound.tree.nodes[id].viewports.capture;
 	}
+	// The page checks topology only. Observations accumulate in `nodes` per
+	// viewport and would otherwise be serialized into every later read.
+	const topology = Object.fromEntries(Object.entries(nodes).map(([id, node]) => [id, { children: node.children }]));
 	try {
 		for (const [name, size] of Object.entries(viewports)) {
 			if (name === initial?.name) continue;
@@ -292,7 +295,7 @@ export async function captureBoxTree(page: Page, html: string, viewports: BoxTre
 				const observe = new Function(`return (${observerSource})`)() as typeof observeBoxTree;
 				const observed = observe(new DOMParser().parseFromString(html, 'text/html').documentElement, properties, attribute);
 				return 'mismatch' in observed ? observed : { observations: Object.fromEntries(Object.entries(observed.nodes).map(([id, node]) => [id, node.viewports.capture])) };
-			}, { attribute: NODE_ID_ATTRIBUTE, properties: BOX_TREE_STYLES, topology: nodes, html, observerSource: observeBoxTree.toString(), normalizeDocumentSource: normalizeRetainedDocument.toString() });
+			}, { attribute: NODE_ID_ATTRIBUTE, properties: BOX_TREE_STYLES, topology, html, observerSource: observeBoxTree.toString(), normalizeDocumentSource: normalizeRetainedDocument.toString() });
 			let reading = await readObservation();
 			if (reading && 'mismatch' in reading && reading.mismatch.kind === 'stylesheet') {
 				await page.waitForTimeout(250);
