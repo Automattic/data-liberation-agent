@@ -455,6 +455,11 @@ function buildExportCapture(
 	}
 	assets.push( ...resourceStage.assets );
 	const { resourceReplacements, unresolvedDependencies, rejectedReplacementKeys } = resourceStage;
+	// Canonicalize each complete route before styles leave its document. Linked
+	// sheets are content-addressed and may be shared; never rewrite them in place.
+	if ( options.canonicalizeHtml ) for ( const entry of retainedEntries ) {
+		writeFileSync( entry.htmlPath, options.canonicalizeHtml( readFileSync( entry.htmlPath, 'utf8' ) ) );
+	}
 	const stylesheetStage = materializeSharedStylesheets( {
 		entries: retainedEntries, websiteDir, sourceUrl: options.sourceUrl,
 		mediaReplacements, resourceReplacements, rejectedReplacementKeys,
@@ -465,7 +470,7 @@ function buildExportCapture(
 	const portableMediaReplacements = omitDegenerateReplacements( mediaReplacements, rejectedReplacementKeys );
 
 	const { routes, sourceRouteLinks, portableServedPaths, unresolvedAnchors, boundaryRoutes, capturedRouteKeys, absentRoutes, absentRouteKeys, omittedRouteKeys, resourceInputKeys, verifiedRouteObservations } = collectRouteLinks( { retainedEntries, routePathOf, structuredContent: options.structuredContent, sourceUrl: options.sourceUrl, canonicalRouteAliases, mediaReplacements, resourceReplacements, downloadedMedia: mediaStubs.list().flatMap( ( [ url, stub ] ) => stub.status === 'success' ? [ url ] : [] ), stylesheetServedPaths: stylesheetStage.servedPaths, entries: capture.entries, routeCaptureDiagnostics, outputDir, discoveryDiagnostics: options.discoveryDiagnostics, unresolvedDependencies } );
-	const rendered = renderRoutePages( { canonicalizeHtml: options.canonicalizeHtml, retainedEntries, websiteDir, resourceReplacements, portableUrlByFamily, mixedSrcsetReferences, portableMediaReplacements, replaceResources, replaceMedia, mediaMetadataPathsBySource: mediaStage.metadataPathsBySource, portablePathsBySource, routePathOf, capturedRouteKeys, absentRouteKeys, omittedRouteKeys, resourceInputKeys, routeScope: options.routeScope, boundaryRoutes, verifiedRouteObservations, sourceRouteLinks, portableServedPaths } );
+	const rendered = renderRoutePages( { retainedEntries, websiteDir, resourceReplacements, portableUrlByFamily, mixedSrcsetReferences, portableMediaReplacements, replaceResources, replaceMedia, mediaMetadataPathsBySource: mediaStage.metadataPathsBySource, portablePathsBySource, routePathOf, capturedRouteKeys, absentRouteKeys, omittedRouteKeys, resourceInputKeys, routeScope: options.routeScope, boundaryRoutes, verifiedRouteObservations, sourceRouteLinks, portableServedPaths } );
 	unresolvedAnchors.push( ...rendered.unresolvedAnchors );
 	routeCaptureDiagnostics.push( ...rendered.diagnostics );
 	const { inventory, diagnostics: projectionDiagnostics } = projectPortableWebsite( { websiteDir, stageDir, sourceUrl: options.sourceUrl, responsiveIdentities: rendered.responsiveIdentities, responsiveBodyClassProjections, collapsedBodyClassProjections, sourceHashesByPortablePath: resourceStage.sourceHashesByPortablePath, retainedEntries, routePathOf, interactionPages, scrollStatesPages, structuredContent: options.structuredContent, routes, portableRedirects, productMediaPaths: portablePathsBySource } );
