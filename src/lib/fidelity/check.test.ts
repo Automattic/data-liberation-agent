@@ -174,9 +174,16 @@ describe( 'observePage scroll probe', () => {
 			main { height:4000px; }
 		</style><header>Studio</header><main><p>Work</p></main><script>
 			let timer;
-			addEventListener( 'scroll', () => { clearTimeout( timer ); timer = setTimeout( () => document.querySelector( 'header' ).classList.toggle( 'scrolled', scrollY > 50 ), 120 ); } );
+			addEventListener( 'scroll', () => { clearTimeout( timer ); timer = setTimeout( () => {
+				const scrolled = scrollY > 50;
+				if ( scrolled ) document.querySelector( 'header' ).dataset.probed = 'true';
+				document.querySelector( 'header' ).classList.toggle( 'scrolled', scrolled );
+			}, 120 ); } );
 		</script>` );
 		await observePage( page, page.url(), 1440, 0, null, undefined, undefined, true );
+		// Prove the probe actually entered the scrolled state, rather than
+		// passing because the header never changed away from its initial paint.
+		expect( await page.locator( 'header' ).getAttribute( 'data-probed' ) ).toBe( 'true' );
 		expect( await page.evaluate( () => ( { y: scrollY, color: getComputedStyle( document.querySelector( 'header' )! ).backgroundColor } ) ) )
 			.toEqual( { y: 0, color: 'rgb(0, 0, 255)' } );
 	} );

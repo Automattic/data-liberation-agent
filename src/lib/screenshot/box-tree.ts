@@ -96,6 +96,16 @@ export function observeBoxTree(snapshot: Element, properties: readonly string[],
 			mismatch: { kind: 'stylesheet', path: 'html>head>link', detail: `author stylesheet not applied: ${link.href}` },
 		};
 	}
+	// Evidence is the pose a visitor sees once loaded: finite clock motion at its
+	// end, as the capture baseline sets it. Serialization and resize probes can
+	// restart CSS entrances (a fade-up read at frame zero is opacity 0); finish
+	// them before reading. Perpetual motion and scroll/view timelines are left alone.
+	for (const animation of document.getAnimations()) {
+		if (animation.timeline !== document.timeline || !animation.effect) continue;
+		try {
+			if (Number.isFinite(Number(animation.effect.getComputedTiming().endTime))) animation.finish();
+		} catch { /* an effect without resolvable timing has no end to reach */ }
+	}
 	const retained = [snapshot, ...snapshot.querySelectorAll('*')].filter(element => !owned(element));
 	const live = new Map(Array.from(document.querySelectorAll('*'), element => [element.getAttribute(attribute), element]));
 	const nodes: BoxTree['nodes'] = {};
@@ -262,8 +272,8 @@ export async function captureBoxTree(page: Page, html: string, viewports: BoxTre
 			await page.setViewportSize(size);
 			await page.evaluate(settleResize, RESIZE_SETTLE);
 			const readObservation = () => page.evaluate(({ attribute, properties, topology, html, observerSource }) => {
-				// A visitor loading at this width sees the end state, not a resize transition mid-flight.
-				for (const animation of document.getAnimations()) if (animation instanceof CSSTransition) animation.finish();
+				// A visitor loading at this width sees the end state, not a resize transition
+				// mid-flight; the observer itself finishes finite clock motion.
 				const live = new Map(Array.from(document.querySelectorAll('*'), element => [element.getAttribute(attribute), element]));
 				for (const [id, expected] of Object.entries(topology)) {
 					const element = live.get(id);
