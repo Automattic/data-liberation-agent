@@ -74,6 +74,9 @@ export function observeBoxTree(snapshot: Element, properties: readonly string[],
 		}
 		return parts.join('>');
 	};
+	// Keep in step with captureOwned: capture-owned script/style elements have no box.
+	const owned = (element: Element) => (element.localName === 'script' || element.localName === 'style')
+		&& !element.hasAttribute(attribute) && element.getAttributeNames().some(name => name.startsWith('data-blocks-engine-capture-'));
 	// A successful response is not proof of application: reinsertion can leave
 	// a link loading, and titled alternate sets can leave it inactive. Do not
 	// read cssRules here: cross-origin sheets are valid, but opaque.
@@ -93,7 +96,7 @@ export function observeBoxTree(snapshot: Element, properties: readonly string[],
 			mismatch: { kind: 'stylesheet', path: 'html>head>link', detail: `author stylesheet not applied: ${link.href}` },
 		};
 	}
-	const retained = [snapshot, ...snapshot.querySelectorAll('*')];
+	const retained = [snapshot, ...snapshot.querySelectorAll('*')].filter(element => !owned(element));
 	const live = new Map(Array.from(document.querySelectorAll('*'), element => [element.getAttribute(attribute), element]));
 	const nodes: BoxTree['nodes'] = {};
 	if (retained.length > 100_000) return { mismatch: { kind: 'oversized', path: snapshot.localName, detail: `${retained.length} elements` } };
@@ -103,7 +106,7 @@ export function observeBoxTree(snapshot: Element, properties: readonly string[],
 		if (!id) return { mismatch: { kind: 'unstamped', path: path(saved) } };
 		if (nodes[id]) return { mismatch: { kind: 'duplicate', id, path: path(saved) } };
 		if (!element) return { mismatch: { kind: 'missing', id, path: path(saved), detail: 'saved node has no live element' } };
-		const children = Array.from(saved.children, child => child.getAttribute(attribute)!);
+		const children = Array.from(saved.children).filter(child => !owned(child)).map(child => child.getAttribute(attribute)!);
 		const rect = element.getBoundingClientRect();
 		const style = getComputedStyle(element);
 		const used_styles = Object.fromEntries(properties.map(property => [property, style.getPropertyValue(property)]));
@@ -137,9 +140,30 @@ export function observeBoxTree(snapshot: Element, properties: readonly string[],
 
 type BoundTree = Omit<BoxTree, 'source_path' | 'source_hash'>;
 
+const CAPTURE_MARKER_PREFIX = 'data-blocks-engine-capture-';
+
+/**
+ * Capture inserts non-rendering script/style elements (the native-control runtime,
+ * width-class rules) after observation. They have no box, so every box-tree walk
+ * skips them; a source element without a node id still fails by name.
+ */
+function captureOwned(element: AnyNode): boolean {
+	if (element.type !== 'script' && element.type !== 'style') return false;
+	const { attribs } = element as TagElement;
+	return !(NODE_ID_ATTRIBUTE in attribs) && Object.keys(attribs).some(name => name.startsWith(CAPTURE_MARKER_PREFIX));
+}
+
+function boxElements($: cheerio.CheerioAPI): AnyNode[] {
+	return $('*').toArray().filter(element => !captureOwned(element));
+}
+
+function boxChildren($: cheerio.CheerioAPI, element: AnyNode): Array<string> {
+	return $(element).children().toArray().filter(child => !captureOwned(child)).map(child => $(child).attr(NODE_ID_ATTRIBUTE)!);
+}
+
 function savedPath(element: AnyNode): string {
 	const parts: string[] = [];
-	for (let node: AnyNode | null = element; node && node.type === 'tag' && parts.length < 8; node = node.parent) {
+	for (let node: AnyNode | null = element; node && (node.type === 'tag' || node.type === 'script' || node.type === 'style') && parts.length < 8; node = node.parent) {
 		const tag = node as TagElement;
 		const id = tag.attribs[NODE_ID_ATTRIBUTE];
 		parts.unshift(`${tag.name}${tag.attribs.id ? `#${tag.attribs.id}` : ''}${id ? `[${id}]` : ''}`);
@@ -154,16 +178,15 @@ export function bindBoxTreeEvidence<T extends BoundTree>(html: string, tree: T |
 	const nodes: BoxTree['nodes'] = {};
 	const elements = new Map<string, AnyNode>();
 	let mismatch: BoxTreeMismatch | undefined;
-	$('*').each((_index, element) => {
+	for (const element of boxElements($)) {
 		const id = $(element).attr(NODE_ID_ATTRIBUTE);
 		if (!id) mismatch = { kind: 'unstamped', path: savedPath(element) };
 		else if (nodes[id]) mismatch = { kind: 'duplicate', id, path: savedPath(element) };
 		else if (!tree.nodes[id]) mismatch = { kind: 'extra', id, parent: $(element).parent().attr(NODE_ID_ATTRIBUTE), path: savedPath(element) };
-		if (mismatch) return false;
-		const children = $(element).children().toArray().map(child => $(child).attr(NODE_ID_ATTRIBUTE)!);
-		nodes[id!] = { children, viewports: tree.nodes[id!].viewports };
+		if (mismatch) break;
+		nodes[id!] = { children: boxChildren($, element), viewports: tree.nodes[id!].viewports };
 		elements.set(id!, element);
-	});
+	}
 	if (mismatch) return { mismatch };
 	for (const [id, node] of Object.entries(nodes)) {
 		const expected = tree.nodes[id].children.filter(child => nodes[child]);
@@ -217,12 +240,11 @@ export async function captureBoxTree(page: Page, html: string, viewports: BoxTre
 	const $ = cheerio.load(html);
 	const nodes: BoxTree['nodes'] = {};
 	let mismatch: BoxTreeMismatch | undefined;
-	$('*').each((_index, element) => {
+	for (const element of boxElements($)) {
 		const id = $(element).attr(NODE_ID_ATTRIBUTE);
-		if (!id || nodes[id]) { mismatch = { kind: id ? 'duplicate' : 'unstamped', id, path: savedPath(element) }; return false; }
-		const children = $(element).children().toArray().map(child => $(child).attr(NODE_ID_ATTRIBUTE)!);
-		nodes[id] = { children, viewports: {} };
-	});
+		if (!id || nodes[id]) { mismatch = { kind: id ? 'duplicate' : 'unstamped', id, path: savedPath(element) }; break; }
+		nodes[id] = { children: boxChildren($, element), viewports: {} };
+	}
 	if (!mismatch && Object.keys(nodes).length > 100_000) mismatch = { kind: 'oversized', path: 'html', detail: `${Object.keys(nodes).length} elements` };
 	if (mismatch) { onUnproven?.(mismatch); return; }
 	const original = page.viewportSize();
