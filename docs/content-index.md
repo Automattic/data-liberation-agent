@@ -16,6 +16,12 @@ keys/values; Title/Default Title is simple. Missing prices or availability,
 ambiguous option identities and duplicate combinations omit the row with a
 `product_row_omitted` enumeration diagnostic, without dropping its page entry.
 
+Rows may carry `currency`, an optional ISO 4217 code applying to all prices and
+variants in the row. Shopify reads the store currency once per catalog enumeration
+from `/cart.js`, falling back to `/meta.json`, through the source request governors.
+If neither supplies a valid currency code, rows omit the field and enumeration
+reports `product_currency_unavailable`; no default currency is invented.
+
 Product image URLs join the existing capture asset verification and source
 request governors. Already verified page images are reused. Catalog-only images
 participate in portable media selection, byte limits, hashing and deduplication.
