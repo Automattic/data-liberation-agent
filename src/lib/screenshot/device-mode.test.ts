@@ -116,6 +116,17 @@ describe( 'device-mode evidence', () => {
 		expect( normalizeServerHtml( '<input type="hidden" name="plan" value="pro">' ) ).toBe( '<input type="hidden" name="plan" value="pro">' );
 	} );
 
+	it.each( [
+		[ 'head script order and inline request ids', '<script src="/b.js"></script><script src="/a.js"></script><script>var st={"reqid":"r-2"};</script><meta name="request-id" content="r-2"><link rel="stylesheet" href="/site.css"><style>p{color:red}</style>', '<p>Hello</p>', 'identical-after-normalization' ],
+		[ 'a head stylesheet href', '<script src="/a.js"></script><script src="/b.js"></script><script>var st={"reqid":"r-1"};</script><meta name="request-id" content="r-1"><link rel="stylesheet" href="/phone.css"><style>p{color:red}</style>', '<p>Hello</p>', 'different' ],
+		[ 'head style text', '<script src="/a.js"></script><script src="/b.js"></script><script>var st={"reqid":"r-1"};</script><meta name="request-id" content="r-1"><link rel="stylesheet" href="/site.css"><style>p{color:blue}</style>', '<p>Hello</p>', 'different' ],
+		[ 'the body', '<script src="/b.js"></script><script src="/a.js"></script><script>var st={"reqid":"r-2"};</script><meta name="request-id" content="r-2"><link rel="stylesheet" href="/site.css"><style>p{color:red}</style>', '<p>Hello phone</p>', 'different' ],
+	] as const )( 'decides server HTML on the body and head stylesheets only (%s)', ( _, phoneHead, phoneBody, expected ) => {
+		const page = ( head: string, body: string ) => `<html><head>${ head }</head><body>${ body }</body></html>`;
+		const desktop = page( '<script src="/a.js"></script><script src="/b.js"></script><script>var st={"reqid":"r-1"};</script><meta name="request-id" content="r-1"><link rel="stylesheet" href="/site.css"><style>p{color:red}</style>', '<p>Hello</p>' );
+		expect( compareServerHtml( desktop, page( phoneHead, phoneBody ) ) ).toBe( expected );
+	} );
+
 	it( 'ignores only Cloudflare per-request challenge parameters', () => {
 		const page = ( ray: string, timestamp: string, text = 'Hello', extra = '' ) => `<html><body><p>${ text }</p><script>(function(){var d=document.createElement('script');d.innerHTML="window.__CF$cv$params={r:'${ ray }',t:'${ timestamp }'};";var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=${ ray }';${ extra }})();</script></body></html>`;
 		const original = page( 'a588614b4c78baf2', 'MTc5NDM0ODU1MA==' );
@@ -410,7 +421,6 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 	let server: Server;
 	let origin: string;
 	const documentLoads = new Map< string, number >();
-	let transientPhoneServed = false;
 	beforeAll( async () => {
 		server = createServer( ( request, response ) => {
 			if ( request.url?.includes( 'liberation-absent-' ) ) { response.writeHead( 404 ); response.end(); return; }
@@ -422,12 +432,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 			documentLoads.set( request.url!, ( documentLoads.get( request.url! ) ?? 0 ) + 1 );
 			const [ , fixture = '', path = '' ] = ( request.url ?? '/' ).split( '/' );
 			response.setHeader( 'content-type', 'text/html; charset=utf-8' );
-			let body = page( fixture, request.headers[ 'user-agent' ] ?? '', path );
-			// One cache variant: only the first phone document request differs.
-			if ( fixture === 'transient' && path === '' && ( request.headers[ 'user-agent' ] ?? '' ).includes( 'iPhone' ) && ! transientPhoneServed ) {
-				transientPhoneServed = true;
-				body = body.replace( '</head>', '<link rel="preload" href="/transient/x.css" as="style"></head>' );
-			}
+			const body = page( fixture, request.headers[ 'user-agent' ] ?? '', path );
 			// A route slower than the (shrunk) navigation budget on every request.
 			if ( fixture === 'slow' && path === 'late' ) { setTimeout( () => response.end( body ), 4_000 ); return; }
 			response.end( body );
@@ -512,12 +517,6 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'device-mode captu
 			.toEqual( [ 390, 768, 1024, 1440 ].map( viewport => ( { viewport, pass: true } ) ) );
 		expect( report.pass ).toBe( true );
 	}, 180_000 );
-
-	it( 'confirms a transient entrypoint HTML difference before committing the site to dual', async () => {
-		const run = await capture( 'transient' );
-		expect( transientPhoneServed ).toBe( true );
-		expect( run.result.deviceMode ).toMatchObject( { mode: 'reflow-only', serverHtml: 'identical', serverHtmlFirstSample: 'different', serverHtmlResampled: true } );
-	}, 120_000 );
 
 	describe( 'a site whose phone view is CSS reflow', () => {
 		let run: { outputDir: string; result: ScreenshotResult; entries: Record< string, ManifestEntry > };
