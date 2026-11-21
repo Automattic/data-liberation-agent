@@ -12,7 +12,7 @@ import { wixDocumentSelection, wixAdditionalProfiles } from './document-selectio
 import { preserveWixCollections } from './collections.js';
 import { markMemberLoginControls, MEMBER_LOGIN_ATTRIBUTE, MEMBER_LOGIN_CLASS_PREFIX } from '../../lib/member-login.js';
 import { markEngagementStats, ENGAGEMENT_STATS_ATTRIBUTE, ENGAGEMENT_STATS_CLASS_PREFIX } from '../../lib/engagement-stats.js';
-import { portWixRuntimeEmbeds, WIX_AI_ASSISTANT_LAYER, WIX_CHAT_LAUNCHER_LAYER } from './embeds.js';
+import { portWixRuntimeEmbeds, sealWixAppFrameHtml, trackWixFaqQueries, WIX_AI_ASSISTANT_LAYER, WIX_CHAT_LAUNCHER_LAYER } from './embeds.js';
 import { portWixVideoPlayers, portWixBackgroundVideos } from './video.js';
 import { normalizeWixImageGeometry, normalizeWixImageSources, restoreWixBlurredImageSources } from './image-geometry.js';
 import { normalizeWixGalleryStrips } from './gallery-strip-geometry.js';
@@ -719,7 +719,8 @@ export const capture: LiberationHooks = {
 	additionalProfiles: wixAdditionalProfiles,
 	referenceWidths: [ 390, 768, 1440 ],
   resolveClientRedirect: resolveEventFormRedirect,
-  canonicalizeHtml: ( html, document ) => canonicalizeWixCapturedHtml( restoreWixBlurredImageSources( preserveWixCollections( html ) ), document ),
+  // The app-frame seal runs last, on the exact string that is saved (see embeds.ts).
+  canonicalizeHtml: ( html, document ) => sealWixAppFrameHtml( canonicalizeWixCapturedHtml( restoreWixBlurredImageSources( preserveWixCollections( html ) ), document ) ),
   cleanupRules: [
     // Wix publishes the measured height of its own banner into these, and its
     // layout reads them from the sticky header, the page root and the pinned
@@ -753,6 +754,8 @@ export const capture: LiberationHooks = {
 	 * fragment and leave a real target behind.
 	 */
 	prepare: async ( page, ctx ) => {
+		// Watch the FAQ app's question queries from here, before lazy loading mounts its frame (see embeds.ts).
+		trackWixFaqQueries( page );
 		// Keep the runtime-owned overflow control and resting link visibility.
 		// Generic interaction capture observes its panel after baseline artifacts
 		// are complete and portable dialog wiring replays that observed state.
