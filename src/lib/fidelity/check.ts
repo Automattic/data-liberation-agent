@@ -1642,6 +1642,15 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 	};
 }
 
+/** A capture exported with deferReference freezes its declared reference cells before its first comparison. */
+async function finishDeferredReference( directory: string, log?: ( message: string ) => void ): Promise< void > {
+	const statePath = join( directory, 'reference-stage.json' );
+	if ( ! existsSync( statePath ) || ( JSON.parse( readFileSync( statePath, 'utf8' ) ) as { status?: string } ).status !== 'pending' ) return;
+	log?.( '[compare] freezing deferred reference cells' );
+	const { runReferenceStage } = await import( './reference-stage.js' );
+	await runReferenceStage( directory );
+}
+
 /** Frozen stages share the live observer and registered scoring path; no source browser is created. */
 async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'capture' | 'materialization' ): Promise<FidelityReport> {
 	const concurrency = options.concurrency ?? 3;
@@ -1652,6 +1661,7 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 	if ( stage === 'capture' && options.candidateUrl ) throw new Error( 'candidateUrl requires materialization or drift stage' );
 	const { websiteDir, receiptPath } = resolveCheckDirectory( options.directory );
 	const directory = dirname( receiptPath );
+	await finishDeferredReference( directory, options.log );
 	const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) ) as CaptureReceipt;
 	const sources = routeSourceMap( receipt );
 	let widths = options.widths ?? [ ...REFERENCE_WIDTHS ];

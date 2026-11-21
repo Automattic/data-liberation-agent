@@ -67,3 +67,23 @@ it.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.e
 		rmSync( root, { recursive: true, force: true } );
 	}
 }, 300_000 );
+
+it.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )( 'compare freezes a pending reference stage before comparing', async ({ serve }) => {
+	mkdirSync( '.tmp-test', { recursive: true } );
+	const root = mkdtempSync( join( process.cwd(), '.tmp-test/reference-compare-' ) );
+	const { origin } = await serve( ( request, response ) => {
+		if ( request.url !== '/' ) { response.writeHead( 404 ).end(); return; }
+		response.setHeader( 'Content-Type', 'text/html' );
+		response.end( '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Home</title></head><body><main><h1>Home</h1><p>Static fixture content.</p></main></body></html>' );
+	} );
+	try {
+		const url = `${ origin }/`;
+		await captureWebsite( { url, outputDir: root, captureImages: false, trustedOrigins: [ url ], learnFluid: false, deferReference: true } );
+		expect( existsSync( join( root, 'fidelity-reference.json' ) ) ).toBe( false );
+		const report = await checkFidelity( { directory: root, settleMs: 0 } );
+		expect( report.pending ).toEqual( [] );
+		expect( JSON.parse( readFileSync( join( root, 'reference-stage.json' ), 'utf8' ) ).status ).toBe( 'complete' );
+	} finally {
+		rmSync( root, { recursive: true, force: true } );
+	}
+}, 180_000 );
