@@ -5,13 +5,12 @@ import * as cheerio from 'cheerio';
 import type { AnyNode, Element } from 'domhandler';
 import type { SiteRouteScope } from '../platform/types.js';
 import { mapPool } from './concurrency.js';
-import { BodyTooLargeError, safeFetch } from './media-fetch/safe-fetch.js';
+import { BodyTooLargeError, safeFetch, type SafeFetchResult } from './media-fetch/safe-fetch.js';
 import { isRouteDrift } from './screenshot/document-integrity.js';
 import { SOURCE_DOCUMENT_MAX_BYTES } from './source-document-policy.js';
 import { SOURCE_REQUEST_GOVERNOR_DEFAULTS, SourceRequestGovernor, type SourceRequestGovernors } from './source-request-governor.js';
 import { spreadSample } from './route-budget.js';
-import { canonicalLinkHref, queryOnlyAliasCandidates, type CanonicalRouteAlias } from './route-aliases.js';
-import { documentRequestUrl } from './url/route-key.js';
+import { probeCanonicalRouteAliases, type CanonicalRouteAlias } from './route-aliases.js';
 import { routeInScope } from './url/route-scope.js';
 
 /**
@@ -342,7 +341,7 @@ export interface TemplateGroupingInput {
 	 * of the capture. Default: a governor of this pass alone.
 	 */
 	governors?: SourceRequestGovernors;
-	/** Known routes against which frontier query aliases can be excluded. */
+	/** Known routes against which frontier aliases can be excluded. */
 	canonicalAliasInventory?: readonly string[];
 }
 
@@ -372,9 +371,7 @@ export async function buildTemplateGroups( input: TemplateGroupingInput, depende
 	const limits: TemplateGroupingLimits = { ...TEMPLATE_GROUPING_LIMITS, ...input.limits };
 	const urls = [ ...input.urls ];
 	const aliasInventory = [ ...input.canonicalAliasInventory ?? [], ...urls ];
-	const aliasCandidates = new Set( queryOnlyAliasCandidates( aliasInventory ) );
-	const aliasTargets = new Map( aliasInventory.map( url => [ documentRequestUrl( url ), url ] ) );
-	const aliases = new Map< string, CanonicalRouteAlias >();
+	const responses = new Map< string, SafeFetchResult >();
 	const outcomes: RouteOutcome[] = urls.map( () => ( { reason: 'not_sampled' } ) );
 	const sampled = new Set( limits.maxRoutes === 'all' ? urls : spreadSample( urls, limits.maxRoutes ) );
 	const order = progressiveOrder( urls.length ).filter( index => sampled.has( urls[ index ]! ) );
@@ -414,6 +411,7 @@ export async function buildTemplateGroups( input: TemplateGroupingInput, depende
 			if ( deadline.signal.aborted ) return { reason: 'time_budget' };
 			return { reason: error instanceof BodyTooLargeError ? 'too_large' : 'fetch_failed' };
 		}
+		if ( input.canonicalAliasInventory ) responses.set( url, response );
 		bytes += response.body.length;
 		if ( response.status < 200 || response.status >= 300 ) return { reason: 'http_status', httpStatus: response.status };
 		const contentType = response.headers.get( 'content-type' ) ?? '';
@@ -428,25 +426,25 @@ export async function buildTemplateGroups( input: TemplateGroupingInput, depende
 				decoder = new TextDecoder( 'utf-8' );
 			}
 			const html = decoder.decode( response.body );
-			if ( input.canonicalAliasInventory && aliasCandidates.has( url ) && url !== input.sourceUrl ) {
-				const canonical = canonicalLinkHref( html, response.finalUrl );
-				const target = canonical && routeInScope( canonical, input.routeScope ) ? aliasTargets.get( documentRequestUrl( canonical ) ) : undefined;
-				if ( target && documentRequestUrl( target ) !== documentRequestUrl( url ) ) aliases.set( url, { url, canonicalUrl: target } );
-			}
 			return { fingerprint: templateFingerprint( html, response.finalUrl, input.styleNormalization, input.templateIdentity, input.runtimeStateClasses ) };
 		} catch {
 			return { reason: 'fetch_failed' };
 		}
 	}
 
-	// As in the initial alias probe, chains and cycles must not drop the
-	// document that would have carried another alias's evidence.
-	const dropped = new Set( [ ...aliases.keys() ].map( documentRequestUrl ) );
-	const surviving = urls.flatMap( ( url, index ) => {
-		const alias = aliases.get( url );
-		if ( ! alias || dropped.has( documentRequestUrl( alias.canonicalUrl ) ) ) return [];
-		outcomes[ index ] = { reason: 'canonical_alias' };
-		return [ alias ];
+	// Reuse the bounded grouping responses: the same alias policy as initial
+	// inventory, with no extra requests or probes of already admitted targets.
+	const surviving = input.canonicalAliasInventory ? ( await probeCanonicalRouteAliases( {
+		sourceUrl: input.sourceUrl, urls: aliasInventory, candidateUrls: urls, routeScope: input.routeScope,
+	}, { fetch: async url => {
+		const response = responses.get( url );
+		if ( ! response ) throw new Error( 'No grouping response available for canonical alias proof' ); // failure-class: operational
+		return response;
+	} } ) ).aliases : [];
+	responses.clear();
+	const aliased = new Set( surviving.map( alias => alias.url ) );
+	urls.forEach( ( url, index ) => {
+		if ( aliased.has( url ) ) outcomes[ index ] = { reason: 'canonical_alias' };
 	} );
 	const report = groupTemplates( input.sourceUrl, urls, outcomes, limits, throttleEvents );
 	if ( surviving.length ) report.canonicalAliases = surviving;
