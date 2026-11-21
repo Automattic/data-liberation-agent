@@ -3,6 +3,7 @@ import type { PlatformAdapter } from '../../types.js';
 import { discoverDefault } from '../default/discover.js';
 import { detection } from './detection.js';
 import { getSourceResponse } from '../../lib/browser-kit/source-traffic.js';
+import { PANEL_REPLAY_ATTRIBUTES, rewritePanelReplayHtml } from '../../lib/panel-replay-state.js';
 
 export function authoredEmbedDocument(source: string, url: string): string | undefined {
   const $source = load(source, { xml: false }, false);
@@ -60,21 +61,16 @@ export function canonicalizeGoogleSitesHtml(html: string): string {
   $('nav [style=""]').removeAttr('style');
   // A serialized panel is shared navigation, not the page it was probed on.
   if (!document) $('[aria-current], [aria-selected]').removeAttr('aria-current').removeAttr('aria-selected');
-  const rewriteState = (value: unknown): unknown => {
-    if (Array.isArray(value)) return value.map(rewriteState);
-    if (!value || typeof value !== 'object') return value;
-    return Object.fromEntries(Object.entries(value).map(([key, entry]) => {
-      if (key !== 'html' || typeof entry !== 'string') return [key, rewriteState(entry)];
-      const panel = load(canonicalizeGoogleSitesHtml(entry), { xml: false }, false);
-      panel('[data-blocks-engine-node-id]').removeAttr('data-blocks-engine-node-id');
-      return [key, panel.html()];
-    }));
+  const rewritePanel = (html: string): string => {
+    const panel = load(canonicalizeGoogleSitesHtml(html), { xml: false }, false);
+    panel('[data-blocks-engine-node-id]').removeAttr('data-blocks-engine-node-id');
+    return panel.html();
   };
-  $('[data-blocks-engine-capture-dialog-panel-state], [data-blocks-engine-capture-existing-panel]').each((_index, element) => {
-    for (const attribute of ['data-blocks-engine-capture-dialog-panel-state', 'data-blocks-engine-capture-existing-panel']) {
+  $(PANEL_REPLAY_ATTRIBUTES.map(attribute => `[${attribute}]`).join(', ')).each((_index, element) => {
+    for (const attribute of PANEL_REPLAY_ATTRIBUTES) {
       const value = $(element).attr(attribute);
       if (!value) continue;
-      try { $(element).attr(attribute, JSON.stringify(rewriteState(JSON.parse(value)))); }
+      try { $(element).attr(attribute, JSON.stringify(rewritePanelReplayHtml(JSON.parse(value), rewritePanel))); }
       catch { /* Malformed evidence is left for its owning validator. */ }
     }
   });

@@ -1,3 +1,4 @@
+import { load } from 'cheerio';
 import { existsSync } from 'node:fs';
 import { chromium, type Page } from 'playwright';
 import { describe, expect } from 'vitest';
@@ -19,6 +20,7 @@ import {
 	wixEmbedNote,
 	wixFaqItems,
 	sealWixAppFrameHtml,
+	trackWixFaqQueries,
 } from './embeds.js';
 
 const MAP_WRAPPER =
@@ -36,6 +38,7 @@ const APP_MAP = `https://events.wixapps.net/events-server/html/google-map-v2?loc
 const FAQ_INSTANCE = `sig.${ base64Url( { instanceId: '00000000-0000-4000-8000-000000000001', appDefId: '14c92d28-031e-7910-c9a8-a670011e062d' } ) }`;
 const FAQ_WIDGET = `https://faq-app.example.test/render/FaqOoi?compId=comp-faq&instance=${ FAQ_INSTANCE }`;
 /** What capture saves for the page now: the real serializer, then Wix's canonicalization. */
+const escape = ( text: string ) => text.replace( /&/g, '&amp;' ).replace( /"/g, '&quot;' ).replace( /</g, '&lt;' );
 const savedHtml = async ( page: Page ) => capture.canonicalizeHtml!( await capturePageHtml( page ) );
 const HTML_EMBED = 'https://www-example-hoa-test.filesusr.com/html/cf2dfb_0123456789abcdef0123456789abcdef.html';
 
@@ -102,6 +105,41 @@ describe( 'sealWixAppFrameHtml', () => {
 		expect( html ).toContain( 'data-blocks-engine-node-id="n7"' );
 		expect( html.match( /role="note"/g ) ).toHaveLength( 1 );
 		expect( html ).toContain( `>${ wixEmbedNote( 'PDF File Viewer' ) }</div>` );
+	} );
+
+	it( 'reads the real src past decoy attributes, decoded query keys, relative and protocol-relative addresses, data-src and srcdoc', () => {
+		const signed = new URL( APP_WIDGET ).search;
+		const pages = [
+			`<iframe title="Details src='https://public.example/info'" src="${ widget }"></iframe>`,
+			`<iframe src="${ widget.replace( 'instance=', '%69nstance=' ) }"></iframe>`,
+			`<iframe src="/render/widget${ signed.replace( /&/g, '&amp;' ) }"></iframe>`,
+			`<iframe src="//editor.wixapps.net/render/widget${ signed.replace( /&/g, '&amp;' ) }"></iframe>`,
+			'<IFRAME SRC="https://editor.wixapps.net/render/w?instance=unsigned-but-wix-host"></IFRAME>',
+			`<iframe data-src="${ widget }"></iframe>`,
+			`<iframe srcdoc="${ escape( `<p>doc</p><iframe src="${ widget }"></iframe>` ) }"></iframe>`,
+		];
+		for ( const page of pages ) {
+			const sealed = sealWixAppFrameHtml( `<main>${ page }</main><p>after</p>` );
+			expect( sealed, page ).not.toMatch( /instance=|%69nstance|unsigned-but-wix-host|7UqG_/ );
+			expect( sealed, page ).toContain( '<p>after</p>' );
+		}
+	} );
+
+	it( 'seals app frames inside captured panel replay markup, recursively', () => {
+		const frameMarkup = `<iframe src="${ widget }" data-blocks-engine-capture-visual-iframe-width="180" data-blocks-engine-capture-visual-iframe-height="120"></iframe>`;
+		const inner = `<button data-blocks-engine-capture-dialog-panel-state="${ escape( JSON.stringify( { html: `<div>${ frameMarkup }</div>`, style: '', class: '' } ) ) }">Open</button>`;
+		const page = `<nav><button data-blocks-engine-capture-dialog-panel-state="${ escape( JSON.stringify( { html: `<div>${ inner }</div>`, style: 'x', class: 'y' } ) ) }">Menu</button>`
+			+ `<div data-blocks-engine-capture-existing-panel="${ escape( JSON.stringify( { resting: { html: frameMarkup, hidden: true }, opened: { html: `<p>${ frameMarkup }</p>`, style: null } } ) ) }"></div></nav>`;
+		const sealed = sealWixAppFrameHtml( page );
+		expect( sealed ).not.toContain( '7UqG_' );
+		const $ = load( sealed );
+		const outer = JSON.parse( $( 'nav > button' ).attr( 'data-blocks-engine-capture-dialog-panel-state' )! );
+		expect( outer ).toMatchObject( { style: 'x', class: 'y' } );
+		const nested = JSON.parse( load( outer.html )( 'button' ).attr( 'data-blocks-engine-capture-dialog-panel-state' )! );
+		expect( nested.html ).toContain( wixEmbedNote( undefined ) );
+		const existing = JSON.parse( $( 'nav > div' ).attr( 'data-blocks-engine-capture-existing-panel' )! );
+		expect( existing.resting ).toMatchObject( { hidden: true } );
+		expect( `${ existing.resting.html }${ existing.opened.html }` ).toContain( 'role="note"' );
 	} );
 
 	it( 'keeps pages, public embeds and ported maps byte for byte', () => {
@@ -385,8 +423,16 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime embed
 	const routeFaqApp = async ( page: Page ) => page.route( 'https://faq-app.example.test/**', async ( route ) => {
 		const url = new URL( route.request().url() );
 		if ( route.request().method() === 'POST' ) {
+			// Wix's answer shape: one page of questions and whether more follow, by cursor.
+			const batched = /variant=(?:slow-)?staggered/.test( route.request().frame().url() );
+			const next = ( route.request().postData() ?? '' ).includes( 'cursor' );
+			const body = ! batched
+				? { questionEntries: FAQ_ENTRIES, pagingMetadata: { count: FAQ_ENTRIES.length, hasNext: false } }
+				: next
+					? { questionEntries: FAQ_ENTRIES.slice( 1 ), pagingMetadata: { count: FAQ_ENTRIES.length - 1, hasNext: false } }
+					: { questionEntries: FAQ_ENTRIES.slice( 0, 1 ), pagingMetadata: { count: 1, hasNext: true, cursors: { next: 'page-2' } } };
 			await new Promise( ( resolve ) => setTimeout( resolve, 500 ) );
-			await route.fulfill( { contentType: 'application/json', body: JSON.stringify( { entries: FAQ_ENTRIES } ) } );
+			await route.fulfill( { contentType: 'application/json', body: JSON.stringify( body ) } );
 			return;
 		}
 		const variant = url.searchParams.get( 'variant' );
@@ -410,9 +456,12 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime embed
 					'<button data-hook="accordion-item-header" aria-expanded="' + ( index === 0 ) + '" aria-controls="item-' + index + '"><h3 data-hook="title">' + entry.question + '</h3><svg data-hook="expandIcon"></svg></button>' +
 					'<div id="' + ${ panelId } + '" data-hook="accordion-item-content" style="display:' + ( index === 0 ? 'block' : 'none' ) + '">' + ${ answer } + '</div>' ).join( '' ) + '</div></div>' );
 			};
-			fetch( '/_api/faq-server/v2/question-entries/query', { method: 'POST', body: '{}' } ).then( response => response.json() ).then( ( { entries } ) => {
-				// 'staggered': one complete question first, the next page of questions 800 ms later.
-				${ variant === 'staggered' ? 'render( entries.slice( 0, 1 ) ); setTimeout( () => render( entries ), 800 );' : 'render( entries );' }
+			const query = ( cursor ) => fetch( '/_api/faq-server/v2/question-entries/query', { method: 'POST', body: JSON.stringify( cursor ? { cursor } : {} ) } ).then( response => response.json() );
+			// A batched variant renders its first page, then asks for the next one later
+			// ('staggered' 800 ms, 'slow-staggered' 1.8 s), as cursor paging does.
+			query().then( ( first ) => {
+				render( first.questionEntries );
+				if ( first.pagingMetadata.hasNext ) setTimeout( () => query( first.pagingMetadata.cursors.next ).then( ( second ) => render( first.questionEntries.concat( second.questionEntries ) ) ), ${ variant === 'slow-staggered' ? 1_800 : 800 } );
 			} );
 		</script>`;
 		await route.fulfill( { contentType: 'text/html', body: widget } );
@@ -521,12 +570,45 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime embed
 		await expectPortedFaq( page );
 	}, 30_000 );
 
-	it( 'waits for a FAQ whose questions arrive in batches', async ({ newPage }) => {
+	it( 'waits for a FAQ whose questions arrive in batches, however slowly within the budget', async ({ newPage }) => {
 		const page = await newPage();
 		await routeFaqApp( page );
-		await page.setContent( `${ FRAME_STYLE }<iframe title="Wix FAQ" src="${ faqFrame( 'staggered' ) }"></iframe>` );
-		await portWixRuntimeEmbeds( page, { faqRenderMilliseconds: 5_000 } );
+		for ( const variant of [ 'staggered', 'slow-staggered' ] ) {
+			await page.setContent( `${ FRAME_STYLE }<iframe title="Wix FAQ" src="${ faqFrame( variant ) }"></iframe>` );
+			await portWixRuntimeEmbeds( page, { faqRenderMilliseconds: 6_000 } );
+			await expectPortedFaq( page );
+		}
+	}, 30_000 );
+
+	it( 'leaves early once an already-rendered FAQ is ported and the page has been quiet', async ({ newPage }) => {
+		const page = await newPage();
+		await routeFaqApp( page );
+		// The adapter starts following the app's queries in prepare, before the frame loads.
+		trackWixFaqQueries( page );
+		await page.setContent( `${ FRAME_STYLE }<iframe title="Wix FAQ" src="${ faqFrame() }"></iframe>` );
+		await page.frameLocator( 'iframe' ).locator( '[data-hook="accordion-item-header"]' ).first().waitFor();
+		await page.waitForTimeout( 100 );
+		const startedAt = Date.now();
+		await portWixRuntimeEmbeds( page );
+		expect( Date.now() - startedAt ).toBeLessThan( 1_500 );
 		await expectPortedFaq( page );
+	}, 30_000 );
+
+	it( 'gives a venue map host that mounts during the FAQ wait the warmup-data fallback', async ({ newPage }) => {
+		const page = await newPage();
+		await routeFaqApp( page );
+		await page.route( /maps\.google\.com/, ( route ) => route.fulfill( { contentType: 'text/html', body: '<p>map</p>' } ) );
+		const warmup = { appsWarmupData: { events: { event: { event: { id: 'e1', location: { coordinates: { lat: 48.8566, lng: 2.3522 } } } } } } };
+		await page.setContent( `<html lang="fr">${ FRAME_STYLE }<script type="application/json" id="wix-warmup-data">${ JSON.stringify( warmup ) }</script><iframe title="Wix FAQ" src="${ faqFrame() }"></iframe><div id="venue" style="width:600px;height:300px"></div></html>` );
+		await page.evaluate( () => setTimeout( () => {
+			const host = document.createElement( 'div' );
+			host.id = 'event-details-page-map';
+			host.setAttribute( 'data-hook', 'map' );
+			host.style.cssText = 'width:600px;height:300px';
+			document.getElementById( 'venue' )!.replaceChildren( host );
+		}, 300 ) );
+		await portWixRuntimeEmbeds( page, { faqRenderMilliseconds: 4_000 } );
+		expect( await page.locator( '#event-details-page-map > iframe' ).getAttribute( 'src' ) ).toBe( 'https://maps.google.com/maps?q=48.8566%2C2.3522&z=15&hl=fr&output=embed' );
 	}, 30_000 );
 
 	it( 'reconciles late FAQ mounts, remounts after a port and late Events maps until the deadline', async ({ newPage }) => {

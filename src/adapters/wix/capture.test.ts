@@ -63,6 +63,7 @@ function fakePreparePage( dom: JSDOM ) {
 		evaluate: async ( fn: ( arg: never ) => unknown, arg: never ) => fn( arg ),
 		waitForFunction: fakeWaitForFunction( 500 ),
 		mouse: { move: async () => undefined },
+		on: () => undefined,
 		// Locator counts read the staged document: revealAndCollectWixSlideshows
 		// gates its sweep on the mounted slideshow count.
 		locator: ( selector: string ) => ( {

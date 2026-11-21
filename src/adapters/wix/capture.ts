@@ -12,7 +12,7 @@ import { wixDocumentSelection, wixAdditionalProfiles } from './document-selectio
 import { preserveWixCollections } from './collections.js';
 import { markMemberLoginControls, MEMBER_LOGIN_ATTRIBUTE, MEMBER_LOGIN_CLASS_PREFIX } from '../../lib/member-login.js';
 import { markEngagementStats, ENGAGEMENT_STATS_ATTRIBUTE, ENGAGEMENT_STATS_CLASS_PREFIX } from '../../lib/engagement-stats.js';
-import { portWixRuntimeEmbeds, sealWixAppFrameHtml, WIX_AI_ASSISTANT_LAYER, WIX_CHAT_LAUNCHER_LAYER } from './embeds.js';
+import { portWixRuntimeEmbeds, sealWixAppFrameHtml, trackWixFaqQueries, WIX_AI_ASSISTANT_LAYER, WIX_CHAT_LAUNCHER_LAYER } from './embeds.js';
 import { portWixVideoPlayers, portWixBackgroundVideos } from './video.js';
 import { normalizeWixImageGeometry, normalizeWixImageSources, restoreWixBlurredImageSources } from './image-geometry.js';
 import { normalizeWixGalleryStrips } from './gallery-strip-geometry.js';
@@ -754,6 +754,8 @@ export const capture: LiberationHooks = {
 	 * fragment and leave a real target behind.
 	 */
 	prepare: async ( page, ctx ) => {
+		// Watch the FAQ app's question queries from here, before lazy loading mounts its frame (see embeds.ts).
+		trackWixFaqQueries( page );
 		// Keep the runtime-owned overflow control and resting link visibility.
 		// Generic interaction capture observes its panel after baseline artifacts
 		// are complete and portable dialog wiring replays that observed state.
