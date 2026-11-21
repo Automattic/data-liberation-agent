@@ -15,6 +15,13 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.40.14] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+- Capture probes shared chrome only once a second route will reuse it
+- Wix discovery reads navigation and site name from the entry document
+
 ## [0.40.13] - 2026-11-21
 
 ### Changed
