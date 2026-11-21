@@ -24,7 +24,8 @@ import * as cheerio from 'cheerio';
  * subsequent calls must preserve names already used by external rules.
  */
 
-const INSTANCE_REFERENCE = /(?<![a-z0-9-])(comp-[a-z0-9]+)_r_(comp-[a-z0-9]+)/gi;
+// A hyphen is a boundary too: Wix derives ids such as img-comp-X_r_comp-Y.
+const INSTANCE_REFERENCE = /(?<![a-z0-9])(comp-[a-z0-9]+)_r_(comp-[a-z0-9]+)/gi;
 const CANONICAL_INSTANCE = /^comp-dla[0-9a-f]{8}$/i;
 
 export function canonicalizeWixInstanceIds( html: string, document: string = html ): string {
@@ -42,11 +43,11 @@ export function canonicalizeWixInstanceIds( html: string, document: string = htm
 
 	// The instance element carries the bare instance id too (`id="<instance>"`,
 	// `<instance>-container`), and the page stylesheet targets it, so every
-	// whole-token occurrence (including Wix's bgMedia_ derived ids and their
+	// whole-token occurrence (including Wix's img-, portal- and bgMedia_ derived ids and their
 	// selectors/references) is rewritten, not only the
 	// `_r_` references. A longer id that merely starts with it is left alone.
 	const instancePattern = new RegExp(
-		`(?<![a-z0-9-])(${ [ ...tokenByInstance.keys() ].map( escapeRegExp ).join( '|' ) })(?![a-z0-9])`,
+		`(?<![a-z0-9])(${ [ ...tokenByInstance.keys() ].map( escapeRegExp ).join( '|' ) })(?![a-z0-9])`,
 		'gi'
 	);
 	return html.replace( instancePattern, ( match ) => tokenByInstance.get( match ) ?? match );
