@@ -6,6 +6,7 @@ import postcss from 'postcss';
 import selectorParser from 'postcss-selector-parser';
 import type { AnyNode, Element } from 'domhandler';
 import { escapeHtmlAttr } from './html-escape.js';
+import { NODE_ID_ATTRIBUTE } from './screenshot/box-tree.js';
 import { appendScrollDrivenAnimations } from './scroll-driven-animations.js';
 import { cssIdentifier, parseCss, parseSelectorList, projectStylesheet, scopeCss, type UnparseableStylesheetSink } from './replicate/css-scope.js';
 import { FLUID_RULES_STYLE_ATTRIBUTE } from './screenshot/fluid-capture.js';
@@ -21,6 +22,7 @@ import {
 	isStableIdentityId,
 	isUnstableResponsiveId,
 	learnedTransformSelectors,
+	placeholderLinkSide,
 	RESPONSIVE_DESKTOP_ONLY_CLASS,
 	RESPONSIVE_MOBILE_ONLY_CLASS,
 	RESPONSIVE_PROJECTION_CLASS_PREFIX,
@@ -740,6 +742,27 @@ export function identitySubsetMerge(
 		m: cheerio.Cheerio< Element >,
 		path: string
 	): void => {
+		// A placeholder link is its control before the runtime filled it in, so
+		// the linked rendering serves both widths: the placeholder's subtree is
+		// an earlier state, not per-viewport presentation to project or hide.
+		// A subtree holding identified components keeps the identity rules below.
+		const placeholder = placeholderLinkSide( d.get( 0 )!, m.get( 0 )! );
+		const holdsIdentity = ( node: cheerio.Cheerio< Element > ) => node.find( '*' ).toArray().some( child => identityOf( child ) );
+		if ( placeholder && ! holdsIdentity( d ) && ! holdsIdentity( m ) ) {
+			if ( placeholder === 'desktop' ) {
+				// The adopted nodes are the phone capture's elements: their capture ids
+				// take its namespace so they neither collide with nor borrow desktop
+				// evidence (the desktop box observed the placeholder).
+				d.get( 0 )!.attribs = { ...m.get( 0 )!.attribs };
+				d.html( m.html() ?? '' );
+				d.find( `[${ NODE_ID_ATTRIBUTE }]` ).addBack( `[${ NODE_ID_ATTRIBUTE }]` ).each( ( _index, node ) => {
+					if ( ! isElementNode( node ) ) return;
+					const id = node.attribs[ NODE_ID_ATTRIBUTE ];
+					if ( ! id.startsWith( 'mobile:' ) ) node.attribs[ NODE_ID_ATTRIBUTE ] = `mobile:${ id }`;
+				} );
+			}
+			return;
+		}
 		// Stable ids cannot override each document's resolved URL identity: a
 		// component whose viewports link or embed different destinations (a
 		// rotating partner strip) ships once per viewport, like a re-parented one.

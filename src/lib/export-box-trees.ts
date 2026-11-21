@@ -256,24 +256,27 @@ export function mergeMobileBoxTree(desktop: BoxTree, desktopHtml: string, mobile
  * so `mergeMobileBoxTree` cannot reach it. Its evidence is the phone capture's
  * observation of that element, at every viewport the sidecar declares: the phone
  * width is where it renders, and at wider widths the capture's device-island gate,
- * not its box, decides that it stays hidden. A fragment element whose phone node
- * has another tag, or lacks a declared viewport, stays unobserved.
+ * not its box, decides that it stays hidden. A phone rendering the assembly
+ * adopted in place of a desktop placeholder link renders at every width, and the
+ * phone capture's observation at each declared viewport is of that rendering. An
+ * element whose phone node has another tag, or lacks a declared viewport, stays
+ * unobserved.
  */
 export function graftPhoneFragmentObservations(tree: BoxTree, html: string, mobile: BoxTree, mobileHtml: string): BoxTree {
-	if (!html.includes(MOBILE_ONLY_FRAGMENT.slice(1))) return tree;
+	if (!html.includes(`${NODE_ID_ATTRIBUTE}="mobile:`)) return tree;
 	const $ = cheerio.load(html);
 	const tags = new Map([...signaturesOf(mobileHtml)].map(([id, signature]) => [id, signature.slice(0, signature.indexOf('#'))]));
 	const declared = Object.keys(tree.viewports);
 	const nodes: BoxTree['nodes'] = { ...tree.nodes };
-	$(MOBILE_ONLY_FRAGMENT).filter((_index, fragment) => $(fragment).closest(DEVICE_DOCUMENT_WRAPPERS).length === 0).each((_index, fragment) => {
-		$(fragment).find(`[${NODE_ID_ATTRIBUTE}]`).addBack(`[${NODE_ID_ATTRIBUTE}]`).each((_i, element) => {
-			const id = $(element).attr(NODE_ID_ATTRIBUTE)!;
-			const phoneId = id.slice('mobile:'.length);
-			const node = id.startsWith('mobile:') && Object.hasOwn(mobile.nodes, phoneId) ? mobile.nodes[phoneId] : undefined;
-			if (!node || Object.hasOwn(nodes, id) || tags.get(phoneId) !== (element as Element).tagName
-				|| !declared.every(viewport => Object.hasOwn(node.viewports, viewport))) return;
-			nodes[id] = { children: [], viewports: Object.fromEntries(declared.map(viewport => [viewport, node.viewports[viewport]])) };
-		});
+	// Every phone-namespaced element of the shared document: grafted fragments,
+	// and phone renderings the assembly adopted in place of a desktop placeholder.
+	$(`[${NODE_ID_ATTRIBUTE}^="mobile:"]`).filter((_index, element) => $(element).closest(DEVICE_DOCUMENT_WRAPPERS).length === 0).each((_i, element) => {
+		const id = $(element).attr(NODE_ID_ATTRIBUTE)!;
+		const phoneId = id.slice('mobile:'.length);
+		const node = Object.hasOwn(mobile.nodes, phoneId) ? mobile.nodes[phoneId] : undefined;
+		if (!node || Object.hasOwn(nodes, id) || tags.get(phoneId) !== (element as Element).tagName
+			|| !declared.every(viewport => Object.hasOwn(node.viewports, viewport))) return;
+		nodes[id] = { children: [], viewports: Object.fromEntries(declared.map(viewport => [viewport, node.viewports[viewport]])) };
 	});
 	return { ...tree, nodes };
 }
