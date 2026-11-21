@@ -9,6 +9,7 @@ import { chromium, type Browser, type BrowserContext } from 'playwright';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 // @ts-ignore TS6059: test helpers intentionally live outside the production rootDir.
 import { exportFixture } from '../../test/export-fixture.js';
+import { canonicalizeWixCapturedHtml } from '../adapters/wix/instance-ids.js';
 import * as sharedChrome from './shared-chrome.js';
 import { probeCanonicalRouteAliases } from './route-aliases.js';
 import { includeReferences, readResolvedPage } from './site-includes.js';
@@ -2818,6 +2819,58 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( html ).toContain( '<style>main{color:blue}</style>' );
 		expect( html ).not.toContain( '(min-width:768px)' );
 		expect( html ).not.toContain( '(max-width:767px)' );
+	} );
+
+	it( 'keeps instance markup and linked capture selectors consistent across route-local canonicalization', () => {
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		const first = 'comp-aaaa1111';
+		const second = 'comp-bbbb2222';
+		const document = ( raw: string, title: string, extra = '', deadRule = false ) =>
+			`<!doctype html><html><head><style>#${ raw }_r_comp-header{height:102px}` +
+			`.${ raw }_r_comp-nav{display:flex}#bgMedia_${ raw }_r_comp-header{background:red}</style>` +
+			`${ deadRule ? `<style>.${ raw }_r_comp-dead{display:none}</style>` : '' }</head><body>` +
+			`<header><section id="${ raw }_r_comp-header"><div id="bgMedia_${ raw }_r_comp-header"></div>` +
+			`<nav class="${ raw }_r_comp-nav">Home</nav></section></header>` +
+			`<main><h1>${ title }</h1>${ extra }</main></body></html>`;
+		const collision = '<aside class="comp-cccc3333_r_comp-header comp-cccc3333_r_comp-nav">Other instance</aside>';
+		const pages = [
+			[ '', first, '', true ],
+			[ 'post', second, '', false ],
+			[ 'home-twin', first, '', false ],
+			[ 'collision', second, collision, false ],
+			[ 'collision-two', second, collision, false ],
+		] as const;
+		for ( const [ slug, raw, extra, dead ] of pages ) {
+			capture.page( `https://example.com/${ slug }`, document( raw, slug || 'Home', extra, dead ), {
+				entry: { html: `html/${ slug || 'home' }.html` },
+			} );
+		}
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [], canonicalizeHtml: canonicalizeWixCapturedHtml } );
+		const tokens: string[] = [];
+		for ( const [ slug, raw ] of pages ) {
+			const html = readResolvedPage( join( outputDir, 'website' ), join( outputDir, 'website', slug ? `${ slug }/index.html` : 'index.html' ) );
+			const $ = cheerio.load( html );
+			const id = $( 'section' ).attr( 'id' )!;
+			const token = id.split( '_r_' )[ 0 ]!;
+			tokens.push( token );
+			const linkedCss = $( 'link[rel="stylesheet"]' ).toArray().map( element =>
+				readFileSync( join( outputDir, 'website', $( element ).attr( 'href' )!.replace( /^\//, '' ) ), 'utf8' )
+			);
+			expect( linkedCss.length ).toBeGreaterThan( 0 );
+			expect( linkedCss.join( '\n' ) ).toContain( `#${ id }{height:102px}` );
+			expect( linkedCss.join( '\n' ) ).toContain( `#bgMedia_${ id }{background:red}` );
+			expect( $( '[id^="bgMedia_"]' ).attr( 'id' ) ).toBe( `bgMedia_${ id }` );
+			if ( token !== raw ) {
+				for ( const css of linkedCss ) expect( css ).not.toContain( raw );
+			} else {
+				expect( slug ).toMatch( /^collision/ );
+			}
+		}
+		expect( tokens[ 0 ] ).toMatch( /^comp-dla/ );
+		expect( tokens[ 1 ] ).toBe( tokens[ 0 ] );
+		expect( tokens[ 2 ] ).toBe( tokens[ 0 ] );
+		expect( tokens.slice( 3 ) ).toEqual( [ second, second ] );
 	} );
 
 	it( 'shares identical responsive styles when both authoring bodies are required', () => {
