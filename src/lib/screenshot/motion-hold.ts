@@ -31,9 +31,12 @@
  * slower than either page's own readings is still aligned. At any other width
  * such a swap is only a candidate, because responsive content legitimately
  * differs by width: a held width round trip first checks whether width alone
- * explains the swap and it stays stable back at the cell. Unexplained candidates
- * are watched unheld for a bounded window; only ones changing on their own are
- * rotation and aligned.
+ * explains the swap and it stays stable back at the cell. What width leaves
+ * unexplained must still be a swap on its own: a slide at the wrong moment
+ * leaves the captured slide hidden and another painted, while content that
+ * only finished painting since capture changes in one direction and never
+ * rotates back. Unexplained swaps are watched unheld for a bounded window; only
+ * ones changing on their own are rotation and aligned.
  */
 import type { Page } from 'playwright';
 import { orElse } from '../failure-class.js';
@@ -399,7 +402,8 @@ export async function alignSourceMotion( page: Page, captured: SourceMotion | un
 	const confirmDeadline = start + Math.min( confirmMs, timeoutMs );
 	// Cross-width swaps against capture: rotation once one changes on its own.
 	const candidates = new Set<string>();
-	const responsive = new Set<string>();
+	// Candidates the width probe settled: responsive swaps and one-sided leftovers.
+	const explained = new Set<string>();
 	let widthProbed = false;
 	const unconfirmed = () => candidates.size > 0 && ! [ ...candidates ].some( token => rotating.has( token ) );
 	let previous = earlier.at( -1 );
@@ -407,12 +411,18 @@ export async function alignSourceMotion( page: Page, captured: SourceMotion | un
 		const reading = await readPaintState( page );
 		if ( previous ) for ( const token of motionChanges( previous, reading.painted ) ) rotating.add( token );
 		if ( captured ) for ( const token of capturedSwaps( captured, reading ) ) rotating.add( token );
-		if ( captured ) for ( const token of swapCandidates( captured, reading ) ) if ( ! responsive.has( token ) ) candidates.add( token );
+		if ( captured ) for ( const token of swapCandidates( captured, reading ) ) if ( ! explained.has( token ) ) candidates.add( token );
 		if ( held && captured && unconfirmed() && ! widthProbed ) {
 			widthProbed = true;
 			for ( const token of await responsiveSwaps( page, captured, reading, candidates ).catch( orElse( [] ) ) ) {
-				responsive.add( token );
+				explained.add( token );
 				candidates.delete( token );
+			}
+			const wasPainted = new Set( captured.painted );
+			const leftover = [ ...candidates ];
+			if ( ! leftover.some( token => wasPainted.has( token ) ) || leftover.every( token => wasPainted.has( token ) ) ) {
+				for ( const token of leftover ) explained.add( token );
+				candidates.clear();
 			}
 		}
 		previous = reading.painted;
