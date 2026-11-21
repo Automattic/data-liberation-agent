@@ -19,7 +19,7 @@ export async function discover(url: string, opts: Record<string, unknown>): Prom
 
     try {
     const p = page as {
-      goto(url: string, opts?: Record<string, unknown>): Promise<{ ok(): boolean } | null>;
+      goto(url: string, opts?: Record<string, unknown>): Promise<{ ok(): boolean; status(): number } | null>;
       content(): Promise<string>;
       evaluate(fn: (...args: unknown[]) => unknown, ...args: unknown[]): Promise<unknown>;
       waitForTimeout(ms: number): Promise<void>;
@@ -72,8 +72,11 @@ export async function discover(url: string, opts: Record<string, unknown>): Prom
         try {
           const resp = await p.goto(sitemapUrl, { timeout: 15000 });
           if (!resp || !resp.ok()) {
-            lastErr = resp ? `HTTP ${resp.ok() ? 'ok=false' : 'status-not-ok'}` : 'no response';
-            if (attempt < RETRIES) {
+            const status = resp?.status();
+            lastErr = status === undefined ? 'no response' : `HTTP ${status}`;
+            // A client error other than timeout or throttling is the CDN's answer, not a transient fault.
+            const definitive = status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 429;
+            if (attempt < RETRIES && !definitive) {
               await new Promise((r) => setTimeout(r, 500 * attempt));
               continue;
             }
