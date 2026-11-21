@@ -373,7 +373,8 @@ function readWixFaqFrame(): unknown {
  */
 export function wixFaqItems( raw: unknown ): WixFaqItem[] | 'pending' | 'unsupported' {
 	const read = raw as { layout?: unknown; items?: unknown } | null;
-	if ( ! read || typeof read !== 'object' || read.layout === 'unsupported' ) return read?.layout === 'unsupported' ? 'unsupported' : 'pending';
+	if ( ! read || typeof read !== 'object' ) return 'pending';
+	if ( read.layout === 'unsupported' ) return 'unsupported';
 	if ( read.layout !== 'accordion' || ! Array.isArray( read.items ) || ! read.items.length ) return 'pending';
 	const budget = { nodes: FAQ_LIMITS.nodes };
 	const nodes = ( input: unknown, depth: number ): WixFaqNode[] | null => {

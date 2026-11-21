@@ -16,6 +16,7 @@ import {
 	wixAppInstance,
 	wixAppMapView,
 	wixEmbedNote,
+	wixFaqItems,
 } from './embeds.js';
 
 const MAP_WRAPPER =
@@ -57,6 +58,32 @@ describe( 'wixAppInstance', () => {
 		// An `instance` parameter that is not a signed Wix payload is not an app widget.
 		expect( wixAppInstance( 'https://widgets.example.test/w?instance=42' ) ).toBeNull();
 		expect( wixAppInstance( `https://widgets.example.test/w?instance=abc.${ base64Url( { other: 1 } ) }` ) ).toBeNull();
+	} );
+} );
+
+describe( 'wixFaqItems', () => {
+	const item = ( answer: unknown, extra = {} ) => ( { layout: 'accordion', items: [ { question: ' Why? ', open: true, answer, ...extra } ] } );
+
+	it( 'keeps allowlisted structure and absolute links, and unwraps or drops the rest', () => {
+		expect( wixFaqItems( item( [
+			{ tag: 'p', children: [ { tag: 'span', children: [ { text: 'Because ' } ] }, { tag: 'a', href: 'https://example.test/', children: [ { text: 'this' } ] } ] },
+			{ tag: 'a', href: 'javascript:alert(1)', children: [ { text: ' and that' } ] },
+			{ tag: 'img onerror=alert(1)', children: [] },
+			{ tag: 'script', children: [ { text: 'alert(1)' } ] },
+		] ) ) ).toEqual( [ { question: 'Why?', open: true, answer: [
+			{ tag: 'p', children: [ { text: 'Because ' }, { tag: 'a', href: 'https://example.test/', children: [ { text: 'this' } ] } ] },
+			{ text: ' and that' },
+		] } ] );
+	} );
+
+	it( 'waits for answers, and refuses layouts and trees it cannot carry whole', () => {
+		expect( wixFaqItems( null ) ).toBe( 'pending' );
+		expect( wixFaqItems( item( null ) ) ).toBe( 'pending' );
+		expect( wixFaqItems( item( [ { text: '  ' } ] ) ) ).toBe( 'pending' );
+		expect( wixFaqItems( { layout: 'unsupported', items: [] } ) ).toBe( 'unsupported' );
+		expect( wixFaqItems( item( [ { tag: 'p', children: 'not a list' } ] ) ) ).toBe( 'unsupported' );
+		const deep = Array.from( { length: 40 } ).reduce< unknown >( ( child ) => ( { tag: 'div', children: [ child ] } ), { text: 'deep' } );
+		expect( wixFaqItems( item( [ deep ] ) ) ).toBe( 'unsupported' );
 	} );
 } );
 
