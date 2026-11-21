@@ -19,7 +19,7 @@ import {
 	matchClientErrorShell
 } from './document-integrity.js';
 import { withDocumentTitle } from './document-title.js';
-import { fluidSweepLogLine, learnAndApplyFluidGeometry, type FluidSeriesMemo, type FluidSweepStats } from './fluid-capture.js';
+import { fluidSweepLogLine, learnAndApplyFluidGeometry, type FluidSeriesMemo, type FluidSweepStats, type FluidWidthRange } from './fluid-capture.js';
 import { sanitizeFrozenHtml } from './freeze.js';
 import { markGalleryRoots } from './gallery-capture.js';
 import { GlyphColorCache, recordGlyphColors } from './glyph-color.js';
@@ -77,6 +77,8 @@ export interface CapturePerViewportArgs {
 	classBreakpoints?: Set<number>;
 	classMemo?: ViewportClassMemo;
 	fluidWidths?: number[];
+	/** Widths where export serves this profile's document; bounds its fluid sweep. */
+	fluidWidthRange?: FluidWidthRange;
 	collectResponsiveImages?: (
 		page: import( 'playwright' ).Page,
 		ctx: import( '../../adapters/page-actions.js' ).LiberationContext
@@ -672,6 +674,7 @@ export function baselineSteps(
 						// The middle layout's learned rules name its own geometry ids, never the phone document's.
 						document: documentId,
 						...( args.fluidWidths ? { widths: args.fluidWidths } : {} ),
+						...( args.fluidWidthRange ? { widthRange: args.fluidWidthRange } : {} ),
 						settleMs: Math.max( args.settleMs, 800 ),
 						...( args.fluidMemo ? { memo: args.fluidMemo } : {} ),
 						onSweep: stats => { sweep = stats; },

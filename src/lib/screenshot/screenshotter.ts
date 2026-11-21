@@ -61,7 +61,7 @@ import { stateChangingAction } from '../url/action-url.js';
 import { normalizedUrl, documentRequestUrl } from '../url/route-key.js';
 import { guardPageErrors, PAGE_ERROR_STORM } from './page-error-guard.js';
 import { defaultViewports, SCREENSHOT_DEVICE_SCALE_FACTOR, type CaptureLogSink, type ScreenshotOpts, type ScreenshotResult, type Viewport } from './types.js';
-import { RouteDeviceEvidence, summarizeRouteDecisions, type DeviceModeDecision, type RouteDeviceDecision, MIDDLE_PROFILE_ID, middleLayoutSampleWidth } from './device-mode.js';
+import { RouteDeviceEvidence, summarizeRouteDecisions, type DeviceModeDecision, type RouteDeviceDecision, MIDDLE_PROFILE_ID, middleLayoutSampleWidth, servedWidthRange } from './device-mode.js';
 import { summarizeSharedChrome, type SharedChromeProbe, type SharedChromeRouteDecision } from './chrome-reuse.js';
 import type { Browser, BrowserContext, BrowserContextOptions, Page } from 'playwright';
 
@@ -1840,6 +1840,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 								: {} ),
 							...( opts.learnFluid ? { learnFluid: true, fluidMemo, classBreakpoints, classMemo } : {} ),
 							...( opts.fluidWidths ? { fluidWidths: opts.fluidWidths } : {} ),
+							// #2210: each dual document sweeps only the widths export serves it at.
+							fluidWidthRange: routeDevice?.mode === 'dual' ? servedWidthRange( routeDevice, viewport.id ) : undefined,
 							prepareCapture: opts.prepareCapture,
 							sharedChrome: sharedChromeFor( viewport ),
 							consentViewports: viewports,
