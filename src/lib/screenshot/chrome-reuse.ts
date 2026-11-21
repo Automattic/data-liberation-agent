@@ -1,7 +1,8 @@
 import type { BrowserContext, BrowserContextOptions } from 'playwright';
 import { captureTriggeredDialogs } from './interaction-capture.js';
 import { captureSelectableSetStates } from './selectable-set-capture.js';
-import { restoreTopScrollState, dismissOverlays } from './page-helpers.js';
+import { restoreTopScrollState, dismissOverlays, withEvaluateTimeout } from './page-helpers.js';
+import { CHROME_HYDRATION_LANDMARKS, CHROME_HYDRATION_TIMEOUT_MS, waitForChromePlaceholderLinks } from './chrome-hydration.js';
 import { withReadOnlyProbes, lockMainFrameNavigation } from './probe-guards.js';
 import { loadForComparison, type DeviceComparisonArgs } from './device-mode-probe.js';
 import { load } from 'cheerio';
@@ -844,7 +845,11 @@ export async function probeChromeOnPage(
 	url: string,
 	options: { additionalStates?: CapturedDialogInteraction[] }
 ): Promise< Omit< SharedChromeProbe, 'durationMs' > > {
-	// Read the resting landmark identity before any exploration.
+	// Read the resting landmark identity before any exploration, once its
+	// runtime controls have hydrated: an unhydrated control (a cart link with no
+	// href yet) would give the entrypoint a signature no hydrated route matches,
+	// and a panel probed then is the unhydrated one (#1261).
+	await withEvaluateTimeout( page.evaluate( waitForChromePlaceholderLinks, { timeoutMs: CHROME_HYDRATION_TIMEOUT_MS, landmarks: CHROME_HYDRATION_LANDMARKS } ), CHROME_HYDRATION_TIMEOUT_MS + 5_000 ).catch( orElse( undefined ) );
 	await restoreTopScrollState( page );
 	await withReadOnlyProbes( page, () => dismissOverlays( page ) );
 	let landmarks = await readChromeLandmarks( page, true );

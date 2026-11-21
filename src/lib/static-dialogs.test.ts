@@ -26,7 +26,56 @@ const captured: CapturedDialogInteraction = {
 	},
 };
 
+/** Generated panel ids name their control; number them in order of appearance for literal assertions. */
+function ordinalDialogIds( html: string ): string {
+	const seen = new Map< string, string >();
+	return html.replace( /data-blocks-engine-capture-dialog-[0-9a-f]{10}(?:-\d+)?/g, id => {
+		if ( ! seen.has( id ) ) seen.set( id, `data-blocks-engine-capture-dialog-${ seen.size }` );
+		return seen.get( id )!;
+	} );
+}
+
 describe( 'wireCapturedDialogs', () => {
+	// #1261: identical chrome must serialize identically on every route.
+	it( 'gives the same control the same panel id whatever else the route wires first', () => {
+		const cart: CapturedDialogInteraction = {
+			...captured,
+			trigger: { ...captured.trigger, selector: 'header > a.cart', tag: 'a', label: 'Cart with 0 items' },
+			dialog: { ...captured.dialog!, selector: '#side-cart', ariaLabel: 'Side cart', presentation: 'modal', html: '<div id="side-cart"><h2>Cart</h2></div>' },
+		};
+		const share: CapturedDialogInteraction = {
+			...captured,
+			trigger: { ...captured.trigger, selector: 'main > button.share', label: 'Share' },
+			dialog: { ...captured.dialog!, selector: '#share', ariaLabel: 'Share', presentation: 'modal', html: '<div id="share"><p>Share this</p></div>' },
+		};
+		const header = '<header><a class="cart" role="button" aria-label="Cart with 0 items" href="/cart">Cart</a></header>';
+		const plain = wireCapturedDialogs( `<html><head></head><body>${ header }<main><p>About</p></main></body></html>`, [ cart ] );
+		const withPageDialog = wireCapturedDialogs( `<html><head></head><body>${ header }<main><button class="share">Share</button></main></body></html>`, [ share, cart ] );
+		const headerOf = ( html: string ) => cheerio.load( html )( 'header' ).toString();
+		expect( headerOf( plain ) ).toContain( 'data-blocks-engine-capture-dialog-trigger=' );
+		expect( headerOf( withPageDialog ) ).toBe( headerOf( plain ) );
+	} );
+
+	it( 'keeps generated panel ids distinct for same-labelled controls and responsive documents', () => {
+		const html = wireCapturedDialogs(
+			'<html><head></head><body><div class="data-blocks-engine-capture-desktop-document"><button>Open Menu</button><button>Open Menu</button></div><div class="data-blocks-engine-capture-mobile-document"><button>Open Menu</button></div></body></html>',
+			[ captured ]
+		);
+		const $ = cheerio.load( html );
+		const ids = $( '[data-blocks-engine-capture-dialog-trigger]' ).toArray().map( element => $( element ).attr( 'aria-controls' ) );
+		expect( ids ).toHaveLength( 3 );
+		expect( new Set( ids ).size ).toBe( 3 );
+		for ( const id of ids ) expect( $( `[id="${ id }"]` ) ).toHaveLength( 1 );
+	} );
+
+	it( 'gives a desktop document control the panel id the same control gets in a single document', () => {
+		const panelId = ( body: string ) => cheerio.load( wireCapturedDialogs( `<html><head></head><body>${ body }</body></html>`, [ captured ] ) )( '[data-blocks-engine-capture-dialog-trigger]' ).first().attr( 'aria-controls' );
+		const single = panelId( '<header><button>Open Menu</button></header>' );
+		const desktop = panelId( '<div class="data-blocks-engine-capture-desktop-document"><header><button>Open Menu</button></header></div><div class="data-blocks-engine-capture-mobile-document"><header><button>Open Menu</button></header></div>' );
+		expect( single ).toBeTruthy();
+		expect( desktop ).toBe( single );
+	} );
+
 	it( 'consumes retained source selectors before removing them from adopted panels', () => {
 		const html = '<html><body><button>Open Menu</button><nav data-blocks-engine-capture-source-selector="body > nav:nth-of-type(2)"><a href="/about">About</a></nav></body></html>';
 		const portable = wireCapturedDialogs( html, [ {
@@ -520,9 +569,9 @@ describe( 'wireCapturedDialogs', () => {
 			'<html><head></head><body><button class="burger">Open Menu</button></body></html>',
 			[ captured ]
 		);
-		expect( html ).toContain( '<button class="burger" data-blocks-engine-capture-disclosure-label="Open Menu" data-blocks-engine-capture-dialog-trigger="data-blocks-engine-capture-dialog-0" aria-controls="data-blocks-engine-capture-dialog-0" aria-expanded="false" aria-haspopup="dialog">Open Menu</button>' );
+		expect( ordinalDialogIds( html ) ).toContain( '<button class="burger" data-blocks-engine-capture-disclosure-label="Open Menu" data-blocks-engine-capture-dialog-trigger="data-blocks-engine-capture-dialog-0" aria-controls="data-blocks-engine-capture-dialog-0" aria-expanded="false" aria-haspopup="dialog">Open Menu</button>' );
 		expect( html ).toContain( 'class="data-blocks-engine-capture-dialog" role="dialog"' );
-		expect( html ).toContain( 'data-blocks-engine-capture-dialog-close="data-blocks-engine-capture-dialog-0"' );
+		expect( ordinalDialogIds( html ) ).toContain( 'data-blocks-engine-capture-dialog-close="data-blocks-engine-capture-dialog-0"' );
 		expect( html ).toContain( 'href="/about"' );
 		expect( html ).toContain( 'data-blocks-engine-capture-disclosure-runtime' );
 		expect( html ).not.toContain( '<details' );
@@ -536,7 +585,7 @@ describe( 'wireCapturedDialogs', () => {
 		const unobserved = wireCapturedDialogs( page, [ captured ] );
 		expect( unobserved ).toContain( 'aria-modal="true"' );
 		const dropdown = wireCapturedDialogs( page, [ { ...captured, dialog: { ...captured.dialog!, presentation: 'dropdown' } } ] );
-		expect( dropdown ).toContain( 'data-blocks-engine-capture-dialog-panel="data-blocks-engine-capture-dialog-0"' );
+		expect( ordinalDialogIds( dropdown ) ).toContain( 'data-blocks-engine-capture-dialog-panel="data-blocks-engine-capture-dialog-0"' );
 		expect( dropdown ).toMatch( /<div class="data-blocks-engine-capture-dialog( data-blocks-engine-capture-dropdown)?" role="dialog" hidden=""/ );
 		expect( dropdown ).not.toContain( 'aria-modal' );
 	} );
@@ -559,7 +608,7 @@ describe( 'wireCapturedDialogs', () => {
 		expect( $( '[data-blocks-engine-capture-dialog-panel] #menu' ).text() ).toBe( 'Stale menu' );
 		expect( $( '[data-blocks-engine-capture-dialog-panel] a' ).attr( 'href' ) ).toBe( '/stale' );
 		expect( $( '[data-blocks-engine-capture-dialog-panel-state]' ).attr( 'data-blocks-engine-capture-dialog-panel-state' ) ).toContain( '/about' );
-		expect( html ).toContain( 'data-blocks-engine-capture-dialog-panel="data-blocks-engine-capture-dialog-0"' );
+		expect( ordinalDialogIds( html ) ).toContain( 'data-blocks-engine-capture-dialog-panel="data-blocks-engine-capture-dialog-0"' );
 		expect( html ).toContain( '<div id="other-dialog">Keep me</div>' );
 	} );
 
@@ -577,10 +626,10 @@ describe( 'wireCapturedDialogs', () => {
 			'<html><head></head><body><button class="menu" aria-label="Open Menu" data-menu="primary" type="submit" name="menu">Menu</button></body></html>',
 			[ captured ]
 		);
-		expect( html ).toContain(
+		expect( ordinalDialogIds( html ) ).toContain(
 			'<button class="menu" aria-label="Open Menu" data-menu="primary" type="submit" name="menu" data-blocks-engine-capture-disclosure-label="Open Menu" data-blocks-engine-capture-dialog-trigger="data-blocks-engine-capture-dialog-0" aria-controls="data-blocks-engine-capture-dialog-0" aria-expanded="false" aria-haspopup="dialog">Menu</button>'
 		);
-		expect( html ).toContain( '<button type="button" class="data-blocks-engine-capture-generated-close" hidden="" data-blocks-engine-capture-dialog-close="data-blocks-engine-capture-dialog-0" aria-label="Close Open Menu">Close</button>' );
+		expect( ordinalDialogIds( html ) ).toContain( '<button type="button" class="data-blocks-engine-capture-generated-close" hidden="" data-blocks-engine-capture-dialog-close="data-blocks-engine-capture-dialog-0" aria-label="Close Open Menu">Close</button>' );
 		expect( html ).not.toContain( '<summary' );
 	} );
 
@@ -611,7 +660,7 @@ describe( 'wireCapturedDialogs', () => {
 		expect( html.match( /data-blocks-engine-capture-dialog-trigger=/g ) ).toHaveLength( 1 );
 		expect( html ).toContain( '<a href="/#menu">Menu</a>' );
 		expect( html ).toMatch( /<nav><a href="\/#menu">Menu<\/a><a href="\/#concept">Concept<\/a><\/nav>/ );
-		expect( html ).toContain( '<button aria-label="Menu" data-blocks-engine-capture-disclosure-label="Menu" data-blocks-engine-capture-dialog-trigger="data-blocks-engine-capture-dialog-0"' );
+		expect( ordinalDialogIds( html ) ).toContain( '<button aria-label="Menu" data-blocks-engine-capture-disclosure-label="Menu" data-blocks-engine-capture-dialog-trigger="data-blocks-engine-capture-dialog-0"' );
 		expect( html ).toContain( '<svg></svg></button>' );
 	} );
 
@@ -641,7 +690,7 @@ describe( 'wireCapturedDialogs', () => {
 		);
 		expect( html.match( /data-blocks-engine-capture-dialog-trigger=/g ) ).toHaveLength( 1 );
 		expect( html ).toContain( '<a href="/#menu">Menu</a>' );
-		expect( html ).toContain( '<button data-blocks-engine-capture-disclosure-label="Menu" data-blocks-engine-capture-dialog-trigger="data-blocks-engine-capture-dialog-0"' );
+		expect( ordinalDialogIds( html ) ).toContain( '<button data-blocks-engine-capture-disclosure-label="Menu" data-blocks-engine-capture-dialog-trigger="data-blocks-engine-capture-dialog-0"' );
 		expect( html ).not.toContain( '<summary' );
 	} );
 

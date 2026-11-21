@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { PORTABLE_WIDGET_OWNERSHIP_SOURCE } from './portable-widget-ownership.js';
 import type { CapturedGallery } from './gallery-capture.js';
 import { settleDocument } from './page-helpers.js';
+import { DIALOG_CONTENT_MOUNT_MS, waitForDialogContent } from './chrome-hydration.js';
 import { sweepSourceCleanup } from '../source-cleanup.js';
 import { rootClasses, rootClassDelta, type CapturedRootClassState } from './root-class-state.js';
 import { rememberDropdownAncestors, observeDropdownAncestors, verifyDropdownRestoration, type CapturedDropdownAncestorState } from './dropdown-ancestor-state.js';
@@ -1477,6 +1478,12 @@ async function observeInlineRestingPanels( page: Page, candidates: readonly numb
 async function waitForDialogContentStable( page: Page, selector: string ): Promise< void > {
 	// Content is stable once the dialog subtree has not changed for two
 	// 150 ms intervals, the window the previous sampled-size poll required.
+	await settleDocument( page, 'dialog-content', { selector, quietMs: 300, timeoutMs: DIALOG_WAIT_MS } );
+	// A panel whose content mounts on first open is still an empty shell after a
+	// quiet window; capturing it then ships an empty panel on that route only
+	// (#1261). Wait, bounded, for content, then let it settle again.
+	const content = await page.evaluate( waitForDialogContent, { selector, timeoutMs: DIALOG_CONTENT_MOUNT_MS } ).catch( orElse( 'present' as const ) );
+	if ( content !== 'mounted' ) return;
 	await settleDocument( page, 'dialog-content', { selector, quietMs: 300, timeoutMs: DIALOG_WAIT_MS } );
 }
 
