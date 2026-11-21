@@ -320,48 +320,141 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime embed
 		expect( await page.locator( '[data-blocks-engine-capture-unported-embed="wix"]' ).textContent() ).toBe( wixEmbedNote( 'Map' ) );
 	}, 30_000 );
 
-	it( 'keeps the questions a Wix FAQ widget frame renders after its own query', async ({ newPage }) => {
-		const page = await newPage();
-		// The widget loads empty and asks its server for the questions, like Wix's FAQ app.
-		const widget = `<!doctype html><div id="root"></div><script>
+	const FAQ_ENTRIES = [
+		{ question: 'First question?', answer: '<div data-id="content-viewer"><p class="x" style="color:red"><span>An answer with </span><strong>bold text</strong> and <a href="https://example.test/more" onclick="alert(1)">a link</a>.</p></div>' },
+		{ question: 'Second question?', answer: '<p>Hidden answer <a href="javascript:alert(1)">kept</a> <a href="/relative">as text</a>.</p><ul><li>One</li><li>Two</li></ul><script>window.bad = 1</script>' },
+	];
+	/**
+	 * A neutral FAQ app frame: it loads empty, asks its server for the
+	 * questions with a POST query and renders them in the app's accordion
+	 * markup. `variant` (in the frame URL) bends it: a frame that tampers with
+	 * its own DOM APIs, a panel that never renders, category tabs, or no render.
+	 */
+	const faqFrame = ( variant = 'plain' ) => `${ FAQ_WIDGET }&variant=${ variant }`;
+	const routeFaqApp = async ( page: Page ) => page.route( 'https://faq-app.example.test/**', async ( route ) => {
+		const url = new URL( route.request().url() );
+		if ( route.request().method() === 'POST' ) {
+			await new Promise( ( resolve ) => setTimeout( resolve, 500 ) );
+			await route.fulfill( { contentType: 'application/json', body: JSON.stringify( { entries: FAQ_ENTRIES } ) } );
+			return;
+		}
+		const variant = url.searchParams.get( 'variant' );
+		const tamper = variant === 'tamper' ? `
+			Object.defineProperty( Element.prototype, 'innerHTML', { get() { return '<img src=x onerror="parent.pwned = 1">'; } } );
+			const create = Document.prototype.createElement;
+			Document.prototype.createElement = function ( tag ) { return create.call( this, tag === 'p' ? 'img' : tag ); };` : '';
+		const answer = variant === 'tamper' ? `'<img src="x" onerror="parent.pwned = 1">' + entry.answer` : 'entry.answer';
+		const panelId = variant === 'missing-panel' ? `'elsewhere-' + index` : `'item-' + index`;
+		const tabs = variant === 'tabs' ? `'<div data-hook="faq-tabs" role="tablist"><button role="tab">One</button></div>' + ` : '';
+		// The frame navigates once it has loaded, as a widget's router can; the new document renders the questions.
+		if ( variant === 'navigate' ) {
+			await route.fulfill( { contentType: 'text/html', body: `<script>setTimeout( () => location.replace( ${ JSON.stringify( faqFrame() ) } ), 200 );</script>` } );
+			return;
+		}
+		const widget = variant === 'never' ? '<div id="root"></div>' : `<!doctype html><div id="root"></div><script>${ tamper }
 			fetch( '/_api/faq-server/v2/question-entries/query', { method: 'POST', body: '{}' } ).then( response => response.json() ).then( ( { entries } ) => {
-				document.getElementById( 'root' ).innerHTML = '<div data-hook="faq-root">' + entries.map( ( entry, index ) =>
+				document.getElementById( 'root' ).insertAdjacentHTML( 'beforeend', '<div data-hook="faq-root">' + ${ tabs }'<div data-hook="widget-accordion-wrapper">' + entries.map( ( entry, index ) =>
 					'<button data-hook="accordion-item-header" aria-expanded="' + ( index === 0 ) + '" aria-controls="item-' + index + '"><h3 data-hook="title">' + entry.question + '</h3><svg data-hook="expandIcon"></svg></button>' +
-					'<div id="item-' + index + '" data-hook="accordion-item-content" style="display:' + ( index === 0 ? 'block' : 'none' ) + '">' + entry.answer + '</div>' ).join( '' ) + '</div>';
+					'<div id="' + ${ panelId } + '" data-hook="accordion-item-content" style="display:' + ( index === 0 ? 'block' : 'none' ) + '">' + ${ answer } + '</div>' ).join( '' ) + '</div></div>' );
 			} );
 		</script>`;
-		await page.route( 'https://faq-app.example.test/**', async ( route ) => {
-			if ( route.request().method() === 'POST' ) {
-				await new Promise( ( resolve ) => setTimeout( resolve, 500 ) );
-				await route.fulfill( { contentType: 'application/json', body: JSON.stringify( { entries: [
-					{ question: 'First question?', answer: '<div data-id="content-viewer"><p class="x" style="color:red"><span>An answer with </span><strong>bold text</strong> and <a href="https://example.test/more" onclick="alert(1)">a link</a>.</p></div>' },
-					{ question: 'Second question?', answer: '<p>Hidden answer <a href="javascript:alert(1)">kept</a> <a href="/relative">as text</a>.</p><ul><li>One</li><li>Two</li></ul><script>window.bad = 1</script>' },
-				] } ) } );
-				return;
-			}
-			await route.fulfill( { contentType: 'text/html', body: widget } );
-		} );
-		await page.setContent( `<style>body{margin:0}iframe{border:0;display:block;width:600px;height:400px}</style><div id="comp-faq"><iframe title="Wix FAQ" src="${ FAQ_WIDGET }"></iframe></div>` );
-		await portWixRuntimeEmbeds( page );
+		await route.fulfill( { contentType: 'text/html', body: widget } );
+	} );
+	const FRAME_STYLE = '<style>body{margin:0}iframe{border:0;display:block;width:600px;height:400px}</style>';
+	const expectPortedFaq = async ( page: Page ) => {
 		expect( await page.locator( '[data-blocks-engine-capture-unported-embed]' ).count() ).toBe( 0 );
-		const faq = page.locator( '#comp-faq > [data-blocks-engine-capture-ported-embed="wix-faq"]' );
+		const faq = page.locator( '[data-blocks-engine-capture-ported-embed="wix-faq"]' );
 		expect( await faq.locator( 'details > summary' ).allTextContents() ).toEqual( [ 'First question?', 'Second question?' ] );
 		expect( await faq.locator( 'details' ).evaluateAll( ( items ) => items.map( ( item ) => ( item as HTMLDetailsElement ).open ) ) ).toEqual( [ true, false ] );
-		const answers = await faq.locator( 'details > div' ).evaluateAll( ( items ) => items.map( ( item ) => item.innerHTML ) );
-		expect( answers ).toEqual( [
+		expect( await faq.locator( 'details > div' ).evaluateAll( ( items ) => items.map( ( item ) => item.innerHTML ) ) ).toEqual( [
 			'<p>An answer with <strong>bold text</strong> and <a href="https://example.test/more">a link</a>.</p>',
 			'<p>Hidden answer kept as text.</p><ul><li>One</li><li>Two</li></ul>',
 		] );
 		const html = await page.content();
 		expect( html ).not.toContain( 'instance=' );
 		expect( html ).not.toContain( '<iframe' );
+	};
+
+	it( 'keeps the questions a Wix FAQ widget frame renders after its own query', async ({ newPage }) => {
+		const page = await newPage();
+		await routeFaqApp( page );
+		await page.setContent( `${ FRAME_STYLE }<div id="comp-faq"><iframe title="Wix FAQ" src="${ faqFrame() }"></iframe></div>` );
+		await portWixRuntimeEmbeds( page );
+		await expectPortedFaq( page );
+		expect( await page.locator( '#comp-faq > [data-blocks-engine-capture-ported-embed="wix-faq"]' ).count() ).toBe( 1 );
 	}, 30_000 );
 
-	it( 'leaves the note when a Wix FAQ widget frame never renders its questions', async ({ newPage }) => {
+	it( 'carries only validated data out of a FAQ frame that tampers with its own DOM, under Trusted Types', async ({ newPage }) => {
 		const page = await newPage();
-		await page.route( 'https://faq-app.example.test/**', ( route ) => route.fulfill( { contentType: 'text/html', body: '<div id="root"></div>' } ) );
-		await page.setContent( `<style>iframe{border:0;display:block;width:600px;height:400px}</style><iframe title="Wix FAQ" src="${ FAQ_WIDGET }"></iframe>` );
-		await portWixRuntimeEmbeds( page, { faqRenderMilliseconds: 300 } );
-		expect( await page.locator( '[data-blocks-engine-capture-unported-embed="wix"]' ).textContent() ).toBe( wixEmbedNote( 'Wix FAQ' ) );
+		await routeFaqApp( page );
+		await page.setContent( `<meta http-equiv="Content-Security-Policy" content="require-trusted-types-for 'script'">${ FRAME_STYLE }<iframe title="Wix FAQ" src="${ faqFrame( 'tamper' ) }"></iframe>` );
+		await portWixRuntimeEmbeds( page );
+		await expectPortedFaq( page );
+		expect( await page.locator( 'img' ).count() ).toBe( 0 );
+		expect( await page.evaluate( () => ( window as unknown as { pwned?: number } ).pwned ) ).toBeUndefined();
+	}, 30_000 );
+
+	it( 'reads a FAQ frame that navigated while it was awaited', async ({ newPage }) => {
+		const page = await newPage();
+		await routeFaqApp( page );
+		await page.setContent( `${ FRAME_STYLE }<iframe title="Wix FAQ" src="${ faqFrame( 'navigate' ) }"></iframe>` );
+		await portWixRuntimeEmbeds( page, { faqRenderMilliseconds: 4_000 } );
+		await expectPortedFaq( page );
+	}, 30_000 );
+
+	it( 'ports the frame Wix remounts while the first one is awaited, and leaves no token behind', async ({ newPage }) => {
+		const page = await newPage();
+		await routeFaqApp( page );
+		// The first frame never renders; the viewer replaces it with a working one meanwhile.
+		await page.setContent( `${ FRAME_STYLE }<div id="comp-faq"><iframe title="Wix FAQ" src="${ faqFrame( 'never' ) }"></iframe></div>` );
+		await page.evaluate( ( src ) => setTimeout( () => {
+			const next = document.createElement( 'iframe' );
+			next.title = 'Wix FAQ';
+			next.src = src;
+			document.querySelector( '#comp-faq iframe' )!.replaceWith( next );
+		}, 300 ), faqFrame() );
+		await portWixRuntimeEmbeds( page, { faqRenderMilliseconds: 4_000 } );
+		await expectPortedFaq( page );
+		// A frame mounted after the port is sealed too, before any serialization.
+		await page.evaluate( ( src ) => { const late = document.createElement( 'iframe' ); late.title = 'Wix FAQ'; late.src = src; document.body.append( late ); }, faqFrame() );
+		await expect.poll( () => page.locator( '[data-blocks-engine-capture-unported-embed="wix"]' ).count() ).toBe( 1 );
+		expect( await page.content() ).not.toContain( 'instance=' );
+	}, 30_000 );
+
+	it( 'removes FAQ frames that never show without spending the wait on them', async ({ newPage }) => {
+		const page = await newPage();
+		await routeFaqApp( page );
+		await page.setContent( `${ FRAME_STYLE }<div style="display:none"><iframe title="Wix FAQ" src="${ faqFrame( 'never' ) }"></iframe></div>
+			<iframe title="Wix FAQ" style="height:0" src="${ faqFrame( 'never' ) }"></iframe>` );
+		const startedAt = Date.now();
+		await portWixRuntimeEmbeds( page, { faqRenderMilliseconds: 5_000 } );
+		expect( Date.now() - startedAt ).toBeLessThan( 2_000 );
+		expect( await page.locator( 'iframe, [data-blocks-engine-capture-unported-embed], [data-blocks-engine-capture-ported-embed]' ).count() ).toBe( 0 );
+	}, 30_000 );
+
+	it( 'ports a FAQ frame Wix reveals once loaded, but not one that stays hidden', async ({ newPage }) => {
+		const page = await newPage();
+		await routeFaqApp( page );
+		// Wix keeps an app frame visibility:hidden until it has loaded, then shows it.
+		await page.setContent( `${ FRAME_STYLE }<iframe title="Wix FAQ" style="visibility:hidden" src="${ faqFrame() }"></iframe>` );
+		await page.evaluate( () => setTimeout( () => { document.querySelector< HTMLElement >( 'iframe' )!.style.visibility = 'visible'; }, 1_000 ) );
+		await portWixRuntimeEmbeds( page, { faqRenderMilliseconds: 4_000 } );
+		await expectPortedFaq( page );
+
+		await page.setContent( `${ FRAME_STYLE }<iframe title="Wix FAQ" style="visibility:hidden" src="${ faqFrame() }"></iframe>` );
+		await portWixRuntimeEmbeds( page, { faqRenderMilliseconds: 1_500 } );
+		expect( await page.locator( 'iframe, details, [data-blocks-engine-capture-unported-embed], [data-blocks-engine-capture-ported-embed]' ).count() ).toBe( 0 );
+	}, 30_000 );
+
+	it( 'leaves the note rather than empty or partial answers', async ({ newPage }) => {
+		const page = await newPage();
+		await routeFaqApp( page );
+		for ( const variant of [ 'never', 'missing-panel', 'tabs' ] ) {
+			await page.setContent( `${ FRAME_STYLE }<iframe title="Wix FAQ" src="${ faqFrame( variant ) }"></iframe>` );
+			await portWixRuntimeEmbeds( page, { faqRenderMilliseconds: 1_500 } );
+			expect( await page.locator( '[data-blocks-engine-capture-ported-embed], details' ).count(), variant ).toBe( 0 );
+			expect( await page.locator( '[data-blocks-engine-capture-unported-embed="wix"]' ).textContent(), variant ).toBe( wixEmbedNote( 'Wix FAQ' ) );
+			expect( await page.content(), variant ).not.toContain( 'instance=' );
+		}
 	}, 30_000 );
 } );
