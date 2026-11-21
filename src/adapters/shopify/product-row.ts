@@ -2,7 +2,7 @@ import type { ProductRow, ProductVariant } from '../../lib/product-row.js';
 
 const decimal = (value: unknown): value is string => typeof value === 'string' && /^\d+(?:\.\d{1,2})?$/.test(value) && Number.isFinite(Number(value));
 /** Shopify handles may be Unicode; reject only what cannot be one path segment. */
-const safeHandle = (value: unknown): value is string => typeof value === 'string' && value.trim() === value && value !== '' && value !== '.' && value !== '..' && !/[\s\p{C}/\\?#%]/u.test(value);
+export const safeHandle = (value: unknown): value is string => typeof value === 'string' && value.trim() === value && value !== '' && value !== '.' && value !== '..' && !/[\s\p{C}/\\?#%]/u.test(value);
 const token = (value: string) => value.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
 /** Fail closed rather than inventing a slug, price, availability or option identity. */

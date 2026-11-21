@@ -15,6 +15,7 @@ it('exports fixture catalog rows and materializes catalog-only images while reus
 	mkdirSync('.tmp-test', { recursive: true });
 	const directory = mkdtempSync(join(process.cwd(), '.tmp-test/catalog-'));
 	const source = 'https://example.com/';
+	const unicodeHandle = 'miniestufа-electrica-portatil-redondo'; // Cyrillic а.
 	const requests: string[] = [];
 	const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><rect width="20" height="20" fill="red"/></svg>';
 	vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
@@ -28,8 +29,10 @@ it('exports fixture catalog rows and materializes catalog-only images while reus
 		for (const folder of ['html', 'screenshots', 'resources']) mkdirSync(join(directory, folder));
 		writeFileSync(join(directory, 'html/home.html'), '<!doctype html><html><head><title>Shop</title></head><body><img src="https://example.com/shared.svg"></body></html>');
 		writeFileSync(join(directory, 'html/coffee.html'), '<!doctype html><html><head><title>Coffee</title></head><body>Coffee</body></html>');
+		writeFileSync(join(directory, 'html/heater.html'), '<!doctype html><html><head><title>Heater</title></head><body>Heater</body></html>');
 		writeFileSync(join(directory, 'screenshots/manifest.json'), JSON.stringify({ version: 1, entries: {
 			[source]: { html: 'html/home.html' }, [`${source}products/coffee`]: { html: 'html/coffee.html' },
+			[`${source}products/${unicodeHandle}`]: { html: 'html/heater.html' },
 		} }));
 		const governors = new SourceRequestGovernors();
 		const result = await enumerateShopifyProducts(source, { governors });
@@ -39,7 +42,9 @@ it('exports fixture catalog rows and materializes catalog-only images while reus
 		await sourceRequestContext.run(governors, () => downloadCaptureSectionMedia(directory, [source], undefined, undefined, result.entries.flatMap(entry => entry.product?.images?.map(image => image.src) ?? [])));
 		exportWebsiteCapture({ outputDir: directory, sourceUrl: source, platform: 'shopify', summary: {}, failures: [], structuredContent: { source: shopifyStructuredContent, entries: result.entries } });
 		const content = JSON.parse(readFileSync(join(directory, 'website/content-index.json'), 'utf8'));
-		expect(content.products).toHaveLength(3);
+		expect(content.products).toHaveLength(4);
+		expect(content.products).toContainEqual(expect.objectContaining({ slug: unicodeHandle }));
+		expect(content.posts).toContainEqual(expect.objectContaining({ slug: unicodeHandle, kind: 'page' }));
 		expect(content.products[0]).toMatchObject({ name: 'Coffee', slug: 'coffee', description: '<p>Roasted</p>', category: 'Coffee', categories: ['Favorites'], tags: ['fresh', 'beans'], regular_price: '10.00', sale_price: '8.00', sku: 'BEAN', stock_status: 'instock', source_path: '/products/coffee/index.html' });
 		expect(content.products[0]).not.toHaveProperty('variants');
 		expect(content.products[1]).toMatchObject({ regular_price: '12.00', categories: ['Favorites'], variants: [
