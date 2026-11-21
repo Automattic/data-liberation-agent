@@ -144,6 +144,10 @@ export interface ScreenshotOpts {
 	prioritizePendingRoutes?: ( urls: string[] ) => string[];
 	/** Asked when a route comes up for admission: true leaves it to the caller (template-cluster derivation). */
 	deferRoute?: ( url: string ) => boolean;
+	/** Keep undecided template members outside the pool while seeds/checks run. */
+	pendingRoute?: ( url: string ) => boolean;
+	/** Next outstanding deferral check; undefined when none can currently progress. */
+	waitForPendingRoute?: () => Promise< void > | undefined;
 	/** Group newly discovered links before frontier admission, then rank pending work. */
 	groupLinkedRoutes?: ( urls: string[] ) => Promise< readonly import('../route-aliases.js').CanonicalRouteAlias[] | void >;
 	/**

@@ -18,8 +18,8 @@ import type { TemplateGroup, TemplateIdentity, TemplateStyleNormalization } from
  * checks every pending member's derivation gates. A member that passes is
  * deferred: the browser pass skips it and post-capture derivation produces
  * it. Nothing is deferred until its own document passed, so an unverified
- * cluster, a gated member or a check that is still running when the browser
- * reaches the member takes the ordinary full capture.
+ * cluster or a gated member takes the ordinary full capture. Tail members
+ * wait outside the browser pool until the cluster check has settled.
  */
 export const TEMPLATE_DEFERRAL_LIMITS = {
 	/** One member document fetch, as in template derivation. */
@@ -53,6 +53,8 @@ export interface TemplateClusterDeferralInput {
 export class TemplateClusterDeferral {
 	private readonly captured = new Map< string, string >();
 	private readonly started = new Set< string >();
+	private readonly settled = new Set< string >();
+	private readonly activeChecks = new Set< Promise< void > >();
 	private readonly deferred = new Set< string >();
 	private readonly documents = new Map< string, Promise< MemberDocument > >();
 	private readonly checks: Promise< void >[] = [];
@@ -77,15 +79,35 @@ export class TemplateClusterDeferral {
 			const verifier = templateVerificationMember( group.members, group.representative );
 			if ( ! verifier || ! this.captured.has( normalizedUrl( group.representative ) ) || ! this.captured.has( normalizedUrl( verifier ) ) ) continue;
 			this.started.add( group.representative );
-			this.checks.push( this.check( group, verifier ).catch( error => {
+			const check = this.check( group, verifier ).catch( error => {
 				process.stderr.write( `[template-clusters] deferral check for ${ group.representative } failed: ${ error instanceof Error ? error.message : String( error ) }\n` );
-			} ) );
+			} ).finally( () => {
+				this.settled.add( group.representative );
+				this.activeChecks.delete( check );
+			} );
+			this.activeChecks.add( check );
+			this.checks.push( check );
 		}
 	}
 
 	/** Whether the browser pass skips `url` for post-capture derivation. */
 	defers( url: string ): boolean {
 		return this.deferred.has( normalizedUrl( url ) );
+	}
+
+	/** Tail members wait for their seeds and the resulting verification check. */
+	pending( url: string ): boolean {
+		const key = normalizedUrl( url );
+		if ( this.captured.has( key ) ) return false;
+		return this.groups().some( group => group.size >= 2 && ! this.settled.has( group.representative )
+			&& normalizedUrl( group.representative ) !== key
+			&& normalizedUrl( templateVerificationMember( group.members, group.representative ) ?? group.representative ) !== key
+			&& group.members.some( member => normalizedUrl( member ) === key ) );
+	}
+
+	/** No promise when seeds failed to capture: callers may fall back to browser capture once idle. */
+	waitForCheck(): Promise< void > | undefined {
+		return this.activeChecks.size ? Promise.race( this.activeChecks ) : undefined;
 	}
 
 	/** A member's slot document, memoized: post-capture derivation reuses the check's document. */

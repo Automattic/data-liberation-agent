@@ -2139,8 +2139,24 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		const running = new Set< Promise<void> >();
 		const runningKinds = new Map< Promise<void>, RouteKind >();
 		const timer = memoryAdmission ? setInterval( admission.sample, 100 ) : undefined;
+		let waitingForDeferral: Promise< void > | undefined;
 		const budgetAdmits = (): boolean => {
-			while ( cursor < urls.length && ( reusedRoutes.has( urls[ cursor ]! ) || deferred( urls[ cursor ]! ) || opts.governors?.forOrigin(urls[cursor]!).blockedClient ) ) cursor++;
+			waitingForDeferral = opts.waitForPendingRoute?.();
+			// Preserve pending order, but let unrelated work fill slots while a
+			// cluster waits for its verifier. Failed/missing seeds fall back once idle.
+			let candidate = -1;
+			for ( let index = cursor; index < urls.length; index++ ) {
+				const url = urls[ index ]!;
+				if ( reusedRoutes.has( url ) || deferred( url ) || opts.governors?.forOrigin( url ).blockedClient ) {
+					urls.splice( cursor++, 0, urls.splice( index, 1 )[ 0 ]! );
+					continue;
+				}
+				if ( ( running.size || waitingForDeferral ) && opts.pendingRoute?.( url ) ) continue;
+				candidate = index;
+				break;
+			}
+			if ( candidate < 0 ) return false;
+			if ( candidate > cursor ) urls.splice( cursor, 0, urls.splice( candidate, 1 )[ 0 ]! );
 			return cursor < urls.length && ! routeDeadlines.stalled
 				&& ( ! entryFirst || cursor === 0 || entrypointSettled )
 				&& ( browserRestartEvery <= 0 || urlsSinceRestart < browserRestartEvery )
@@ -2186,10 +2202,12 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					// Observe fatal rejection before browser cleanup.
 					void slot.then( () => { if ( url === urls[ 0 ] ) entrypointSettled = true; running.delete( slot ); runningKinds.delete( slot ); finished.push( url ); }, () => {} );
 				}
-				if ( ! running.size ) break;
-				if ( ! routeBudget ) await Promise.race( running );
+				const progress = new Set( running );
+				if ( waitingForDeferral && cursor < urls.length && ! routeBudget?.closed() && ! routeDeadlines.stalled ) progress.add( waitingForDeferral );
+				if ( ! progress.size ) break;
+				if ( ! routeBudget ) await Promise.race( progress );
 				else {
-					await routeBudget.wait( running );
+					await routeBudget.wait( progress );
 					if ( await routeBudget.abandonIfDue( running, () => browser.close().catch( orElse( undefined ) ) ) ) break;
 				}
 			}

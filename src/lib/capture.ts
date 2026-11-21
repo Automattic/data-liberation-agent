@@ -758,7 +758,11 @@ async function runCaptureWebsite(
 			assetQueue.enqueueRoute( url, documents, stored );
 			deferral?.routeCaptured( url, documents[ 0 ] );
 		},
-		...( deferral ? { deferRoute: ( url: string ) => deferral.defers( url ) } : {} ),
+		...( deferral ? {
+			deferRoute: ( url: string ) => deferral.defers( url ),
+			pendingRoute: ( url: string ) => deferral.pending( url ),
+			waitForPendingRoute: () => deferral.waitForCheck(),
+		} : {} ),
 	} );
 	await assetQueue.drain();
 	process.stderr.write(
