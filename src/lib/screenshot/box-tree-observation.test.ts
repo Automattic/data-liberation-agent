@@ -68,6 +68,41 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('records the used SVG paint of artwork
 	}
 });
 
+// One Chromium pass (~1 second). Normalize only the snapshot: source scripts
+// may place flow content outside body even though serialized HTML cannot.
+it.skipIf(process.env.SKIP_BROWSER_TESTS)('binds a snapshot with runtime elements before head and around body', async () => {
+	const browser = await chromium.launch({ headless: true });
+	try {
+		const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+		await page.setContent('<!doctype html><html><head><title>Route</title></head><body><main>Copy</main></body></html>');
+		await page.evaluate(() => {
+			const element = (id: string) => { const div = document.createElement('div'); div.id = id; return div; };
+			document.documentElement.insertBefore(element('before-head-1'), document.head);
+			document.documentElement.insertBefore(element('before-head-2'), document.head);
+			document.head.append(element('inside-head'));
+			document.documentElement.insertBefore(element('before-body'), document.body);
+			document.documentElement.append(element('after-body-1'), element('after-body-2'));
+		});
+		await stampNodeIds(page);
+		const source = await page.evaluate(() => document.documentElement.outerHTML);
+		const headId = await page.locator('head').getAttribute('data-blocks-engine-node-id');
+		let observation: BoxTreeObservation | undefined;
+		const html = await capturePageHtml(page, [], undefined, observed => { observation = observed; });
+		expect(observation).toHaveProperty('nodes');
+		expect(html).toContain(`<head data-blocks-engine-node-id="${headId}">`);
+		expect(await page.evaluate(() => document.documentElement.outerHTML)).toBe(source);
+		const nodes = observation && 'nodes' in observation ? observation.nodes : {};
+		const tree = await captureBoxTree(page, html, { mobile: { width: 390, height: 844 } }, { name: 'mobile', nodes });
+		expect(tree).toBeDefined();
+		expect(bindBoxTree(html, tree)).toEqual(tree);
+		await page.setContent(html);
+		expect(await page.locator('html > *').evaluateAll(elements => elements.map(element => element.localName))).toEqual(['head', 'body']);
+		expect(await page.locator('body > *').evaluateAll(elements => elements.map(element => element.id || element.localName))).toEqual(['before-head-1', 'before-head-2', 'inside-head', 'before-body', 'main', 'after-body-1', 'after-body-2']);
+	} finally {
+		await browser.close();
+	}
+});
+
 it('names the first node at which saved bytes and the observed tree disagree', () => {
 	const tree = { schema: 'blocks-engine/box-tree/v2' as const, viewports: {}, nodes: {
 		n0: { children: ['n1', 'n2'], viewports: {} }, n1: { children: [], viewports: {} }, n2: { children: ['n3', 'n4'], viewports: {} }, n3: { children: [], viewports: {} }, n4: { children: [], viewports: {} },

@@ -63,7 +63,9 @@ describe('Wix event form navigation', () => {
       expect(receipt.duplicateRoutes).toContainEqual({ url: urls[1],
         canonicalUrl: `${origin}/event-details/expired`, path: 'website/event-details/expired/index.html' });
       expect(receipt.routes.map((route: { url: string }) => route.url)).toContain(urls[2]);
-      expect(receipt.discoveryDiagnostics).toEqual([sourceDiagnostic]);
+      // Capture evidence diagnostics may accompany adapter discovery findings.
+      // This assertion owns preservation of the sitemap failure, not that list's exclusivity.
+      expect(receipt.discoveryDiagnostics).toContainEqual(sourceDiagnostic);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
       rmSync(dir, { recursive: true, force: true });

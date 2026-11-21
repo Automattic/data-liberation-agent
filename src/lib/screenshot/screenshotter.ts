@@ -579,8 +579,20 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				const body = snapshot.querySelector( 'body' );
 				if ( head && body ) {
 					const headTags = new Set( 'base basefont bgsound link meta title noscript noframes style script template'.split( ' ' ) );
-					const misplaced = Array.from( head.children ).filter( element => ! headTags.has( element.localName ) );
-					body.prepend( ...misplaced );
+					// Scripts can also insert siblings before <head> (Squarespace)
+					// or around <body>. A parser would imply an unstamped head and
+					// discard the real head's attributes. Keep the stamped containers,
+					// placing flow content in body in its original document order.
+					const beforeBody: Element[] = [];
+					const afterBody: Element[] = [];
+					let seenBody = false;
+					for ( const child of Array.from( snapshot.children ) ) {
+						if ( child === body ) seenBody = true;
+						else if ( child === head ) beforeBody.push( ...Array.from( head.children ).filter( element => ! headTags.has( element.localName ) ) );
+						else ( seenBody ? afterBody : beforeBody ).push( child );
+					}
+					body.prepend( ...beforeBody );
+					body.append( ...afterBody );
 				}
 				const observe = new Function('return (' + boxTreeSource + ')')() as typeof observeBoxTree;
 				const checkedObservation = (): import('./box-tree.js').BoxTreeObservation => {
