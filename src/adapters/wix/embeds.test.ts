@@ -1,6 +1,8 @@
 import { load } from 'cheerio';
 import { existsSync } from 'node:fs';
-import { chromium, type Page } from 'playwright';
+import { chromium, type Frame, type Page } from 'playwright';
+import { EventEmitter } from 'node:events';
+import { setImmediate as tick } from 'node:timers/promises';
 import { describe, expect } from 'vitest';
 import { it } from '../../../test/browser.js';
 import { capture } from './capture.js';
@@ -21,6 +23,7 @@ import {
 	wixFaqItems,
 	sealWixAppFrameHtml,
 	trackWixFaqQueries,
+	wixFaqQueryTotal,
 } from './embeds.js';
 
 const MAP_WRAPPER =
@@ -91,6 +94,16 @@ describe( 'wixFaqItems', () => {
 		expect( wixFaqItems( item( [ { tag: 'p', children: 'not a list' } ] ) ) ).toBe( 'unsupported' );
 		const deep = Array.from( { length: 40 } ).reduce< unknown >( ( child ) => ( { tag: 'div', children: [ child ] } ), { text: 'deep' } );
 		expect( wixFaqItems( item( [ deep ] ) ) ).toBe( 'unsupported' );
+	} );
+
+	it( 'keeps a link\'s address only when every field decodes cleanly and none carries a credential', () => {
+		const link = ( href: string ) => wixFaqItems( item( [ { tag: 'a', href, children: [ { text: 'App link' } ] } ] ) );
+		const textOnly = [ { question: 'Why?', open: true, answer: [ { text: 'App link' } ] } ];
+		// A malformed field elsewhere in the address does not hide an encoded key.
+		expect( link( `https://widget.example.test/?%69nstance=${ FAQ_INSTANCE }&note=%FF` ) ).toEqual( textOnly );
+		expect( link( 'https://widget.example.test/?note=%FF' ) ).toEqual( textOnly );
+		expect( link( 'https://widget.example.test/?instance=opaque' ) ).toEqual( textOnly );
+		expect( link( 'https://example.test/help?topic=a%20b#part' ) ).toEqual( [ { question: 'Why?', open: true, answer: [ { tag: 'a', href: 'https://example.test/help?topic=a%20b#part', children: [ { text: 'App link' } ] } ] } ] );
 	} );
 } );
 
@@ -182,6 +195,45 @@ describe( 'sealWixAppFrameHtml', () => {
 		expect( sealWixAppFrameHtml( page ) ).toBe( page );
 		expect( sealWixAppFrameHtml( '<p>no frames</p>' ) ).toBe( '<p>no frames</p>' );
 	} );
+
+	it( 'finds an encoded key next to a malformed field', () => {
+		const sealed = sealWixAppFrameHtml( `<iframe src="https://widget.example.test/?%69nstance=${ FAQ_INSTANCE }&amp;note=%FF"></iframe><p>after</p>` );
+		expect( sealed ).not.toContain( FAQ_INSTANCE );
+		expect( sealed ).toContain( '<p>after</p>' );
+	} );
+
+	it( 'lets the address the browser resolved decide whether a public frame is an app frame', () => {
+		const resolved = ( src: string, recorded: string ) => `<iframe src="${ src }" data-blocks-engine-capture-visual-iframe-src="${ recorded }"></iframe>`;
+		const publicFrame = resolved( '/embed?instance=public-value', 'https://public.example.test/embed?instance=public-value' );
+		expect( sealWixAppFrameHtml( publicFrame ) ).toBe( publicFrame );
+		expect( sealWixAppFrameHtml( resolved( '/render/w?instance=unsigned-value', 'https://app.wixapps.net/render/w?instance=unsigned-value' ) ) ).not.toContain( 'unsigned-value' );
+		expect( sealWixAppFrameHtml( resolved( `/w?instance=${ FAQ_INSTANCE }`, 'https://public.example.test/w' ) ) ).not.toContain( FAQ_INSTANCE );
+	} );
+
+	it( 'keeps replay markup nested past the sealing depth, or malformed, when it holds no frame credential', () => {
+		const publicFrame = '<iframe src="https://widgets.example.test/render?instance=42"></iframe>';
+		for ( const inside of [ '<p>Deep menu</p>', publicFrame ] ) {
+			let markup = inside;
+			for ( let level = 0; level < 12; level++ ) markup = `<button data-blocks-engine-capture-dialog-panel-state="${ escape( JSON.stringify( { html: `<div>${ markup }</div>` } ) ) }">Open</button>`;
+			expect( sealWixAppFrameHtml( `<nav>${ markup }</nav>` ), inside ).toBe( `<nav>${ markup }</nav>` );
+		}
+		const malformed = ( frameMarkup: string ) => `<div data-blocks-engine-capture-existing-panel="${ escape( `{${ frameMarkup }` ) }"></div>`;
+		expect( sealWixAppFrameHtml( malformed( publicFrame ) ) ).toBe( malformed( publicFrame ) );
+		expect( sealWixAppFrameHtml( malformed( `<iframe src="${ widget }"></iframe>` ) ) ).not.toContain( '7UqG_' );
+	} );
+
+	it( 'leaves replay JSON nested too deep to walk as it is', () => {
+		const nest = 10_000;
+		const page = `<button data-blocks-engine-capture-dialog-panel-state="${ '['.repeat( nest ) }0${ ']'.repeat( nest ) }">Open</button>`;
+		expect( capture.canonicalizeHtml!( page ) ).toBe( page );
+	} );
+
+	it( 'reads a large owner document once, not once per fragment', () => {
+		const owner = `<!doctype html><html><head><base href="https://public.example.test/"></head><body>${ '<section><p>Ordinary Wix capture.</p></section>'.repeat( 16_000 ) }</body></html>`;
+		const startedAt = performance.now();
+		for ( let index = 0; index < 200; index++ ) expect( capture.canonicalizeHtml!( `<p>Ordinary panel ${ index }</p>`, owner ) ).toBe( `<p>Ordinary panel ${ index }</p>` );
+		expect( performance.now() - startedAt ).toBeLessThan( 1_000 );
+	} );
 } );
 
 describe( 'wixAppMapView', () => {
@@ -272,6 +324,87 @@ async function wixEmbedPage( page: Page, options: { mapHasLocation: boolean } ):
 	);
 	await page.goto( 'https://www.example-hoa.test/contact-us' );
 }
+
+describe( 'trackWixFaqQueries', () => {
+	const ENDPOINT = 'https://faq-app.example.test/_api/faq-server/v2/question-entries/query';
+	const tracked = () => {
+		const page = new EventEmitter() as EventEmitter & { mainFrame: () => Frame };
+		const frame = { isDetached: () => false } as Frame;
+		page.mainFrame = () => ( { isDetached: () => false } as Frame );
+		const states = trackWixFaqQueries( page as unknown as Page );
+		const send = ( cursor?: string ) => {
+			const request = { url: () => ENDPOINT, frame: () => frame, postData: () => JSON.stringify( { query: cursor ? { cursorPaging: { cursor } } : {} } ) };
+			page.emit( 'request', request );
+			return request;
+		};
+		const answer = ( request: ReturnType< typeof send >, entries: number, { next, count, status = 200 }: { next?: string; count?: number; status?: number } = {} ) => page.emit( 'response', {
+			ok: () => status < 300, url: request.url, request: () => request, frame: request.frame, headers: () => ( {} ),
+			json: async () => ( { questionEntries: Array.from( { length: entries }, ( _entry, index ) => ( { id: index } ) ), pagingMetadata: { hasNext: Boolean( next ), ...( next ? { cursors: { next } } : {} ), ...( count === undefined ? {} : { count } ) } } ),
+		} );
+		const fail = ( request: ReturnType< typeof send > ) => page.emit( 'requestfailed', request );
+		const total = async () => {
+			await tick();
+			return states.get( frame )?.total ?? null;
+		};
+		return { send, answer, fail, total, state: () => states.get( frame ) };
+	};
+
+	it( 'totals a clean cursor chain', async () => {
+		const { send, answer, total, state } = tracked();
+		answer( send(), 2, { next: 'page-2' } );
+		await tick();
+		answer( send( 'page-2' ), 1 );
+		expect( await total() ).toBe( 3 );
+		expect( wixFaqQueryTotal( state() ) ).toBe( 3 );
+	} );
+
+	it( 'drops the total when a newer chain starts paging', async () => {
+		const { send, answer, total } = tracked();
+		answer( send(), 1 );
+		expect( await total() ).toBe( 1 );
+		answer( send(), 1, { next: 'refresh-page-2' } );
+		expect( await total() ).toBeNull();
+	} );
+
+	it( 'drops the total for a cursor handed out twice', async () => {
+		const { send, answer, total } = tracked();
+		answer( send(), 1, { next: 'shared' } );
+		await tick();
+		answer( send(), 1, { next: 'shared' } );
+		await tick();
+		answer( send( 'shared' ), 1 );
+		expect( await total() ).toBeNull();
+	} );
+
+	it( 'drops the total while another query is out, and for answers out of order', async () => {
+		const { send, answer, total, state } = tracked();
+		const first = send();
+		const second = send();
+		answer( second, 2 );
+		expect( await total() ).toBeNull();
+		answer( first, 5 );
+		expect( await total() ).toBeNull();
+		expect( wixFaqQueryTotal( state() ) ).toBeNull();
+	} );
+
+	it( 'drops the total for a page whose count disagrees with its entries', async () => {
+		const { send, answer, total } = tracked();
+		answer( send(), 2, { count: 3 } );
+		expect( await total() ).toBeNull();
+	} );
+
+	it( 'drops the total after a failed or unsuccessful query', async () => {
+		const { send, answer, fail, total } = tracked();
+		answer( send(), 2 );
+		expect( await total() ).toBe( 2 );
+		fail( send() );
+		expect( await total() ).toBeNull();
+		answer( send(), 2 );
+		expect( await total() ).toBe( 2 );
+		answer( send(), 2, { status: 500 } );
+		expect( await total() ).toBeNull();
+	} );
+} );
 
 describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime embeds at serialization', () => {
 	it( 'points a Wix map at a Google Maps embed of the marker the wrapper drew', async ({ newPage }) => {
@@ -457,7 +590,8 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime embed
 	const faqFrame = ( variant = 'plain' ) => `${ FAQ_WIDGET }&variant=${ variant }`;
 	const TOKEN_LINK_ENTRIES = [ { question: 'First question?', answer: `<p>See <a href="https://app.example.test/widget?instance=${ INSTANCE }">the app page</a>.</p>` }, FAQ_ENTRIES[ 1 ] ];
 	let errorServed = false;
-	const routeFaqApp = async ( page: Page ) => page.route( 'https://faq-app.example.test/**', async ( route ) => {
+	// The adapter follows the app's queries from before navigation (its init script); so do these pages.
+	const routeFaqApp = async ( page: Page ) => trackWixFaqQueries( page ) && page.route( 'https://faq-app.example.test/**', async ( route ) => {
 		const url = new URL( route.request().url() );
 		if ( route.request().method() === 'POST' ) {
 			// Wix's answer shape: one page of questions and whether more follow, by cursor.
@@ -761,6 +895,25 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime embed
 		expect( html ).toContain( wixEmbedNote( 'PDF File Viewer' ) );
 		// Public embeds are kept as they are.
 		expect( html ).toContain( `src="${ HTML_EMBED }"` );
+	}, 30_000 );
+
+	it( 'keeps the FAQ deadline when a map mounts late and its embed never loads', async ({ newPage }) => {
+		const page = await newPage();
+		await routeFaqApp( page );
+		// The Google Maps embed is never answered, so pointing a map at it waits out its own load bound.
+		await page.route( /events\.wixapps\.net/, ( route ) => route.fulfill( { contentType: 'text/html', body: '<p>map</p>' } ) );
+		await page.route( /maps\.google\.com/, () => undefined );
+		await page.setContent( `${ FRAME_STYLE }<iframe title="Wix FAQ" src="${ faqFrame( 'never' ) }"></iframe><div id="map"></div>` );
+		await page.evaluate( ( map ) => setTimeout( () => {
+			const element = document.createElement( 'iframe' );
+			element.src = map;
+			document.getElementById( 'map' )!.append( element );
+		}, 700 ), APP_MAP );
+		const startedAt = Date.now();
+		await portWixRuntimeEmbeds( page, { faqRenderMilliseconds: 1_000 } );
+		expect( Date.now() - startedAt ).toBeLessThan( 2_500 );
+		expect( await page.locator( '#map > iframe' ).getAttribute( 'data-blocks-engine-capture-ported-embed' ) ).toBe( 'wix-google-map' );
+		expect( await page.locator( '[data-blocks-engine-capture-unported-embed="wix"]' ).textContent() ).toBe( wixEmbedNote( 'Wix FAQ' ) );
 	}, 30_000 );
 
 	it( 'leaves the note rather than empty or partial answers', async ({ newPage }) => {

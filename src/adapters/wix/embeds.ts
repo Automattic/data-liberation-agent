@@ -67,7 +67,7 @@ export const WIX_FAQ_APP_DEF_ID = '14c92d28-031e-7910-c9a8-a670011e062d';
 /** Elements an answer keeps; anything else is unwrapped to its children, or dropped with them. */
 const FAQ_KEPT_TAGS = new Set( [ 'p', 'br', 'strong', 'b', 'em', 'i', 'u', 's', 'ul', 'ol', 'li', 'a', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'code', 'pre' ] );
 const FAQ_DROPPED_TAGS = new Set( [ 'script', 'style', 'template', 'svg', 'button', 'iframe', 'noscript', 'object', 'embed' ] );
-const FAQ_LINK_PROTOCOLS = new Set( [ 'http:', 'https:', 'mailto:', 'tel:' ] );
+const FAQ_LINK_PROTOCOLS = new Set( [ 'http:', 'https:' ] );
 
 /** A validated answer node: text, or an allowlisted element with an optional absolute link. */
 export type WixFaqNode = { text: string } | { tag: string; href?: string; children: WixFaqNode[] };
@@ -296,8 +296,9 @@ function readWixMapView(): { lat?: number; lng?: number; zoom?: number; link?: s
 	return link ? { link } : null;
 }
 
-async function wixMapView( frame: Frame ): Promise< MapView | null > {
-	const deadline = Date.now() + MAP_LOCATION_WAIT_MILLISECONDS;
+/** `until` caps the wait at an absolute time, so a caller's own deadline holds. */
+async function wixMapView( frame: Frame, until = Infinity ): Promise< MapView | null > {
+	const deadline = Math.min( Date.now() + MAP_LOCATION_WAIT_MILLISECONDS, until );
 	for ( ;; ) {
 		const read = await frame.evaluate( readWixMapView ).catch( () => null );
 		const view = read?.link ? googleMapsViewFromLink( read.link ) : validMapView( read );
@@ -328,10 +329,12 @@ function installWixEmbedNote( frame: Element, args: { note: string; attribute: s
 	frame.replaceWith( note );
 }
 
-async function pointAtGoogleMap( handle: ElementHandle< Element >, embed: string ): Promise< void > {
+async function pointAtGoogleMap( handle: ElementHandle< Element >, embed: string, until = Infinity ): Promise< void > {
+	// Playwright reads a zero timeout as none at all, so a passed deadline waits one millisecond.
+	const timeout = Math.max( 1, Math.min( MAP_EMBED_LOAD_MILLISECONDS, until - Date.now() ) );
 	const loaded = handle
 		.contentFrame()
-		.then( ( frame ) => frame?.waitForURL( ( url ) => url.href === embed, { waitUntil: 'load', timeout: MAP_EMBED_LOAD_MILLISECONDS } ) )
+		.then( ( frame ) => frame?.waitForURL( ( url ) => url.href === embed, { waitUntil: 'load', timeout } ) )
 		.catch( () => undefined );
 	await handle.evaluate(
 		( frame, args ) => {
@@ -432,8 +435,10 @@ function faqLink( href: unknown ): string | undefined {
 	if ( typeof href !== 'string' || href.length > FAQ_LIMITS.href ) return undefined;
 	try {
 		const url = new URL( href );
-		// An answer can link to an app page by its signed address; the link text is kept, the credential is not.
-		return FAQ_LINK_PROTOCOLS.has( url.protocol ) && ! carriesWixAppCredential( url.href, [ url.href ] ) ? url.href : undefined;
+		// An answer can link to an app page by its signed address: only a plain
+		// http(s) address whose every query and fragment field decodes cleanly and
+		// carries no credential keeps its address; otherwise the text stays alone.
+		return FAQ_LINK_PROTOCOLS.has( url.protocol ) && plainLinkAddress( url ) ? url.href : undefined;
 	} catch {
 		return undefined;
 	}
@@ -498,22 +503,30 @@ function frameKey( frame: Element ): number {
 }
 
 /**
- * What a FAQ frame's question queries have established: how many questions
- * the latest complete cursor chain returned (`null` until one completes with
- * a countable total), and the running totals of chains still paging, by the
- * cursor their next page will be asked with.
+ * What a FAQ frame's question queries have established. `total` is the
+ * question count of the latest clean, complete cursor chain, or `null` when
+ * there is none or anything since made it uncertain; `chains` holds the
+ * running totals of chains still paging, by the cursor their next page will
+ * be asked with (`null` once that cursor is ambiguous); `inFlight` the
+ * queries not answered yet. A frame is countable only with a total and
+ * nothing in flight.
  */
 interface FaqQueryState {
 	total: number | null;
-	chains: Map< string, number >;
+	chains: Map< string, number | null >;
+	inFlight: Set< Request >;
+	lastSequence: number;
 }
 interface FaqQueryTracker {
 	frames: Map< Frame, FaqQueryState >;
 	/** Bumped when a frame navigates, so answers to the previous document's queries are ignored. */
 	generations: WeakMap< Frame, number >;
-	requests: WeakMap< Request, number >;
+	requests: WeakMap< Request, { generation: number; sequence: number } >;
+	sequence: number;
 }
 const faqQueryTrackers = new WeakMap< Page, FaqQueryTracker >();
+/** A question page larger than this is not read; the frame then has no total and gets the note. */
+const FAQ_QUERY_BYTES = 2_000_000;
 
 /** The paging cursor a question query asks with (`query.cursorPaging.cursor`), if it continues a chain. */
 function queryCursor( postData: string | null ): string | undefined {
@@ -526,25 +539,46 @@ function queryCursor( postData: string | null ): string | undefined {
 	}
 }
 
+/** The questions a frame's queries counted, when that count is certain and no query is still out. */
+export function wixFaqQueryTotal( state: FaqQueryState | undefined ): number | null {
+	return state && ! state.inFlight.size ? state.total : null;
+}
+
 /**
  * Follow the FAQ app's own completion signal. A question query answers with
  * one page of `questionEntries` and `pagingMetadata` (`hasNext`, and
  * `cursors.next` to ask for the next page with); a chain started without a
- * cursor and followed to `hasNext: false` gives the total. Only successful
- * answers count, and state is per frame document: a frame that navigates or
- * detaches starts over. Installed before navigation (the adapter's
- * `initScript`), so a frame's startup queries are seen; idempotent per page.
+ * cursor and followed to `hasNext: false` gives the total. Anything that
+ * makes the count uncertain clears it, and the frame then gets the note:
+ * a failed or oversized answer, a page whose `count` disagrees with its
+ * entries, a reused cursor, a page from a chain begun before tracking,
+ * answers arriving out of order, or another query still out when a chain
+ * completes. State is per frame document: a frame that navigates or detaches
+ * starts over. Installed before navigation (the adapter's `initScript`), so a
+ * frame's startup queries are seen; idempotent per page.
  */
 export function trackWixFaqQueries( page: Page ): Map< Frame, FaqQueryState > {
 	const existing = faqQueryTrackers.get( page );
 	if ( existing ) return existing.frames;
-	const tracker: FaqQueryTracker = { frames: new Map(), generations: new WeakMap(), requests: new WeakMap() };
+	const tracker: FaqQueryTracker = { frames: new Map(), generations: new WeakMap(), requests: new WeakMap(), sequence: 0 };
 	faqQueryTrackers.set( page, tracker );
 	const isQuery = ( address: string ) => {
 		try {
 			return WIX_FAQ_QUERY_PATH.test( new URL( address ).pathname );
 		} catch {
 			return false;
+		}
+	};
+	const stateOf = ( frame: Frame ) => {
+		let state = tracker.frames.get( frame );
+		if ( ! state ) tracker.frames.set( frame, state = { total: null, chains: new Map(), inFlight: new Set(), lastSequence: 0 } );
+		return state;
+	};
+	const frameOf = ( request: Request ) => {
+		try {
+			return request.frame();
+		} catch {
+			return null; // A service worker request has no frame.
 		}
 	};
 	const forget = ( frame: Frame ) => {
@@ -556,42 +590,59 @@ export function trackWixFaqQueries( page: Page ): Map< Frame, FaqQueryState > {
 	} );
 	page.on( 'framedetached', forget );
 	page.on( 'request', ( request: Request ) => {
-		if ( ! isQuery( request.url() ) ) return;
-		try {
-			tracker.requests.set( request, tracker.generations.get( request.frame() ) ?? 0 );
-		} catch { /* A service worker request has no frame. */ }
+		const frame = isQuery( request.url() ) ? frameOf( request ) : null;
+		if ( ! frame ) return;
+		tracker.requests.set( request, { generation: tracker.generations.get( frame ) ?? 0, sequence: ++tracker.sequence } );
+		stateOf( frame ).inFlight.add( request );
+	} );
+	page.on( 'requestfailed', ( request: Request ) => {
+		const frame = isQuery( request.url() ) ? frameOf( request ) : null;
+		const state = frame ? tracker.frames.get( frame ) : undefined;
+		if ( ! state || ! state.inFlight.delete( request ) ) return;
+		state.total = null;
 	} );
 	page.on( 'response', ( response: Response ) => {
-		if ( ! response.ok() || ! isQuery( response.url() ) ) return;
 		const request = response.request();
-		let frame: Frame;
-		try {
-			frame = response.frame();
-		} catch {
-			return;
-		}
+		const frame = isQuery( response.url() ) ? frameOf( request ) : null;
+		if ( ! frame ) return;
 		// A query sent before tracking began belongs to the document the frame had then.
-		const generation = tracker.requests.get( request ) ?? 0;
+		const { generation, sequence } = tracker.requests.get( request ) ?? { generation: 0, sequence: 0 };
+		const current = () => generation === ( tracker.generations.get( frame ) ?? 0 ) && ! frame.isDetached();
+		if ( ! current() ) return;
 		const cursor = queryCursor( request.postData() );
-		void response.json().then( ( body ) => {
-			if ( generation !== ( tracker.generations.get( frame ) ?? 0 ) || frame.isDetached() ) return;
-			const { questionEntries, pagingMetadata } = ( body ?? {} ) as { questionEntries?: unknown; pagingMetadata?: { hasNext?: unknown; cursors?: { next?: unknown } } };
-			if ( ! Array.isArray( questionEntries ) || typeof pagingMetadata?.hasNext !== 'boolean' ) return;
-			const state = tracker.frames.get( frame ) ?? { total: null, chains: new Map() };
-			tracker.frames.set( frame, state );
+		const size = Number( response.headers()[ 'content-length' ] ?? 0 );
+		const body = response.ok() && ! ( size > FAQ_QUERY_BYTES ) ? response.json().catch( () => null ) : Promise.resolve( null );
+		void body.then( ( answer ) => {
+			if ( ! current() ) return;
+			const state = stateOf( frame );
+			state.inFlight.delete( request );
+			const uncertain = () => {
+				state.total = null;
+				if ( cursor !== undefined && state.chains.has( cursor ) ) state.chains.set( cursor, null );
+			};
+			// Answers arriving out of order (or from before tracking) can't be placed in a chain.
+			if ( sequence <= state.lastSequence ) return uncertain();
+			state.lastSequence = sequence;
+			const { questionEntries, pagingMetadata } = ( answer ?? {} ) as { questionEntries?: unknown; pagingMetadata?: { hasNext?: unknown; count?: unknown; cursors?: { next?: unknown } } };
+			if ( ! Array.isArray( questionEntries ) || typeof pagingMetadata?.hasNext !== 'boolean' ) return uncertain();
+			if ( pagingMetadata.count !== undefined && pagingMetadata.count !== questionEntries.length ) return uncertain();
 			const before = cursor === undefined ? 0 : state.chains.get( cursor );
 			if ( cursor !== undefined ) state.chains.delete( cursor );
-			// A page whose chain began before tracking can't be totalled.
-			if ( before === undefined ) return;
+			if ( before === undefined || before === null ) return uncertain();
 			const sum = before + questionEntries.length;
-			const next = pagingMetadata.cursors?.next;
-			if ( ! pagingMetadata.hasNext ) state.total = sum;
-			else if ( typeof next === 'string' && next ) {
-				state.chains.set( next, sum );
+			if ( pagingMetadata.hasNext ) {
+				// A newer chain is under way: an earlier total no longer stands.
+				state.total = null;
+				const next = pagingMetadata.cursors?.next;
+				if ( typeof next !== 'string' || ! next ) return;
+				// A cursor handed out twice can't say which chain its page belongs to.
+				state.chains.set( next, state.chains.has( next ) ? null : sum );
 				// The app re-queries while on screen; probes it never follows up must not pile up.
 				if ( state.chains.size > 32 ) state.chains.delete( state.chains.keys().next().value! );
+				return;
 			}
-		} ).catch( () => undefined );
+			state.total = state.inFlight.size ? null : sum;
+		} );
 	} );
 	return tracker.frames;
 }
@@ -615,7 +666,7 @@ async function stepWixFaqFrame(
 	const items = wixFaqItems( frame ? await frame.evaluate( readWixFaqFrame ).catch( () => null ) : null );
 	const paints = await handle.evaluate( framePaints ).catch( () => false );
 	if ( items === 'unsupported' ) return { key, paints, state: 'settled' };
-	const total = frame ? queries.get( frame )?.total ?? null : null;
+	const total = frame ? wixFaqQueryTotal( queries.get( frame ) ) : null;
 	if ( ! Array.isArray( items ) || ! paints || total === null || items.length < total ) {
 		seen.delete( key );
 		return { key, paints, state: 'pending' };
@@ -681,20 +732,24 @@ const UNKNOWN_DOCUMENT = 'https://document.invalid/';
 const UNKNOWN_HOST = new URL( UNKNOWN_DOCUMENT ).hostname;
 /** How many nested `srcdoc` or panel replay levels are sealed; anything deeper is removed, not passed through. */
 const SEAL_DEPTH = 8;
+/** How deep a replay attribute's JSON is walked; deeper values are left as they are. */
+const REPLAY_JSON_DEPTH = 64;
 /** How many times a key or value is percent-decoded (`%2569nstance` is `instance` after two). */
 const DECODE_ROUNDS = 4;
-const SEAL_SCAN = /<iframe|capture-dialog-panel-state|capture-existing-panel/i;
+const SEAL_SCAN = /<iframe|srcdoc|capture-dialog-panel-state|capture-existing-panel/i;
+const SIGNED_INSTANCE = /instance\s*=\s*([\w-]+\.[\w-]+)/gi;
 
 const escapeHtml = ( text: string ) => text.replace( /&/g, '&amp;' ).replace( /</g, '&lt;' ).replace( />/g, '&gt;' ).replace( /"/g, '&quot;' );
 
-function decodeRepeatedly( text: string ): string {
+/** Percent-decode up to `DECODE_ROUNDS` times; `null` when a round meets a malformed sequence. */
+function decodeStrictly( text: string ): string | null {
 	let value = text;
 	for ( let round = 0; round < DECODE_ROUNDS; round++ ) {
 		let next: string;
 		try {
 			next = decodeURIComponent( value.replace( /\+/g, ' ' ) );
 		} catch {
-			break;
+			return null;
 		}
 		if ( next === value ) break;
 		value = next;
@@ -702,11 +757,54 @@ function decodeRepeatedly( text: string ): string {
 	return value;
 }
 
+/** Like `decodeStrictly`, but a malformed sequence only stops decoding: each well-formed `%XX` is still read. */
+function decodeLeniently( text: string ): string {
+	let value = text;
+	for ( let round = 0; round < DECODE_ROUNDS; round++ ) {
+		const next = decodeStrictly( value ) ?? value.replace( /%([0-9a-f]{2})/gi, ( sequence, hex: string ) => {
+			const code = parseInt( hex, 16 );
+			return code < 0x80 ? String.fromCharCode( code ) : sequence;
+		} );
+		if ( next === value ) break;
+		value = next;
+	}
+	return value;
+}
+
+/** Each query and fragment field of an address as raw key and value text, split on its own. */
+function addressFields( url: URL ): Array< [ string, string ] > {
+	const fragment = url.hash.slice( 1 );
+	const parts = [ url.search.slice( 1 ), fragment ];
+	if ( fragment.includes( '?' ) ) parts.push( fragment.slice( fragment.indexOf( '?' ) + 1 ) );
+	return parts.flatMap( ( part ) => part.split( '&' ).filter( Boolean ).map( ( pair ): [ string, string ] => {
+		const split = pair.indexOf( '=' );
+		return split < 0 ? [ pair, '' ] : [ pair.slice( 0, split ), pair.slice( split + 1 ) ];
+	} ) );
+}
+
+const signedInstanceIn = ( text: string ) => [ ...text.matchAll( SIGNED_INSTANCE ) ].some( ( match ) => signedWixInstance( match[ 1 ] ) );
+
 /**
- * Whether a frame or link address carries a Wix app credential under any of
- * the bases it could resolve against: a signed `instance` token naming an app
- * anywhere in the decoded address (any key case, any repeat, the fragment
- * included), or any `instance` value on a Wix app host or an unknown one.
+ * Whether an FAQ answer link's address is plain enough to keep: every query
+ * and fragment field decodes cleanly, none is an `instance` key, and none
+ * carries a signed Wix instance token.
+ */
+function plainLinkAddress( url: URL ): boolean {
+	return addressFields( url ).every( ( [ rawKey, rawValue ] ) => {
+		const key = decodeStrictly( rawKey );
+		const value = decodeStrictly( rawValue );
+		if ( key === null || value === null ) return false;
+		return key.trim().toLowerCase() !== 'instance' && ! signedWixInstance( value ) && ! signedInstanceIn( value );
+	} );
+}
+
+/**
+ * Whether a frame address carries a Wix app credential under any of the
+ * bases it could resolve against. Each query and fragment field is decoded
+ * on its own (a malformed field elsewhere does not hide one): an `instance`
+ * key in any case carrying a signed token, a signed token nested in another
+ * field, or any `instance` value on a Wix app host, or on an unknown host
+ * when nothing resolved the address.
  */
 function carriesWixAppCredential( value: string | undefined, bases: readonly string[] ): boolean {
 	if ( ! value?.trim() ) return false;
@@ -717,16 +815,35 @@ function carriesWixAppCredential( value: string | undefined, bases: readonly str
 		} catch {
 			return false;
 		}
-		const decoded = decodeRepeatedly( url.href );
-		for ( const match of decoded.matchAll( /instance\s*=\s*([\w-]+\.[\w-]+)/gi ) ) if ( signedWixInstance( match[ 1 ] ) ) return true;
-		if ( ! WIX_APP_FRAME_HOST.test( url.hostname ) && url.hostname !== UNKNOWN_HOST ) return false;
-		const fragment = url.hash.slice( 1 );
-		const parts = [ url.search.slice( 1 ), fragment, fragment.slice( fragment.indexOf( '?' ) + 1 ) ];
-		return parts.some( ( part ) => part.split( '&' ).some( ( pair ) => {
-			const [ key, ...rest ] = pair.split( '=' );
-			return decodeRepeatedly( key ).trim().toLowerCase() === 'instance' && decodeRepeatedly( rest.join( '=' ) ).trim() !== '';
-		} ) );
+		const wixHost = WIX_APP_FRAME_HOST.test( url.hostname ) || url.hostname === UNKNOWN_HOST;
+		return addressFields( url ).some( ( [ rawKey, rawValue ] ) => {
+			const key = decodeLeniently( rawKey ).trim().toLowerCase();
+			const entry = decodeLeniently( rawValue ).trim();
+			if ( key === 'instance' && entry && ( wixHost || signedWixInstance( entry ) ) ) return true;
+			return signedInstanceIn( entry );
+		} );
 	} );
+}
+
+/**
+ * For markup that is not parsed any further (past the nesting bound, or
+ * malformed replay JSON), whether it holds an app frame credential: entity,
+ * JSON and percent escapes are undone loosely, and a frame next to a signed
+ * instance token, or to an `instance` field on a Wix app host, counts. A
+ * public frame is kept, as it was before sealing.
+ */
+function deepMarkupMayCarryCredential( markup: string ): boolean {
+	let text = markup;
+	for ( let round = 0; round < 64; round++ ) {
+		const next = decodeLeniently( text
+			.replace( /&quot;|&#0*34;|&#x0*22;/gi, '"' ).replace( /&lt;|&#0*60;|&#x0*3c;/gi, '<' ).replace( /&gt;|&#0*62;|&#x0*3e;/gi, '>' ).replace( /&amp;|&#0*38;|&#x0*26;/gi, '&' )
+			.replace( /\\u([0-9a-f]{4})/gi, ( _sequence, hex: string ) => String.fromCharCode( parseInt( hex, 16 ) ) ).replace( /\\(["\\/])/g, '$1' ) );
+		if ( next === text ) break;
+		text = next;
+	}
+	if ( ! /<iframe/i.test( text ) ) return false;
+	if ( signedInstanceIn( text ) ) return true;
+	return [ ...text.matchAll( /\/\/([^\/\s"'<>?#:]+)[^\s"'<>]*/g ) ].some( ( [ address, host ] ) => WIX_APP_FRAME_HOST.test( host.replace( /\.$/, '' ) ) && /[?&#]instance\s*=/i.test( address ) );
 }
 
 /**
@@ -774,9 +891,26 @@ function documentBases( $: cheerio.CheerioAPI, owner: readonly string[] ): strin
  * re-encoded. `ownerDocument` is the page a captured fragment came from.
  */
 export function sealWixAppFrameHtml( html: string, ownerDocument?: string ): string {
-	let owner = [ UNKNOWN_DOCUMENT ];
-	if ( ownerDocument && /<base/i.test( ownerDocument ) ) owner = documentBases( cheerio.load( ownerDocument, { scriptingEnabled: false } ), owner );
-	return sealHtml( html, owner, 0 );
+	if ( ! SEAL_SCAN.test( html ) ) return html;
+	return sealHtml( html, ownerBases( ownerDocument ), 0 );
+}
+
+/** The owner document's bases, parsed once per document (a report seals many fragments of one page). */
+let lastOwner: { document: string; bases: string[] } | undefined;
+function ownerBases( ownerDocument: string | undefined ): string[] {
+	if ( ! ownerDocument || ! /<base/i.test( ownerDocument ) ) return [ UNKNOWN_DOCUMENT ];
+	if ( lastOwner?.document !== ownerDocument ) lastOwner = { document: ownerDocument, bases: documentBases( cheerio.load( ownerDocument, { scriptingEnabled: false } ), [ UNKNOWN_DOCUMENT ] ) };
+	return lastOwner.bases;
+}
+
+/** The address the serializer recorded a frame resolving to, when it is an absolute http(s) URL. */
+function recordedFrameAddress( value: string | undefined ): string | undefined {
+	try {
+		const url = value ? new URL( value ) : undefined;
+		return url && /^https?:$/.test( url.protocol ) ? url.href : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 function sealHtml( html: string, owner: readonly string[], depth: number ): string {
@@ -791,13 +925,18 @@ function sealHtml( html: string, owner: readonly string[], depth: number ): stri
 		const location = attributeRange( element, name );
 		if ( location ) edits.push( { start: location.startOffset, end: location.endOffset, text: value === null ? '' : `${ name }="${ escapeHtml( value ) }"` } );
 	};
-	// Nested markup beyond the depth bound is removed rather than passed through unsealed.
-	const nested = depth >= SEAL_DEPTH ? ( markup: string ) => SEAL_SCAN.test( markup ) ? null : markup : ( markup: string ) => sealHtml( markup, bases, depth + 1 );
+	// Nested markup beyond the depth bound is kept unless it holds a frame credential, which is removed.
+	const nested = depth >= SEAL_DEPTH ? ( markup: string ) => deepMarkupMayCarryCredential( markup ) ? null : markup : ( markup: string ) => sealHtml( markup, bases, depth + 1 );
 	$( 'iframe' ).each( ( _index, element ) => {
 		const frame = $( element );
 		const location = element.sourceCodeLocation;
 		if ( ! location ) return;
-		if ( [ 'src', 'data-src', VISUAL_IFRAME_SRC ].some( ( name ) => carriesWixAppCredential( frame.attr( name ), bases ) ) ) {
+		// The browser's resolved address, when the serializer recorded it, decides; the bases only stand in for it.
+		const recorded = recordedFrameAddress( frame.attr( VISUAL_IFRAME_SRC ) );
+		const credential = recorded
+			? [ VISUAL_IFRAME_SRC, 'src', 'data-src' ].some( ( name ) => carriesWixAppCredential( frame.attr( name ), [ recorded ] ) )
+			: [ 'src', 'data-src', VISUAL_IFRAME_SRC ].some( ( name ) => carriesWixAppCredential( frame.attr( name ), bases ) );
+		if ( credential ) {
 			const width = Number( frame.attr( VISUAL_IFRAME_WIDTH ) );
 			const height = Number( frame.attr( VISUAL_IFRAME_HEIGHT ) );
 			let text = '';
@@ -824,8 +963,8 @@ function sealHtml( html: string, owner: readonly string[], depth: number ): stri
 			try {
 				state = JSON.parse( value );
 			} catch {
-				// Malformed evidence that could still carry a frame is removed; anything else is left for its owning validator.
-				if ( SEAL_SCAN.test( value ) ) rewriteAttribute( element as ParsedElement, name, null );
+				// Malformed evidence that holds a frame credential is removed; anything else is left for its owning validator.
+				if ( deepMarkupMayCarryCredential( value ) ) rewriteAttribute( element as ParsedElement, name, null );
 				continue;
 			}
 			let changed = false;
@@ -835,8 +974,11 @@ function sealHtml( html: string, owner: readonly string[], depth: number ): stri
 				if ( next === null ) removed = true;
 				changed ||= next !== markup;
 				return next ?? '';
-			} );
-			if ( removed ) rewriteAttribute( element as ParsedElement, name, null );
+			}, REPLAY_JSON_DEPTH );
+			// JSON nested past its bound comes back untouched; it is removed only when it may hold a credential.
+			if ( sealed === state ) {
+				if ( deepMarkupMayCarryCredential( value ) ) rewriteAttribute( element as ParsedElement, name, null );
+			} else if ( removed ) rewriteAttribute( element as ParsedElement, name, null );
 			else if ( changed ) rewriteAttribute( element as ParsedElement, name, JSON.stringify( sealed ) );
 		}
 	} );
@@ -919,8 +1061,11 @@ export async function portWixEventMaps( page: Page, mountMilliseconds = EVENT_MA
 	}
 }
 
-/** Point Wix map frames at Google Maps embeds; frames already pointed elsewhere no longer match. */
-async function portWixMapFrames( page: Page ): Promise< void > {
+/**
+ * Point Wix map frames at Google Maps embeds; frames already pointed elsewhere
+ * no longer match. `until` bounds the waits for a map's location and load.
+ */
+async function portWixMapFrames( page: Page, until = Infinity ): Promise< void > {
 	for ( const handle of await page.$$( 'iframe[src]' ) ) {
 		const src = ( await handle.getAttribute( 'src' ).catch( () => null ) ) ?? '';
 		const title = ( await handle.getAttribute( 'title' ).catch( () => null ) ) ?? '';
@@ -932,16 +1077,16 @@ async function portWixMapFrames( page: Page ): Promise< void > {
 					if ( typeof scope.__name === 'undefined' ) scope.__name = ( fn ) => fn;
 				} ).catch( () => undefined );
 			}
-			const view = frame ? await wixMapView( frame ) : null;
+			const view = frame ? await wixMapView( frame, until ) : null;
 			const language = parseUrl( src, page.url() )?.searchParams.get( 'language' ) ?? undefined;
 			const embed = view ? googleMapsEmbedUrl( view, language ) : null;
-			if ( embed ) await pointAtGoogleMap( handle, embed );
+			if ( embed ) await pointAtGoogleMap( handle, embed, until );
 			else await handle.evaluate( installWixEmbedNote, { note: wixEmbedNote( title || 'Google Maps' ), attribute: WIX_UNPORTED_EMBED_ATTRIBUTE, style: NOTE_STYLE } );
 		} else if ( wixAppMapView( src, page.url() ) ) {
 			const url = parseUrl( src, page.url() );
 			const language = ( url?.searchParams.get( 'locale' ) || url?.searchParams.get( 'language' ) ) ?? undefined;
 			const embed = googleMapsEmbedUrl( wixAppMapView( src, page.url() )!, language );
-			if ( embed ) await pointAtGoogleMap( handle, embed );
+			if ( embed ) await pointAtGoogleMap( handle, embed, until );
 		}
 	}
 }
@@ -996,7 +1141,7 @@ export async function portWixRuntimeEmbeds( page: Page, { faqRenderMilliseconds 
 		// nothing has mounted, been revealed or been replaced for a grace period,
 		// or until one shared deadline: frames Wix mounts, remounts or reveals
 		// meanwhile are read too, and a map that mounts during the wait is still
-		// pointed at Google Maps.
+		// pointed at Google Maps, within the same deadline.
 		const queries = trackWixFaqQueries( page );
 		if ( ( await wixFaqFrames( page ) ).length ) {
 			const deadline = Date.now() + faqRenderMilliseconds;
@@ -1017,15 +1162,15 @@ export async function portWixRuntimeEmbeds( page: Page, { faqRenderMilliseconds 
 					shape = next;
 					changedAt = Date.now();
 				}
-				await portWixMapFrames( page );
+				await portWixMapFrames( page, deadline );
 				if ( Date.now() >= deadline || ( ! pending && Date.now() - changedAt >= faqGraceMilliseconds ) ) break;
 				await new Promise( ( resolve ) => setTimeout( resolve, FAQ_POLL_MILLISECONDS ) );
 			}
+			// Venue map hosts that mounted during the wait get the same fallback as
+			// those present at the start, and their maps are pointed at Google Maps.
+			await portWixEventMaps( page, 0 );
+			await portWixMapFrames( page, deadline );
 		}
-		// Venue map hosts that mounted during the wait get the same fallback as
-		// those present at the start, and their maps are pointed at Google Maps.
-		await portWixEventMaps( page, 0 );
-		await portWixMapFrames( page );
 	} finally {
 		await page.evaluate( noteWixAppFrames, {
 			attribute: WIX_UNPORTED_EMBED_ATTRIBUTE,
