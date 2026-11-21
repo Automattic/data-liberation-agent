@@ -48,6 +48,11 @@ describe( 'canonicalizeWixInstanceIds', () => {
 		expect( canonicalizeWixInstanceIds( html ) ).toBe( html );
 	} );
 
+	it( 'leaves a page untouched when two instances scope the same components, even if a linked sheet selects one', () => {
+		const html = page( 'comp-aaaa1111', '<div id="comp-cccc3333" class="comp-cccc3333_r_comp-nav comp-cccc3333_r_comp-logo"></div><p class="comp-dddd4444_r_comp-promo"></p>' );
+		expect( canonicalizeWixInstanceIds( html, html, [ '.comp-aaaa1111_r_comp-nav{color:blue}' ] ) ).toBe( html );
+	} );
+
 	it( 'keeps an instance name once given, even when later markup shows fewer of its components', () => {
 		// The export canonicalizes each route again after its stylesheets became
 		// linked files. The markup alone then names only some of the instance's
@@ -111,6 +116,11 @@ describe( 'canonicalizeWixFormControlIds', () => {
 		expect( kept ).toContain( 'id="checkbox-5"' );
 		const named = canonicalizeWixFormControlIds( consent( 5 ), undefined, [ '#checkbox-5-hint{margin:0}' ] );
 		expect( named ).toMatch( /id="checkbox-dla[0-9a-f]{8}"/ );
+	} );
+
+	it( 'keeps a document unchanged when a generated checkbox name is already selected by a linked stylesheet', () => {
+		const token = /id="(checkbox-dla[0-9a-f]{8})"/.exec( canonicalizeWixFormControlIds( consent( 5 ) ) )?.[ 1 ];
+		expect( canonicalizeWixFormControlIds( consent( 5 ), undefined, [ `#${ token }{display:none}` ] ) ).toBe( consent( 5 ) );
 	} );
 
 	it( 'keeps a document unchanged when a counter checkbox has no enclosing field', () => {

@@ -37,13 +37,13 @@ export function canonicalizeWixInstanceIds( html: string, document: string = htm
 	if ( document !== html ) {
 		for ( const [ instance, token ] of instanceTokens( html ) ) if ( ! tokenByInstance.has( instance ) ) tokenByInstance.set( instance, token );
 	}
+	// Two instances scoping the same components on one page would collapse into
+	// one token and merge rules meant for different elements. Keep such a page
+	// exactly as captured rather than guess, before linked sheets narrow the set.
+	if ( new Set( tokenByInstance.values() ).size !== tokenByInstance.size ) return html;
 	const linked = linkedReferences( linkedStylesheets );
 	for ( const instance of tokenByInstance.keys() ) if ( linked.instances.has( instance.toLowerCase() ) ) tokenByInstance.delete( instance );
 	if ( tokenByInstance.size === 0 ) return html;
-	// Two instances scoping the same components on one page would collapse into
-	// one token and merge rules meant for different elements. Keep such a page
-	// exactly as captured rather than guess.
-	if ( new Set( tokenByInstance.values() ).size !== tokenByInstance.size ) return html;
 	const named = new Set( [ ...`${ document }\n${ html }`.matchAll( INSTANCE_REFERENCE ) ].map( ( [ , instance ] ) => instance!.toLowerCase() ).filter( instance => CANONICAL_INSTANCE.test( instance ) ) );
 	if ( [ ...tokenByInstance.values() ].some( token => named.has( token ) || linked.instances.has( token ) ) ) return html;
 
@@ -80,6 +80,8 @@ function instanceTokens( html: string ): Map< string, string > {
  */
 const FORM_CONTROL_COUNTER = /(?<![a-z0-9_-])(checkbox-\d+)(?![a-z0-9_-])/gi;
 const FORM_CONTROL_ID = /\sid=(["'])(checkbox-\d+)\1/gi;
+/** A counter id, or a name this canonicalization already gave one, as linked sheets select it. */
+const LINKED_FORM_CONTROL = /(?<![a-z0-9_-])(checkbox-(?:\d+|dla[0-9a-f]{8}))(?![a-z0-9_-])/gi;
 const FORM_FIELD_HOOK = /data-hook=(["'])(form-field-[^"']+)\1/gi;
 
 export function canonicalizeWixFormControlIds( html: string, document: string = html, linkedStylesheets: readonly string[] = NO_STYLESHEETS ): string {
@@ -89,10 +91,12 @@ export function canonicalizeWixFormControlIds( html: string, document: string = 
 		const own = formControlTokens( html );
 		for ( const [ id, token ] of own ?? [] ) if ( ! tokenById.has( id ) ) tokenById.set( id, token );
 	}
+	if ( new Set( tokenById.values() ).size !== tokenById.size ) return html;
 	const linked = linkedReferences( linkedStylesheets ).controls;
 	for ( const id of tokenById.keys() ) if ( linked.has( id.toLowerCase() ) ) tokenById.delete( id );
 	if ( tokenById.size === 0 ) return html;
-	if ( new Set( tokenById.values() ).size !== tokenById.size ) return html;
+	// A generated name a linked sheet already selects would pick up rules meant for another control.
+	if ( [ ...tokenById.values() ].some( token => linked.has( token.toLowerCase() ) ) ) return html;
 	return html.replace( FORM_CONTROL_COUNTER, ( match ) => tokenById.get( match ) ?? match );
 }
 
@@ -142,7 +146,7 @@ function linkedReferences( sheets: readonly string[] ): LinkedReferences {
 		if ( ! references ) {
 			references = {
 				instances: new Set( [ ...sheet.matchAll( INSTANCE_TOKEN ) ].map( ( [ , id ] ) => id!.toLowerCase() ) ),
-				controls: new Set( [ ...sheet.matchAll( FORM_CONTROL_COUNTER ) ].map( ( [ , id ] ) => id!.toLowerCase() ) ),
+				controls: new Set( [ ...sheet.matchAll( LINKED_FORM_CONTROL ) ].map( ( [ , id ] ) => id!.toLowerCase() ) ),
 			};
 			if ( sheetReferences.size >= SHEET_REFERENCE_CACHE_LIMIT ) sheetReferences.delete( sheetReferences.keys().next().value! );
 			sheetReferences.set( sheet, references );
