@@ -81,19 +81,16 @@ export function retainPartialPostBaseline( c: PostBaselineContext ): void {
 /** Baseline artifacts are complete before any of these probes may mutate the page.
  * Cheap whole-page probes run before per-control ones, which can exhaust the
  * shared budget. Scripted links remain last: a client-routed link can
- * re-render the document. */
+ * re-render the document.
+ *
+ * Shared chrome is matched first, on the resting baseline page: its states are
+ * evidence already recorded on another route, so no later probe (nor the
+ * preparation for one) may spend the budget it needs. A route whose probes
+ * expire still retains the chrome every other route of its template carries. */
 export const postBaselineSteps: CaptureStep<PostBaselineContext>[] = [
-	step( { id: 'dialogs', bound: 'probe-budget', run: async c => {
-		await restoreTopScrollState( c.page );
-		await withReadOnlyProbes( c.page, () => dismissOverlays( c.page ) );
-	} } ),
-	// Scroll states are one bounded probe of the page chrome; the per-trigger
-	// probes below can spend the whole shared budget on a control-heavy page.
-	step( { id: 'scroll-states', bound: 'probe-budget', guard: 'read-only', when: c => ! c.entry.scrollStates?.toggles.length, run: async c => {
-		const states = await captureScrollStates( c.page, c.url );
-		if ( states?.toggles.length ) c.entry.scrollStates = states;
-	} } ),
 	step( { id: 'shared-chrome', bound: 'probe-budget', when: c => Boolean( c.sharedChrome ), run: async c => {
+		// The baseline can end on its scrolled screenshot pose.
+		await restoreTopScrollState( c.page );
 		c.state.chrome = await reuseSharedChrome( c.page, c.sharedChrome!, { learn: true } );
 		c.entry.sharedChrome = c.state.chrome?.decision;
 	}, partial: ( c, error ) => {
@@ -101,6 +98,16 @@ export const postBaselineSteps: CaptureStep<PostBaselineContext>[] = [
 			c.state.chrome = { decision: { chromeReused: false, reason: `chrome reuse failed: ${ error instanceof Error ? error.message : String( error ) }` }, states: [] };
 			c.entry.sharedChrome = c.state.chrome.decision;
 		}
+	} } ),
+	step( { id: 'dialogs', bound: 'probe-budget', run: async c => {
+		if ( ! c.sharedChrome ) await restoreTopScrollState( c.page );
+		await withReadOnlyProbes( c.page, () => dismissOverlays( c.page ) );
+	} } ),
+	// Scroll states are one bounded probe of the page chrome; the per-trigger
+	// probes below can spend the whole shared budget on a control-heavy page.
+	step( { id: 'scroll-states', bound: 'probe-budget', guard: 'read-only', when: c => ! c.entry.scrollStates?.toggles.length, run: async c => {
+		const states = await captureScrollStates( c.page, c.url );
+		if ( states?.toggles.length ) c.entry.scrollStates = states;
 	} } ),
 	step( { id: 'exclusions', bound: 'probe-budget', run: async c => {
 		c.state.excluded = await resolveProbeExclusions( c.page, c.probeExclusions );
