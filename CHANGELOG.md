@@ -15,6 +15,19 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.40.23] - 2026-11-22
+
+### Changed
+- regenerate plugin bundles
+- sweep dual phone and middle documents only across their served width band
+
+### Fixed
+- derive device-profile documents from their own server pair
+- refill grouped route slots without wave barriers
+- memoize rejected viewport class toggles across routes
+- warm replay cache for deferred browser images
+- detect canonical path aliases before frontier capture
+
 ## [0.40.22] - 2026-11-22
 
 ### Changed
