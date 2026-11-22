@@ -26,6 +26,7 @@ import {
 	MAX_CAPTURED_RESOURCE_TOTAL_BYTES,
 	MAX_CAPTURED_VIDEO_RESOURCE_BYTES,
 	resourceTimeoutMs,
+	installResourceReplay,
 } from './resource-capture.js';
 
 const dirs: string[] = [];
@@ -1785,6 +1786,48 @@ describe( 'CapturedResourceStore', () => {
 describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )(
 	'resources in a real browser',
 	() => {
+		it( 'replays deferred browser images without claiming portable media ownership', async ( { serve, newPage } ) => {
+			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-deferred-replay-' ) );
+			dirs.push( outputDir );
+			let imageRequests = 0;
+			const { server } = await serve( ( req, res ) => {
+				if ( req.url === '/image.svg' ) {
+					imageRequests++;
+					res.setHeader( 'content-type', 'image/svg+xml' );
+					res.setHeader( 'cache-control', 'public, max-age=3600' );
+					return res.end( '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>' );
+				}
+				res.setHeader( 'content-type', 'text/html' );
+				res.end( '<!doctype html><img src="/image.svg#icon">' );
+			} );
+			const origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
+			const store = new CapturedResourceStore( outputDir, origin );
+			const page = await newPage();
+			await installResourceReplay( page, store );
+			store.observe( page );
+			const lookup = vi.spyOn( store, 'getReplayableResponse' );
+			try {
+				await page.goto( origin );
+				// Wait for scratch-cache writes without settling (which materializes media).
+				await Promise.all( ( store as any ).pageCaptures.get( page ) );
+				expect( imageRequests ).toBe( 1 );
+				expect( store.has( `${ origin }/image.svg#icon` ) ).toBe( false );
+				lookup.mockClear();
+				await page.goto( `${ origin }/second` );
+				await Promise.all( ( store as any ).pageCaptures.get( page ) );
+				expect( imageRequests ).toBe( 1 );
+				const imageLookup = lookup.mock.calls.findIndex( ( [ , type ] ) => type === 'image' );
+				expect( imageLookup ).toBeGreaterThanOrEqual( 0 );
+				expect( lookup.mock.results[ imageLookup ]?.value ).toBeDefined();
+				const outcomes: string[] = [];
+				store.getReplayableResponse( `${ origin }/image.svg#icon`, 'image', {}, outcome => outcomes.push( outcome ) );
+				expect( outcomes ).toEqual( [ 'hit' ] );
+			} finally {
+				await store.settle( page );
+				await store.flush();
+			}
+		} );
+
 		it( 'probes each responsive image once per capture and keeps every rendition', async ({ serve, newPage, browser }) => {
 			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-srcset-probe-' ) );
 			dirs.push( outputDir );
