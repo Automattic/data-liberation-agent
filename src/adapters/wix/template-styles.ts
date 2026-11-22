@@ -41,6 +41,14 @@ const isItemViewerChunk = ( style: TemplateStyleBlock ): boolean => {
 
 const withoutMarker = ( text: string ): string => text.replace( VSM_MARKER, '' );
 
+/**
+ * The rendition size in a Wix media URL (`/v1/fill/w_453,h_340,…`). Wix's
+ * runtime picks it from the viewport width when the image mounts, so one
+ * template's image can carry either a desktop or a phone size depending on
+ * when the runtime last measured.
+ */
+const RENDITION_SIZE = /(\/media\/[^/]+\/v1\/[a-z]+\/)w_\d+,h_\d+/;
+
 export const templateStyleNormalization: TemplateStyleNormalization = {
 	pageStyles( styles ) {
 		const notViewerChunk = styles.filter( style => ! isItemViewerChunk( style ) );
@@ -50,5 +58,8 @@ export const templateStyleNormalization: TemplateStyleNormalization = {
 		const mappers = notViewerChunk.filter( isPageMapper ).map( style => withoutMarker( style.text ).trim() ).sort();
 		const joined = [ ...authored, ...mappers ].join( '\n' );
 		return joined.trim() ? joined : null;
+	},
+	imageUrl( url ) {
+		return /^https:\/\/static\.wixstatic\.com\//.test( url ) ? url.replace( RENDITION_SIZE, '$1w_*,h_*' ) : url;
 	},
 };
