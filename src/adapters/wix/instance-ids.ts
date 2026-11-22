@@ -29,7 +29,8 @@ const INSTANCE_REFERENCE = /(?<![a-z0-9])(comp-[a-z0-9]+)_r_(comp-[a-z0-9]+)/gi;
 const CANONICAL_INSTANCE = /^comp-dla[0-9a-f]{8}$/i;
 
 export function canonicalizeWixInstanceIds( html: string, document: string = html ): string {
-	const tokenByInstance = new Map( instanceTokens( document ) );
+	const page = documentInstances( document );
+	const tokenByInstance = new Map( page.tokens );
 	if ( document !== html ) {
 		for ( const [ instance, token ] of instanceTokens( html ) ) if ( ! tokenByInstance.has( instance ) ) tokenByInstance.set( instance, token );
 	}
@@ -38,7 +39,7 @@ export function canonicalizeWixInstanceIds( html: string, document: string = htm
 	// one token and merge rules meant for different elements. Keep such a page
 	// exactly as captured rather than guess.
 	if ( new Set( tokenByInstance.values() ).size !== tokenByInstance.size ) return html;
-	const named = new Set( [ ...`${ document }\n${ html }`.matchAll( INSTANCE_REFERENCE ) ].map( ( [ , instance ] ) => instance!.toLowerCase() ).filter( instance => CANONICAL_INSTANCE.test( instance ) ) );
+	const named = document === html ? page.named : new Set( [ ...page.named, ...namedInstances( html ) ] );
 	if ( [ ...tokenByInstance.values() ].some( token => named.has( token ) ) ) return html;
 
 	// The instance element carries the bare instance id too (`id="<instance>"`,
@@ -51,6 +52,27 @@ export function canonicalizeWixInstanceIds( html: string, document: string = htm
 		'gi'
 	);
 	return html.replace( instancePattern, ( match ) => tokenByInstance.get( match ) ?? match );
+}
+
+/**
+ * Captured fragments are canonicalized against their page document, once per
+ * string in an interaction report: thousands of calls in a row with the same
+ * multi-megabyte document. Derive each document's names once, not per call.
+ */
+function lastResult< T >( derive: ( text: string ) => T ): ( text: string ) => T {
+	let last: { text: string; value: T } | undefined;
+	return text => {
+		if ( last?.text !== text ) last = { text, value: derive( text ) };
+		return last.value;
+	};
+}
+
+const documentInstances = lastResult( document => ( { tokens: instanceTokens( document ), named: namedInstances( document ) } ) );
+const canonicalDocument = lastResult( document => canonicalizeWixInstanceIds( document ) );
+const documentFormControlTokens = lastResult( formControlTokens );
+
+function namedInstances( html: string ): Set< string > {
+	return new Set( [ ...html.matchAll( INSTANCE_REFERENCE ) ].map( ( [ , instance ] ) => instance!.toLowerCase() ).filter( instance => CANONICAL_INSTANCE.test( instance ) ) );
 }
 
 function instanceTokens( html: string ): Map< string, string > {
@@ -84,8 +106,9 @@ const FORM_CONTROL_ID = /\sid=(["'])(checkbox-\d+)\1/gi;
 const FORM_FIELD_HOOK = /data-hook=(["'])(form-field-[^"']+)\1/gi;
 
 export function canonicalizeWixFormControlIds( html: string, document: string = html ): string {
-	const tokenById = formControlTokens( document );
-	if ( ! tokenById ) return html;
+	const documentTokens = documentFormControlTokens( document );
+	if ( ! documentTokens ) return html;
+	const tokenById = new Map( documentTokens );
 	if ( document !== html ) {
 		const own = formControlTokens( html );
 		for ( const [ id, token ] of own ?? [] ) if ( ! tokenById.has( id ) ) tokenById.set( id, token );
@@ -118,7 +141,7 @@ function formControlTokens( html: string ): Map< string, string > | undefined {
 
 /** Every Wix runtime-id canonicalization a captured document, or markup captured from it, needs. */
 export function canonicalizeWixCapturedHtml( html: string, document: string = html ): string {
-	return canonicalizeWixFormControlIds( canonicalizeWixInstanceIds( html, document ), canonicalizeWixInstanceIds( document ) );
+	return canonicalizeWixFormControlIds( canonicalizeWixInstanceIds( html, document ), canonicalDocument( document ) );
 }
 
 function escapeRegExp( text: string ): string {
