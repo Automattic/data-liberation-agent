@@ -125,6 +125,12 @@ export interface TemplateStyleNormalization {
 	pageStyles( styles: readonly TemplateStyleBlock[] ): string | null;
 	/** Normalize one resolved `<script src>` URL before dependency hashing. */
 	scriptUrl?( url: string ): string;
+	/**
+	 * Normalize one resolved image URL before a derived document is compared
+	 * with a captured one, for a platform whose image URLs carry a rendition
+	 * size its runtime picks from the viewport at load time.
+	 */
+	imageUrl?( url: string ): string;
 }
 
 /** What a skeleton cannot see, compared exactly between members of a group. */

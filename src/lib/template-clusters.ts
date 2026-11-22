@@ -900,16 +900,20 @@ export function compareDerivedWithCapture( input: {
 			.sort();
 	// Images include inline-style backgrounds: a hero a runtime paints from
 	// per-member data lives there, and the server diff never sees it (#1813).
+	const imageUrl = ( url: string ): string => {
+		const resolved = resolveUrl( url, input.baseUrl );
+		return resolved && input.styleNormalization?.imageUrl ? input.styleNormalization.imageUrl( resolved ) : resolved;
+	};
 	const images = ( $: cheerio.CheerioAPI ): string => JSON.stringify( [
 		...$( 'img, picture > source[srcset]' ).toArray().map( element => {
 			const node = element as Element;
-			return [ node.name, resolveUrl( node.attribs.src ?? '', input.baseUrl ),
+			return [ node.name, imageUrl( node.attribs.src ?? '' ),
 				srcsetCandidates( node.attribs.srcset ?? '' ).map( candidate =>
-					[ resolveUrl( candidate.url, input.baseUrl ), candidate.size, candidate.density ] ) ];
+					[ imageUrl( candidate.url ), candidate.size, candidate.density ] ) ];
 		} ),
 		...$( 'body [style*="url("]' ).toArray().flatMap( element =>
 			[ ...( ( element as Element ).attribs.style ?? '' ).matchAll( /url\(\s*(?:&quot;|["'])?([^"')&]+)/g ) ]
-				.map( match => [ 'background', resolveUrl( match[ 1 ]!, input.baseUrl ) ] ) ),
+				.map( match => [ 'background', imageUrl( match[ 1 ]! ) ] ) ),
 	].map( image => JSON.stringify( image ) ).sort() );
 	const serverStyles = input.repServerHtml !== undefined && input.memberServerHtml !== undefined
 		? new Set( [ input.repServerHtml, input.memberServerHtml ].flatMap( html => collect( cheerio.load( html ), 'link[rel~="stylesheet"]', 'href' ) ) )
