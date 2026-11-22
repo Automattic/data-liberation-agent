@@ -1144,3 +1144,41 @@ describe( 'middle width ranges (#1379)', () => {
 		expect( middleLayoutSampleWidth( { minWidth: 800 } ) ).toBeUndefined();
 	} );
 } );
+
+describe( 'one route, two builds of a component', () => {
+	const doc = ( body: string, css: string ) => `<!DOCTYPE html><html><head><style>body{margin:0}</style><style>${ css }</style></head><body>${ body }</body></html>`;
+	// A rolling deploy served the phone document another build of the avatar's
+	// stylesheet: other hashes and a renamed modifier, the same rules.
+	const avatarCss = ( hash: string, modifier: string ) =>
+		`._avatar_${ hash }_7{border-radius:50%;width:26px}._avatar_${ hash }_7.${ modifier }_${ hash }_20{fill:var(--accent, #123456)}._avatar_${ hash }_7 ._initials_${ hash }_23:before{color:#fff}`;
+	const page = ( hash: string, modifier: string, { icon, phone }: { icon: string; phone: boolean } ) => doc(
+		`<header id="site-header"><div id="bar" class="bar"><div class="avatar _avatar_${ hash }_7 ${ modifier }_${ hash }_20"><svg></svg></div>` +
+		`<div class="icon" style="${ icon }"></div></div></header><main id="content">${ phone ? '<p id="phone-note">Phone</p>' : '<p id="wide-note">Wide</p>' }</main>`,
+		avatarCss( hash, modifier ) + ( phone ? '.bar{gap:4px}' : '.bar{gap:8px}' )
+	);
+
+	it( 'keeps the desktop class names when the phone build\'s rules are the same rules', () => {
+		const desktop = page( 'k3p7x', '_withThemeOverrides', { icon: 'padding-bottom:119.5260663507109%', phone: false } );
+		const mobile = page( 'q9z2m', '_withColorWiring', { icon: 'padding-bottom:119.5260663507109%', phone: true } );
+		const assembled = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile } );
+		const $ = cheerio.load( assembled.html );
+		expect( $( '.avatar' ).toArray().map( node => $( node ).attr( 'class' ) ) ).toEqual( Array( $( '.avatar' ).length ).fill( 'avatar _avatar_k3p7x_7 _withThemeOverrides_k3p7x_20' ) );
+		expect( assembled.html ).not.toContain( 'q9z2m' );
+	} );
+
+	it( 'keeps both class names when the builds\' rules differ', () => {
+		const desktop = page( 'k3p7x', '_withThemeOverrides', { icon: '', phone: false } );
+		const mobile = page( 'q9z2m', '_withColorWiring', { icon: '', phone: true } ).replace( '#123456', '#654321' );
+		const assembled = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile } );
+		expect( assembled.html ).toContain( 'q9z2m' );
+	} );
+
+	it( 'keeps the authored inline style a client-rendered document rounded', () => {
+		const desktop = page( 'k3p7x', '_withThemeOverrides', { icon: 'padding-bottom: 119.526%;', phone: false } );
+		const mobile = page( 'k3p7x', '_withThemeOverrides', { icon: 'padding-bottom:119.5260663507109%', phone: true } );
+		const assembled = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile } );
+		const $ = cheerio.load( assembled.html );
+		expect( $( '.icon' ).toArray().map( node => $( node ).attr( 'style' ) ) ).toEqual( Array( $( '.icon' ).length ).fill( 'padding-bottom:119.5260663507109%' ) );
+		expect( $( '.icon' ).attr( 'class' ) ).toBe( 'icon' );
+	} );
+} );
