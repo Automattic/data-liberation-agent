@@ -32,6 +32,12 @@ export interface LiberationHooks {
    * a profile diagnostic. Recognize them from stable platform markers only.
    */
   probeExclusions?: readonly import('../lib/screenshot/probe-exclusions.js').ProbeExclusion[];
+  /**
+   * Opaque platform-owned runtime islands for template derivation. Their server
+   * shells must map to the capture and member through the existing slot anchors.
+   * Captured markup is retained; undeclared content and verification stay strict.
+   */
+  runtimeWidgetSelectors?: readonly string[];
   /** CSS selectors removed from the DOM before portable artifacts are produced. */
   removeSelectors?: string[];
   /** Acquire a platform-declared virtual route under its requested URL.

@@ -2114,7 +2114,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		}
 		if ( ( entry.html || entry.mobileHtml ) && ! entry.redirectedTo ) {
 			const documents = [ entry.html, entry.mobileHtml, ...Object.values( entry.profiles ?? {} ).map( profile => profile.html ) ];
-			opts.onRouteCaptured?.( url, [ ...new Set( documents.filter( ( path ): path is string => Boolean( path ) ) ) ], resource => resourceStore.has( resource ), Boolean( entry.interactions?.states.length ) );
+			opts.onRouteCaptured?.( url, [ ...new Set( documents.filter( ( path ): path is string => Boolean( path ) ) ) ], resource => resourceStore.has( resource ), Boolean( entry.interactions?.states.length ), entry.profiles );
 		}
 		completed++;
 		const routeMs = Date.now() - routeStartedAt;

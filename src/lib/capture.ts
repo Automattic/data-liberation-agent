@@ -770,9 +770,9 @@ async function runCaptureWebsite(
 		...( timeBudget ? { timeBudget: { ...timeBudget, assetBacklog: () => assetQueue.backlog() } } : {} ),
 		...( options.routeDeadlineMs !== undefined ? { routeDeadlineMs: options.routeDeadlineMs } : {} ),
 		onProgress: ( current, total, url ) => progress( { phase: 'capturing', current, total, url } ),
-		onRouteCaptured: ( url, documents, stored, hasInteractionStates ) => {
+		onRouteCaptured: ( url, documents, stored, hasInteractionStates, profiles ) => {
 			assetQueue.enqueueRoute( url, documents, stored );
-			deferral?.routeCaptured( url, documents[ 0 ], hasInteractionStates );
+			deferral?.routeCaptured( url, documents[ 0 ], hasInteractionStates, profiles );
 		},
 		...( deferral ? {
 			deferRoute: ( url: string ) => deferral.defers( url ),
@@ -846,6 +846,8 @@ async function runCaptureWebsite(
 				governors: sourceGovernors,
 				styleNormalization: adapter.templateStyleNormalization,
 				templateIdentity: adapter.templateIdentity,
+				runtimeWidgetSelectors: adapter.liberation?.runtimeWidgetSelectors,
+				canonicalizeHtml: adapter.liberation?.canonicalizeHtml?.bind( adapter.liberation ),
 				runtimeStateClasses: adapter.runtimeStateClasses,
 				maxTotalBytes: options.maxTotalBytes,
 				resolveImageOriginal: adapter.resolveImageOriginal?.bind( adapter ),
@@ -1267,7 +1269,10 @@ export interface TemplateClusterDerivation {
  * A member derives every document the representative ships: desktop, phone
  * and any middle width range, each from its representative counterpart, so
  * export assembles members exactly as it assembles the representative. A
- * failed derivation of any of them escalates the member.
+ * failed derivation of any of them escalates the member. Where the source
+ * serves a profile's identity (phone, tablet) a different server document, that
+ * profile's document derives from its own server pair, with runtime media from
+ * a light render as that profile; the desktop pair decides cluster identity.
  */
 export async function deriveTemplateClusterMembers( input: {
 	contentEntries?: import('../platform/types.js').StructuredContentEntry[];
@@ -1277,6 +1282,8 @@ export async function deriveTemplateClusterMembers( input: {
 	report: import('./template-groups.js').TemplateGroupsReport;
 	routeScope?: import('../platform/types.js').SiteRouteScope;
 	timeBudgetMs?: number;
+	runtimeWidgetSelectors?: readonly string[];
+	canonicalizeHtml?: ( html: string ) => string;
 	/** Runtime-render stage budget; defaults to `runtimeRenderBudgetMs( timeBudgetMs )`. */
 	runtimeRenderBudgetMs?: number;
 	frontierUrls: string[];
@@ -1298,17 +1305,20 @@ export async function deriveTemplateClusterMembers( input: {
 	/** The browser pass's deferral: its light renders verify and supply clusters whose runtime rewrites server content. */
 	deferral?: import('./template-cluster-deferral.js').TemplateClusterDeferral;
 } ): Promise< TemplateClusterDerivation > {
-	const { deriveMemberDocument, compareDerivedWithCapture, TEMPLATE_CLUSTER_LIMITS, writeTemplateClusters, TEMPLATE_CLUSTERS_FILE } =
+	const { deriveMemberDocument: derive, compareDerivedWithCapture, TEMPLATE_CLUSTER_LIMITS, writeTemplateClusters, TEMPLATE_CLUSTERS_FILE } =
 		await import( './template-clusters.js' );
+	const deriveMemberDocument: typeof derive = options => derive( { ...options, runtimeWidgetSelectors: input.runtimeWidgetSelectors, canonicalizeHtml: input.canonicalizeHtml } );
 	const { templateClusterUnits } = await import( './template-groups.js' );
 	const { chromeInteractionStates } = await import( './static-dialogs.js' );
+	const { compareServerHtml } = await import( './screenshot/device-mode.js' );
+	const { TEMPLATE_DEFERRAL_LIMITS } = await import( './template-cluster-deferral.js' );
 	const memberShape = structuredMemberShape( input.contentSource, input.contentEntries );
 	// Derivation documents go through the run's source governors, as grouping
 	// does: throttles wait out Retry-After and retry (#1685). A failed or non-2xx
 	// answer is the source's unavailability, never template evidence.
-	const sourceDocument = async ( url: string ): Promise< { html: string } | { unavailable: string } > => {
+	const sourceDocument = async ( url: string, userAgent?: string ): Promise< { html: string } | { unavailable: string } > => {
 		try {
-			const response = await safeFetch( url, { governors: input.governors, timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs, attribution: { phase: 'template-clusters', url } } );
+			const response = await safeFetch( url, { governors: input.governors, timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs, attribution: { phase: 'template-clusters', url }, ...( userAgent ? { headers: { 'User-Agent': userAgent } } : {} ) } );
 			if ( response.status < 200 || response.status >= 300 ) return { unavailable: `HTTP ${ response.status }` };
 			return { html: response.body.toString( 'utf8' ) };
 		} catch ( error ) {
@@ -1483,6 +1493,26 @@ export async function deriveTemplateClusterMembers( input: {
 					const path = resolve( input.outputDir, profile.html );
 					return pathWithin( input.outputDir, path ) && existsSync( path ) ? [ { key, profile, html: readFileSync( path, 'utf8' ) } ] : [];
 				} );
+				// A source that serves a profile's identity its own server document
+				// (Wix's mobile and tablet sites) builds that capture from it, so
+				// anchors of the desktop pair do not exist there. Such a profile
+				// derives from its own server pair, fetched with the capture's user
+				// agent; the desktop pair still decides cluster identity.
+				const profileServers = new Map< string, { userAgent: string; html: string; render: import('./template-cluster-deferral.js').RenderProfile } >();
+				const byUserAgent = new Map< string, string | undefined >();
+				for ( const key of repProcessedMobileHtml === undefined ? [] : [ 'mobile', ...repWidthDocuments.map( document => document.key ) ] ) {
+					const userAgent = repEntry.profiles?.[ key ]?.userAgent;
+					if ( ! userAgent ) continue;
+					if ( ! byUserAgent.has( userAgent ) ) {
+						const fetched = await sourceDocument( group.representative, userAgent );
+						byUserAgent.set( userAgent, 'html' in fetched && compareServerHtml( repServerHtml, fetched.html ) === 'different' ? fetched.html : undefined );
+					}
+					const html = byUserAgent.get( userAgent );
+					const profile = repEntry.profiles![ key ]!;
+					// Runtime media of such a document come from a light render as that profile.
+					if ( html !== undefined ) profileServers.set( key, { userAgent, html, render: { id: key, identity: profile.identity, viewport: profile.viewport } } );
+				}
+				const profileRenders = ( url: string ) => input.rewriteDerivedMedia && ! rendered ? [ ...profileServers.values() ].map( server => server.render ) : [];
 				const store = new CapturedResourceStore( input.outputDir, input.sourceUrl, undefined, input.maxTotalBytes );
 				let derivedInCluster = record.derived.length;
 				let clusterFailure = { code: 'cluster_verification_missing', reason: 'cluster has no captured verification member' };
@@ -1584,8 +1614,11 @@ export async function deriveTemplateClusterMembers( input: {
 					for ( let ahead = index; ahead < Math.min( members.length, index + input.governors.forOrigin( input.sourceUrl ).concurrency ); ahead++ ) {
 						const next = members[ ahead ]!;
 						const nextFeed = feedEntries.get( normalizedUrl( next ) );
+						const synthesized = feedVerified && repFeed && nextFeed;
 						if ( rendered ) void input.deferral!.document( next, 'rendered' );
-						else if ( ! memberDocuments.has( next ) ) memberDocuments.set( next, feedVerified && repFeed && nextFeed ? Promise.resolve( feedMemberDocument( repServerHtml, repFeed, nextFeed ) ).catch( () => undefined ) : Promise.resolve( undefined ) );
+						else if ( ! memberDocuments.has( next ) ) memberDocuments.set( next, synthesized ? Promise.resolve( feedMemberDocument( repServerHtml, repFeed, nextFeed ) ).catch( () => undefined ) : Promise.resolve( undefined ) );
+						// Profile light renders are browser work: a narrower, memoized window.
+						if ( ! synthesized && ahead < index + TEMPLATE_DEFERRAL_LIMITS.renderConcurrency ) for ( const render of profileRenders( next ) ) void input.deferral?.document( next, 'rendered', render );
 					}
 					return memberDocuments.get( members[ index ]! );
 				};
@@ -1615,11 +1648,39 @@ export async function deriveTemplateClusterMembers( input: {
 					// construction: its key is compared outside the content slot.
 					const slotSelector = feedHtml ? { contentSlotSelector, memberHeadSlotSelector: contentSource?.memberHeadSlotSelector } : {};
 					const desktopDerivation = deriveMemberDocument( { ...mediaContext, repServerHtml, repProcessedHtml, memberServerHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, featuredImages: { representative: repFeed?.image, member: memberFeed?.image }, ...slotSelector } );
+					// Profile server pairs apply to server-sourced members only:
+					// synthesized and light-rendered documents are desktop documents.
+					const memberProfileServers = new Map< string, { repServerHtml: string; memberServerHtml: string; clusterKeyDocuments: { repServerHtml: string; memberServerHtml: string } } >();
+					let profileUnavailable: string | undefined;
+					const profileMedia = new Map< string, string | undefined >();
+					if ( desktopDerivation.ok && ! feedHtml && ! rendered ) {
+						const fetched = new Map< string, Promise< { html: string } | { unavailable: string } > >();
+						for ( const [ key, server ] of profileServers ) {
+							if ( ! fetched.has( server.userAgent ) ) fetched.set( server.userAgent, sourceDocument( url, server.userAgent ) );
+							const document = await fetched.get( server.userAgent )!;
+							if ( 'unavailable' in document ) { profileUnavailable = `${ key } server document ${ document.unavailable }`; break; }
+							memberProfileServers.set( key, { repServerHtml: server.html, memberServerHtml: document.html, clusterKeyDocuments: { repServerHtml, memberServerHtml } } );
+							if ( input.rewriteDerivedMedia ) {
+								const media = await input.deferral?.document( url, 'rendered', server.render );
+								profileMedia.set( key, media && 'html' in media ? media.html : undefined );
+							}
+						}
+					}
+					for ( const render of profileRenders( url ) ) input.deferral?.release( url, 'rendered', render );
+					if ( profileUnavailable ) {
+						record.unavailable.push( { url, reason: profileUnavailable } );
+						unavailableCount++;
+						continue;
+					}
+					const serverPair = ( key: string ) => {
+						const pair = memberProfileServers.get( key );
+						return pair ? { ...pair, ...( profileMedia.has( key ) ? { memberRenderedHtml: profileMedia.get( key ) } : {} ) } : { repServerHtml, memberServerHtml };
+					};
 					const mobileDerivation = desktopDerivation.ok && repProcessedMobileHtml !== undefined
-						? deriveMemberDocument( { ...mediaContext, repServerHtml, repProcessedHtml: repProcessedMobileHtml, memberServerHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, featuredImages: { representative: repFeed?.image, member: memberFeed?.image }, ...slotSelector } )
+						? deriveMemberDocument( { ...mediaContext, ...serverPair( 'mobile' ), repProcessedHtml: repProcessedMobileHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, featuredImages: { representative: repFeed?.image, member: memberFeed?.image }, ...slotSelector } )
 						: undefined;
 					const widthDerivations = mobileDerivation?.ok
-						? repWidthDocuments.map( document => ( { ...document, derivation: deriveMemberDocument( { ...mediaContext, repServerHtml, repProcessedHtml: document.html, memberServerHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, featuredImages: { representative: repFeed?.image, member: memberFeed?.image }, ...slotSelector } ) } ) )
+						? repWidthDocuments.map( document => ( { ...document, derivation: deriveMemberDocument( { ...mediaContext, ...serverPair( document.key ), repProcessedHtml: document.html, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, featuredImages: { representative: repFeed?.image, member: memberFeed?.image }, ...slotSelector } ) } ) )
 						: [];
 					const derivation = [ mobileDerivation, ...widthDerivations.map( width => width.derivation ) ].find( candidate => candidate && ! candidate.ok ) ?? desktopDerivation;
 					lap( 'derive' );

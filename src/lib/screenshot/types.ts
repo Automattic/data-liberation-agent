@@ -84,7 +84,7 @@ export interface ScreenshotOpts {
 	 * relative to `outputDir`, whether the capture already stored a URL's bytes,
 	 * and whether separate interaction states must be preserved by export.
 	 */
-	onRouteCaptured?: ( url: string, documents: string[], stored: ( resourceUrl: string ) => boolean, hasInteractionStates: boolean ) => void;
+	onRouteCaptured?: ( url: string, documents: string[], stored: ( resourceUrl: string ) => boolean, hasInteractionStates: boolean, profiles?: import('./manifest-queue.js').ManifestEntry['profiles'] ) => void;
 	/**
 	 * Learn how the source sizes itself by sweeping viewport widths with its
 	 * runtime alive, then emit the learned CSS instead of the pixels that

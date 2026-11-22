@@ -716,6 +716,8 @@ export const capture: LiberationHooks = {
 		} );
 	},
 	probeExclusions: WIX_PROBE_EXCLUSIONS,
+	// Hydrated blog engagement controls; authored tags and share links stay strict.
+	runtimeWidgetSelectors: [ '[data-hook="post-main-actions__stats"]', '[data-hook="post-stats"]', '[data-hook="post-footer"] > .wChIrD' ],
 	documentSelection: wixDocumentSelection,
 	additionalProfiles: wixAdditionalProfiles,
 	referenceWidths: [ 390, 768, 1440 ],
