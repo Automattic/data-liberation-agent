@@ -332,7 +332,7 @@ export async function captureTriggeredDialogs(
 ): Promise< InteractionStatesReport > {
 	const viewport = page.viewportSize() ?? { width: 0, height: 0 };
 	// The page's resting root classes, before any probe clicks a control.
-	const restingRoots = await rootClasses( page ).catch( orElse( undefined ) );
+	let restingRoots = await rootClasses( page ).catch( orElse( undefined ) );
 	// Route transitions and popup transitions share controls. Observe routes
 	// first, restore them, then exclude proven destinations from popup clicks.
 	const routeNavigation = await captureRouteNavigation( page, sourceUrl, { skip: options.navigationSkip ?? options.skip } ).catch( orElse( [] ) );
@@ -560,11 +560,6 @@ export async function captureTriggeredDialogs(
 					continue;
 				}
 			}
-			// A control an earlier probe activated can open its surface late (a
-			// lazily loaded sign-in modal after a non-navigating route click) and
-			// lock the page roots. Opening this trigger is measured from the
-			// resting page, so that leaked state is dismissed first.
-			if ( restingRoots ) await restoreRestingRoots( page, restingRoots );
 			const pageBefore = await pageStateFingerprint( page );
 			let closedRoots = await rootClasses( page );
 			let before: string[] = [];
@@ -573,6 +568,11 @@ export async function captureTriggeredDialogs(
 					before = await visibleDialogSelectors( page );
 					await markVisibleBeforeActivation( page );
 					await rememberDropdownAncestors( page, trigger.probeSelector );
+					// A control an earlier probe activated can open its surface late
+					// (a lazily loaded sign-in modal after a non-navigating route
+					// click) and lock the page roots. Opening this trigger is measured
+					// from the resting page, so that leaked state is dismissed first.
+					if ( restingRoots ) restingRoots = await restoreRestingRoots( page, restingRoots );
 					closedRoots = await rootClasses( page );
 				} );
 			} catch ( error ) {
@@ -1072,14 +1072,36 @@ async function markVisibleBeforeActivation( page: Page ): Promise< void > {
 	} ).catch( orElse( undefined ) );
 }
 
-/** Dismiss a surface still holding the page roots away from their resting classes. */
-async function restoreRestingRoots( page: Page, resting: Awaited< ReturnType< typeof rootClasses > > ): Promise< void > {
+/**
+ * Dismiss a surface still holding the page roots away from their resting
+ * classes, and return the resting classes to measure the next trigger from.
+ * A runtime can lock page scrolling before its surface mounts, when there is
+ * nothing yet to dismiss, so dismissal of a scroll-blocking leak repeats until
+ * the roots rest, bounded by the content mount budget. A leak that blocks
+ * nothing (a focus-style class) is page state, not a surface: it is adopted.
+ */
+async function restoreRestingRoots( page: Page, resting: RootClasses ): Promise< RootClasses > {
 	const current = await rootClasses( page ).catch( orElse( undefined ) );
-	if ( ! current ) return;
+	if ( ! current ) return resting;
 	const leaked = rootClassDelta( resting, current );
-	if ( ! leaked.length ) return;
-	await page.keyboard.press( 'Escape' ).catch( orElse( undefined ) );
-	await rootClassesRestored( page, leaked, DIALOG_WAIT_MS );
+	if ( ! leaked.length ) return resting;
+	const deadline = Date.now() + DIALOG_CONTENT_MOUNT_MS;
+	do {
+		await page.keyboard.press( 'Escape' ).catch( orElse( undefined ) );
+		if ( await rootClassesRestored( page, leaked, Math.min( 500, deadline - Date.now() ) ) ) return resting;
+	} while ( Date.now() < deadline && await pageScrollBlocked( page ) );
+	return await rootClasses( page ).catch( orElse( current ) );
+}
+
+type RootClasses = Awaited< ReturnType< typeof rootClasses > >;
+
+/** Whether the document roots prevent page scrolling (a modal surface's lock). */
+async function pageScrollBlocked( page: Page ): Promise< boolean > {
+	return page.evaluate( () => [ document.documentElement, document.body ].some( root => {
+		if ( ! root ) return false;
+		const style = getComputedStyle( root );
+		return [ 'hidden', 'clip' ].includes( style.overflowY ) || style.position === 'fixed';
+	} ) ).catch( orElse( false ) );
 }
 
 /** Keep idle evidence out of the DOM and bound the added wait to one probe window. */
