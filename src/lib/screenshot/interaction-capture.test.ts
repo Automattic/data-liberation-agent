@@ -1300,3 +1300,38 @@ it.skipIf( skipBrowserTests )( 'reports a load-more listing as unsupported witho
 		await page.close();
 	}
 } );
+
+describe( 'root class evidence', () => {
+	// A cart that locks page scrolling while open, releasing the lock a few
+	// frames after its panel closes; a sign-in control whose modal (with the
+	// same lock) loads late after a non-navigating click.
+	const source = ( { lateSignIn, releaseMs }: { lateSignIn: boolean; releaseMs: number } ) => `<!doctype html><body class="site">
+		<header><a id="cart" href="#" role="button" aria-haspopup="dialog" aria-label="Cart">Cart</a>${ lateSignIn ? '<button id="sign-in" type="button">Sign in</button>' : '' }</header><main>Body</main>
+		<script>
+		const open = id => { if ( document.getElementById( id ) ) return; const panel = document.createElement( 'div' ); panel.id = id; panel.setAttribute( 'role', 'dialog' ); panel.setAttribute( 'aria-modal', 'true' );
+			panel.style.cssText = 'position:fixed;inset:0;background:white'; panel.innerHTML = '<p>' + id + ' panel</p>'; document.body.append( panel ); document.body.classList.add( 'locked' ); };
+		const close = () => { document.querySelectorAll( '[role=dialog]' ).forEach( panel => panel.remove() ); setTimeout( () => document.body.classList.remove( 'locked' ), ${ releaseMs } ); };
+		document.getElementById( 'cart' ).addEventListener( 'click', event => { event.preventDefault(); setTimeout( () => open( 'cart-panel' ), 50 ); } );
+		document.getElementById( 'sign-in' )?.addEventListener( 'click', () => setTimeout( () => open( 'sign-in-panel' ), 700 ) );
+		document.addEventListener( 'keydown', event => { if ( event.key === 'Escape' ) close(); } );
+		</script></body>`;
+
+	it.skipIf( skipBrowserTests )( 'records the root classes a dialog adds when its runtime releases them after the panel closes', async ( { newPage } ) => {
+		const page = await newPage( { viewport: { width: 1280, height: 800 } } );
+		await page.setContent( source( { lateSignIn: false, releaseMs: 400 } ) );
+		const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+		const cart = report.states.find( state => state.trigger.label === 'Cart' );
+		expect( cart?.status ).toBe( 'captured' );
+		expect( cart?.dialog?.rootClassState ).toEqual( [ { root: 'body', removed: [], added: [ 'locked' ] } ] );
+	}, 30_000 );
+
+	it.skipIf( skipBrowserTests )( 'measures a dialog\'s root classes from the resting page when an earlier probe left a late modal open', async ( { newPage } ) => {
+		const page = await newPage( { viewport: { width: 1280, height: 800 } } );
+		await page.route( 'https://late-modal.test/**', route => route.fulfill( { contentType: 'text/html', body: source( { lateSignIn: true, releaseMs: 0 } ) } ) );
+		await page.goto( 'https://late-modal.test/' );
+		const report = await captureTriggeredDialogs( page, 'https://late-modal.test/' );
+		const cart = report.states.find( state => state.trigger.label === 'Cart' );
+		expect( cart?.status ).toBe( 'captured' );
+		expect( cart?.dialog?.rootClassState ).toEqual( [ { root: 'body', removed: [], added: [ 'locked' ] } ] );
+	}, 30_000 );
+} );

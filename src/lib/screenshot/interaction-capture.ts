@@ -5,7 +5,7 @@ import type { CapturedGallery } from './gallery-capture.js';
 import { settleDocument } from './page-helpers.js';
 import { DIALOG_CONTENT_MOUNT_MS, waitForDialogContent } from './chrome-hydration.js';
 import { sweepSourceCleanup } from '../source-cleanup.js';
-import { rootClasses, rootClassDelta, type CapturedRootClassState } from './root-class-state.js';
+import { rootClasses, rootClassDelta, rootClassesRestored, type CapturedRootClassState } from './root-class-state.js';
 import { rememberDropdownAncestors, observeDropdownAncestors, verifyDropdownRestoration, type CapturedDropdownAncestorState } from './dropdown-ancestor-state.js';
 import { orElse } from '../failure-class.js';
 
@@ -313,8 +313,7 @@ export async function captureControlledDisclosure( page: Page, selector: string 
 	const dismissal = await closeCapturedDialog( page, revealed.selector, selector, closed );
 	const restored = await page.locator( selector ).getAttribute( 'aria-expanded' ) === 'false' && await closed();
 	const ancestorState = await verifyDropdownRestoration( page, ancestors, revealed.selector );
-	const restoredRoots = await rootClasses( page );
-	const rootsRestored = rootClassState.every( row => row.removed.every( token => restoredRoots[row.root].includes( token ) ) && row.added.every( token => !restoredRoots[row.root].includes( token ) ) );
+	const rootsRestored = await rootClassesRestored( page, rootClassState, DIALOG_WAIT_MS );
 	return { restored, dismissal, evidence: {
 		status: 'captured', kind: 'disclosure', trigger,
 		dialog: {
@@ -332,6 +331,8 @@ export async function captureTriggeredDialogs(
 	options: { skip?: string; navigationSkip?: string } = {}
 ): Promise< InteractionStatesReport > {
 	const viewport = page.viewportSize() ?? { width: 0, height: 0 };
+	// The page's resting root classes, before any probe clicks a control.
+	const restingRoots = await rootClasses( page ).catch( orElse( undefined ) );
 	// Route transitions and popup transitions share controls. Observe routes
 	// first, restore them, then exclude proven destinations from popup clicks.
 	const routeNavigation = await captureRouteNavigation( page, sourceUrl, { skip: options.navigationSkip ?? options.skip } ).catch( orElse( [] ) );
@@ -559,6 +560,11 @@ export async function captureTriggeredDialogs(
 					continue;
 				}
 			}
+			// A control an earlier probe activated can open its surface late (a
+			// lazily loaded sign-in modal after a non-navigating route click) and
+			// lock the page roots. Opening this trigger is measured from the
+			// resting page, so that leaked state is dismissed first.
+			if ( restingRoots ) await restoreRestingRoots( page, restingRoots );
 			const pageBefore = await pageStateFingerprint( page );
 			let closedRoots = await rootClasses( page );
 			let before: string[] = [];
@@ -654,8 +660,7 @@ export async function captureTriggeredDialogs(
 			const rootClassState = rootClassDelta( closedRoots, await rootClasses( page ) );
 			const closeControl = await clickAuthoredCloseControl( page, dialog.selector );
 			await closeCapturedDialog( page, dialog.selector, trigger.probeSelector );
-			const restoredRoots = await rootClasses( page );
-			const rootsRestored = rootClassState.every( row => row.removed.every( token => restoredRoots[row.root].includes( token ) ) && row.added.every( token => !restoredRoots[row.root].includes( token ) ) );
+			const rootsRestored = await rootClassesRestored( page, rootClassState, DIALOG_WAIT_MS );
 			const restoredAncestorState = ancestorState ? await verifyDropdownRestoration( page, ancestorState, dialog.selector ) : undefined;
 			const restingCandidate = await rememberRestingPanel( page, trigger.probeSelector, dialog.selector );
 			const capturedDialog = ( restingInline: boolean ): NonNullable< CapturedDialogInteraction[ 'dialog' ] > => ( {
@@ -1068,6 +1073,16 @@ async function markVisibleBeforeActivation( page: Page ): Promise< void > {
 }
 
 /** Keep idle evidence out of the DOM and bound the added wait to one probe window. */
+/** Dismiss a surface still holding the page roots away from their resting classes. */
+async function restoreRestingRoots( page: Page, resting: Awaited< ReturnType< typeof rootClasses > > ): Promise< void > {
+	const current = await rootClasses( page ).catch( orElse( undefined ) );
+	if ( ! current ) return;
+	const leaked = rootClassDelta( resting, current );
+	if ( ! leaked.length ) return;
+	await page.keyboard.press( 'Escape' ).catch( orElse( undefined ) );
+	await rootClassesRestored( page, leaked, DIALOG_WAIT_MS );
+}
+
 async function observeSpontaneousPanelChanges( page: Page ): Promise< void > {
 	await page.evaluate( async ( waitMs ) => {
 		const changed = new WeakSet< Element >();
