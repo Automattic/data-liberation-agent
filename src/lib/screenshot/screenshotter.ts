@@ -2374,7 +2374,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	for (const origin of new Set(urls.map(url => new URL(url).origin))) {
 		const blocked = opts.governors?.forOrigin(origin).blockedClient;
 		const stats = opts.governors?.forOrigin(origin).stats();
-		if (stats?.learnedRateCeiling !== undefined) routeDiagnostics.push({ code: 'source_rate_ceiling_learned', url: origin, reason: `Source requests paced at ${stats.learnedRateCeiling} req/s for the rest of this capture`, ...stats });
+		if (stats?.learnedRateCeiling !== undefined) routeDiagnostics.push({ code: 'source_rate_ceiling_learned', url: origin, reason: (stats.throttleEpisodes ?? 1) > 1 ? `Source requests paced at ${stats.learnedRateCeiling} req/s for the rest of this capture after ${stats.throttleEpisodes} throttle episodes` : `Source requests paced at ${stats.learnedRateCeiling} req/s during one throttle episode${stats.rateCeilingActive ? ' (still open when browser capture ended)' : ', then recovered'}`, ...stats });
 		if (blocked) {
 			routeDiagnostics.push({ code: blocked.code, url: origin, reason: blocked.message, ...blocked.evidence, stopReason: blocked.code });
 			for (const url of urls.filter(url => new URL(url).origin === origin && !reusedRoutes.has(url) && !manifest.getEntry(url)?.html && !failedRoutes.has(url))) {

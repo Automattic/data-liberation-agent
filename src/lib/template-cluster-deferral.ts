@@ -279,13 +279,16 @@ export class TemplateClusterDeferral {
 	 * written from page data), which server HTML cannot carry.
 	 */
 	private async render( url: string, profile?: RenderProfile ): Promise< MemberDocument > {
+		// A light render loads the member's full runtime and media beside the
+		// browser pass. While the source's throttle episode paces requests,
+		// renders would queue ahead of the browser pass's own navigations, so
+		// they wait it out. Pacing that has become persistent (the source
+		// throttled again after recovering) or outlasts the render budget
+		// leaves the members to browser capture.
+		const governor = this.input.governors.forOrigin( this.input.sourceUrl );
+		if ( governor.isPaced && ! this.closing && ! await governor.awaitUnpaced( Math.min( this.input.deadline ?? Infinity, Date.now() + TEMPLATE_DEFERRAL_LIMITS.renderMs ) ) ) return { unavailable: 'source throttled; light renders yield to the browser pass' };
 		const deadline = Math.min( this.input.deadline ?? Infinity, Date.now() + TEMPLATE_DEFERRAL_LIMITS.renderMs );
 		if ( this.closing || deadline <= Date.now() ) return { unavailable: 'light render budget exhausted' };
-		// A light render loads the member's full runtime and media beside the
-		// browser pass. Once the source has throttled, every later request is
-		// paced at the learned ceiling, and renders would queue ahead of the
-		// browser pass's own navigations: the members keep browser capture.
-		if ( this.input.governors.forOrigin( this.input.sourceUrl ).throttleEvents > 0 ) return { unavailable: 'source throttled; light renders yield to the browser pass' };
 		const startedAt = Date.now();
 		const left = () => Math.max( 1, deadline - Date.now() );
 		let context: BrowserContext | undefined;

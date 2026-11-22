@@ -35,6 +35,8 @@ export const SLOW_SOURCE_BUDGET_FACTOR = 2;
 export function maxSourceNavigationBudgetMs(): number { return SOURCE_NAVIGATION_LIMITS.timeoutMs * SLOW_SOURCE_BUDGET_FACTOR; }
 /** Diagnostic code for a document that only arrived on the single slow-source retry. */
 export const SOURCE_NAVIGATION_SLOW = 'source_navigation_slow';
+/** Diagnostic code for a navigation retried because this capture's own rate ceiling, not the source, made it time out. */
+export const SOURCE_NAVIGATION_PACED = 'source_navigation_paced';
 /**
  * True for a navigation that ran out of time, as opposed to a policy or
  * transport failure. The redirect chain's own "time budget exhausted" is a
