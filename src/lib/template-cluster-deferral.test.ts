@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterAll, beforeAll, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import { rankTemplateClusterRoutes } from './route-budget.js';
 import { SourceRequestGovernors } from './source-request-governor.js';
 import { TemplateClusterDeferral } from './template-cluster-deferral.js';
@@ -31,6 +31,57 @@ beforeAll( async () => {
 
 afterAll( () => new Promise< void >( resolve => server.close( () => resolve() ) ) );
 
+it.each( [ 'unavailable', 'rejected' ] )( 'releases pending members after a %s check', async outcome => {
+	const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
+	const outputDir = mkdtempSync( join( parent, 'template-deferral-failure-' ) );
+	const members = [ '/', '/verifier/', '/tail/' ].map( path => origin + path );
+	const group = { size: members.length, representative: members[ 0 ]!, members };
+	const deferral = new TemplateClusterDeferral( { sourceUrl: origin, outputDir, governors: new SourceRequestGovernors() }, () => [ group ] );
+	let release!: () => void;
+	const held = new Promise< void >( resolve => { release = resolve; } );
+	vi.spyOn( deferral, 'document' ).mockImplementation( async () => {
+		await held;
+		if ( outcome === 'rejected' ) throw new Error( 'fixture check failure' );
+		return { unavailable: 'fixture document unavailable' };
+	} );
+	try {
+		writeFileSync( join( outputDir, 'seed.html' ), page( 'seed' ) );
+		for ( const url of members.slice( 0, 2 ) ) deferral.routeCaptured( url, 'seed.html' );
+		expect( deferral.pending( members[ 2 ]! ) ).toBe( true );
+		const check = deferral.waitForCheck();
+		expect( check ).toBeInstanceOf( Promise );
+		release();
+		await check;
+		expect( deferral.pending( members[ 2 ]! ) ).toBe( false );
+		expect( deferral.defers( members[ 2 ]! ) ).toBe( false );
+		expect( deferral.waitForCheck() ).toBeUndefined();
+	} finally {
+		release();
+		await deferral.close();
+		rmSync( outputDir, { recursive: true, force: true } );
+	}
+} );
+
+it.each( [ 0, 1 ] )( 'keeps browser capture when seed %i has separate interaction states', async interactiveSeed => {
+	const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
+	const outputDir = mkdtempSync( join( parent, 'template-deferral-interactions-' ) );
+	const members = [ '/', '/verifier/', '/tail/' ].map( path => origin + path );
+	const group = { size: members.length, representative: members[ 0 ]!, members };
+	const deferral = new TemplateClusterDeferral( { sourceUrl: origin, outputDir, governors: new SourceRequestGovernors() }, () => [ group ] );
+	const document = vi.spyOn( deferral, 'document' );
+	try {
+		writeFileSync( join( outputDir, 'seed.html' ), page( 'seed' ) );
+		for ( const [ index, url ] of members.slice( 0, 2 ).entries() ) deferral.routeCaptured( url, 'seed.html', index === interactiveSeed );
+		await deferral.waitForCheck();
+		expect( deferral.pending( members[ 2 ]! ) ).toBe( false );
+		expect( deferral.defers( members[ 2 ]! ) ).toBe( false );
+		expect( document ).not.toHaveBeenCalled();
+	} finally {
+		await deferral.close();
+		rmSync( outputDir, { recursive: true, force: true } );
+	}
+} );
+
 it.each( [
 	{ name: 'seeded verifier sorts after the other members', members: [ '/product/rep/', '/product/sb-030/', '/product/alpha/', '/product/beta/' ] },
 	{ name: 'seeded verifier sorts first', members: [ '/product/rep/', '/product/alpha/', '/product/sb-030/', '/product/zeta/' ] },
@@ -44,14 +95,22 @@ it.each( [
 	try {
 		// The browser captures what ranking admits first: the cluster's two seeds.
 		const seeds = rankTemplateClusterRoutes( [ `${ origin }/`, ...urls ], `${ origin }/`, [ group ], new Set() ).slice( 1, 3 );
+		const tail = urls.filter( url => ! seeds.includes( url ) );
+		expect( seeds.map( url => deferral.pending( url ) ) ).toEqual( [ false, false ] );
+		expect( tail.map( url => deferral.pending( url ) ) ).toEqual( [ true, true ] );
+		expect( deferral.waitForCheck() ).toBeUndefined();
 		for ( const [ index, url ] of seeds.entries() ) {
 			const path = `html/seed-${ index }.html`;
 			mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 			writeFileSync( join( outputDir, path ), page( new URL( url ).pathname ) );
 			deferral.routeCaptured( url, path );
 		}
+		expect( tail.map( url => deferral.pending( url ) ) ).toEqual( [ true, true ] );
+		expect( deferral.waitForCheck() ).toBeInstanceOf( Promise );
 		await deferral.close();
-		expect( urls.filter( url => ! seeds.includes( url ) ).map( url => deferral.defers( url ) ) ).toEqual( [ true, true ] );
+		expect( tail.map( url => deferral.defers( url ) ) ).toEqual( [ true, true ] );
+		expect( tail.map( url => deferral.pending( url ) ) ).toEqual( [ false, false ] );
+		expect( deferral.waitForCheck() ).toBeUndefined();
 	} finally {
 		rmSync( outputDir, { recursive: true, force: true } );
 	}

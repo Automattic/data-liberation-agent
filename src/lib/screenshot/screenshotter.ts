@@ -1354,7 +1354,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	// --- shared chrome -------------------------------------------------------
 	// Known multi-route inventories probe eagerly, using device-mode pages when
 	// available. A one-route inventory waits until the frontier admits another
-	// route, then probes before that wave starts. No extra renderer joins the pool.
+	// route, then probes before admitting it. No extra renderer joins the pool.
 	const sharedChromeDecisions: Array< { url: string; profile: string } & SharedChromeRouteDecision > = [];
 	let sharedChromeProbed = false;
 	const ensureSharedChrome = async (): Promise< void > => {
@@ -2114,7 +2114,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		}
 		if ( ( entry.html || entry.mobileHtml ) && ! entry.redirectedTo ) {
 			const documents = [ entry.html, entry.mobileHtml, ...Object.values( entry.profiles ?? {} ).map( profile => profile.html ) ];
-			opts.onRouteCaptured?.( url, [ ...new Set( documents.filter( ( path ): path is string => Boolean( path ) ) ) ], resource => resourceStore.has( resource ) );
+			opts.onRouteCaptured?.( url, [ ...new Set( documents.filter( ( path ): path is string => Boolean( path ) ) ) ], resource => resourceStore.has( resource ), Boolean( entry.interactions?.states.length ) );
 		}
 		completed++;
 		const routeMs = Date.now() - routeStartedAt;
@@ -2130,104 +2130,111 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		if ( opts.timeBudget?.checkpoint && ! force ) {
 			for ( const url of urls ) await processUrl( url, true );
 		}
-		// --- worker pool with browser restart at segment boundaries ----------
-		// URLs are processed in segments of browserRestartEvery; WITHIN a segment a
-		// continuous pool of `concurrency` workers drains a shared cursor, so a slow
-		// page never stalls the others (the old slice loop waited for the slowest
-		// URL in every group of `concurrency` before starting the next group). The
-		// browser is restarted only between segments to bound memory, preserving the
-		// restart-every-N invariant while keeping each worker on a stable browser.
-		let segStart = 0;
-		// Unstarted routes are reordered once, after the entrypoint settles.
+		// One continuous pool. Completed routes are expanded before the next
+		// admission, while other routes keep running on the same browser.
+		let cursor = 0;
 		let pendingPrioritized = ! opts.prioritizePendingRoutes;
-		let entrypointSettled = false;
-		while (segStart < urls.length && ! routeBudget?.closed() && ! routeDeadlines.stalled) {
-			if ( segStart > 0 ) await ensureSharedChrome();
-			// Cluster-aware discovery must run between admission batches, not only
-			// after the inventory has already spent the browser window.
-			const waveEnd = opts.groupLinkedRoutes
-				? Math.min( urls.length, segStart + ( segStart === 0 ? 1 : concurrency ) )
-				: urls.length;
-			while ( segStart < waveEnd && ! routeBudget?.closed() && ! routeDeadlines.stalled ) {
-				if ( browserRestartEvery > 0 && urlsSinceRestart >= browserRestartEvery ) {
+		let entrypointSettled = reusedRoutes.has( urls[ 0 ]! );
+		const entryFirst = Boolean( opts.groupLinkedRoutes || ( opts.prioritizePendingRoutes
+			&& ! routeBudget?.fits( urls.filter( url => ! reusedRoutes.has( url ) ).length, concurrency ) ) );
+		const finished: string[] = [ ...reusedRoutes ];
+		const running = new Set< Promise<void> >();
+		const runningKinds = new Map< Promise<void>, RouteKind >();
+		const timer = memoryAdmission ? setInterval( admission.sample, 100 ) : undefined;
+		let waitingForDeferral: Promise< void > | undefined;
+		const budgetAdmits = (): boolean => {
+			waitingForDeferral = opts.waitForPendingRoute?.();
+			// Preserve pending order, but let unrelated work fill slots while a
+			// cluster waits for its verifier. Failed/missing seeds fall back once idle.
+			let candidate = -1;
+			for ( let index = cursor; index < urls.length; index++ ) {
+				const url = urls[ index ]!;
+				if ( reusedRoutes.has( url ) || deferred( url ) || opts.governors?.forOrigin( url ).blockedClient ) {
+					urls.splice( cursor++, 0, urls.splice( index, 1 )[ 0 ]! );
+					continue;
+				}
+				if ( ( running.size || waitingForDeferral ) && opts.pendingRoute?.( url ) ) continue;
+				candidate = index;
+				break;
+			}
+			if ( candidate < 0 ) return false;
+			if ( candidate > cursor ) urls.splice( cursor, 0, urls.splice( candidate, 1 )[ 0 ]! );
+			return cursor < urls.length && ! routeDeadlines.stalled
+				&& ( ! entryFirst || cursor === 0 || entrypointSettled )
+				&& ( browserRestartEvery <= 0 || urlsSinceRestart < browserRestartEvery )
+				&& ( ! routeBudget || routeBudget.admits( urls[ cursor ]!, running.size + 1 ) );
+		};
+		try {
+			while ( true ) {
+				while ( finished.length ) await expandLinks( finished.splice( 0 ) );
+				if ( entrypointSettled ) {
+					if ( ! pendingPrioritized ) {
+						pendingPrioritized = true;
+						const from = Math.max( 1, cursor );
+						urls.splice( from, urls.length - from, ...opts.prioritizePendingRoutes!( urls.slice( from ) ) );
+					}
+				}
+				// Completions during asynchronous expansion/probing must be expanded
+				// before their newly freed slots admit another route.
+				if ( finished.length ) continue;
+				// Only restart an idle browser, and never start a route beyond its
+				// segment's limit. Link expansion may have appended more work.
+				if ( ! running.size && cursor < urls.length && browserRestartEvery > 0 && urlsSinceRestart >= browserRestartEvery && ! routeBudget?.closed() && ! routeDeadlines.stalled ) {
 					sendLog( server, `[restart] closing browser after ${ urlsSinceRestart } URLs` );
 					await browser.close().catch( orElse( undefined ) );
 					browser = ( await connectBrowser( {} ) ) as unknown as Browser;
 					browserRestarts++;
 					urlsSinceRestart = 0;
 				}
-				// Appended aliases and linked documents belong to the next wave.
-				// The caller learns priorities from the rendered entrypoint, which
-				// only matter when the budget cannot fit every pending route: then
-				// the entrypoint finishes before its successors are admitted.
-				// Otherwise successors start alongside it, and the routes still
-				// pending when it finishes are reordered.
-				const entryFirst = segStart === 0 && opts.prioritizePendingRoutes
-					&& ! routeBudget?.fits( urls.slice( 0, waveEnd ).filter( url => ! reusedRoutes.has( url ) ).length, concurrency );
-				const segEnd = entryFirst ? 1 : browserRestartEvery > 0
-					? Math.min( waveEnd, segStart + browserRestartEvery - urlsSinceRestart )
-					: waveEnd;
-				let cursor = segStart;
-				const running = new Set< Promise<void> >();
-				const runningKinds = new Map< Promise<void>, RouteKind >();
-				const timer = memoryAdmission ? setInterval( admission.sample, 100 ) : undefined;
-				const budgetAdmits = (): boolean => {
-					while ( cursor < segEnd && ( reusedRoutes.has( urls[ cursor ]! ) || deferred( urls[ cursor ]! ) || opts.governors?.forOrigin(urls[cursor]!).blockedClient ) ) cursor++;
-					return cursor < segEnd && ! routeDeadlines.stalled && ( ! routeBudget || routeBudget.admits( urls[ cursor ]!, running.size + 1 ) );
-				};
-				try {
-					while ( ( cursor < segEnd && budgetAdmits() ) || running.size ) {
-						if ( ! pendingPrioritized && ( entrypointSettled || reusedRoutes.has( urls[ 0 ]! ) ) ) {
-							pendingPrioritized = true;
-							const from = Math.max( 1, cursor );
-							urls.splice( from, urls.length - from, ...opts.prioritizePendingRoutes!( urls.slice( from ) ) );
-						}
-						while ( cursor < segEnd && budgetAdmits() && running.size < concurrency && admission.admit( admission.kind( urls[ cursor ]! ), runningKinds.values() ) ) {
-							const url = urls[ cursor++ ];
-							const kind = admission.kind( url );
-							routeBudget?.start( url );
-							if ( memoryAdmission ) process.stderr.write( `[memory-admission] ${ JSON.stringify( admission.diagnostic( kind, running.size + 1, url ) ) }\n` );
-							admission.start( kind );
-							const pending = processUrl( url ).finally( () => { if ( url === urls[ 0 ] ) entrypointSettled = true; partialRouteCommits.delete( url ); admission.release( kind ); routeBudget?.finish( url, probeOverruns.get( url ) ); routeDeadlines.finish( url ); } ).then( () => {
-								if ( memoryAdmission ) admission.sample();
-							} );
-							// The slot frees even if abandonment unwinds slowly: the route's own
-							// deadline resolves the race at the deadline, after it abandoned the
-							// route and closed its contexts.
-							const slot = Promise.race( [ pending, routeDeadlines.start( url ) ] );
-							running.add( slot );
-							runningKinds.set( slot, kind );
-							// The race observes fatal rejection before browser cleanup.
-							void slot.then( () => { running.delete( slot ); runningKinds.delete( slot ); }, () => {} );
-						}
-						if ( ! running.size ) break;
-						if ( ! routeBudget ) await Promise.race( running );
-						else {
-							await routeBudget.wait( running );
-							if ( await routeBudget.abandonIfDue( running, () => browser.close().catch( orElse( undefined ) ) ) ) break;
-						}
-					}
-				} finally {
-					if ( timer ) clearInterval( timer );
-					// Drain existing context cleanup without suppressing fatal errors.
-					await ( routeBudget ? routeBudget.drain( running ) : Promise.allSettled( running ) );
+				while ( budgetAdmits() && running.size < concurrency && admission.admit( admission.kind( urls[ cursor ]! ), runningKinds.values() ) ) {
+					// The segment loop established chrome evidence before successor
+					// admission. Keep that guarantee even when this pool never idles.
+					if ( cursor > 0 ) await ensureSharedChrome();
+					const url = urls[ cursor++ ];
+					const kind = admission.kind( url );
+					urlsSinceRestart++;
+					routeBudget?.start( url );
+					if ( memoryAdmission ) process.stderr.write( `[memory-admission] ${ JSON.stringify( admission.diagnostic( kind, running.size + 1, url ) ) }\n` );
+					admission.start( kind );
+					const pending = processUrl( url ).finally( () => { if ( url === urls[ 0 ] ) entrypointSettled = true; partialRouteCommits.delete( url ); admission.release( kind ); routeBudget?.finish( url, probeOverruns.get( url ) ); routeDeadlines.finish( url ); } ).then( () => {
+						if ( memoryAdmission ) admission.sample();
+					} );
+					// A deadline frees the slot even while abandoned work unwinds.
+					const slot = Promise.race( [ pending, routeDeadlines.start( url ) ] );
+					running.add( slot );
+					runningKinds.set( slot, kind );
+					// Observe fatal rejection before browser cleanup.
+					void slot.then( () => { if ( url === urls[ 0 ] ) entrypointSettled = true; running.delete( slot ); runningKinds.delete( slot ); finished.push( url ); }, () => {} );
 				}
-				urlsSinceRestart += segEnd - segStart;
-				segStart = segEnd;
+				const progress = new Set( running );
+				if ( waitingForDeferral && cursor < urls.length && ! routeBudget?.closed() && ! routeDeadlines.stalled ) progress.add( waitingForDeferral );
+				if ( ! progress.size ) break;
+				if ( ! routeBudget ) await Promise.race( progress );
+				else {
+					await routeBudget.wait( progress );
+					if ( await routeBudget.abandonIfDue( running, () => browser.close().catch( orElse( undefined ) ) ) ) break;
+				}
 			}
+		} finally {
+			if ( timer ) clearInterval( timer );
+			await ( routeBudget ? routeBudget.drain( running ) : Promise.allSettled( running ) );
+		}
+		// Budget closure still offers completed links to the frontier so rejected
+		// targets retain diagnostics, including routes completed during drain.
+		if ( finished.length ) await expandLinks( finished.splice( 0 ) );
+
+		async function expandLinks( completedUrls: string[] ): Promise<void> {
 			// Deadline-kept profiles are in the manifest before links are read from it.
 			await Promise.allSettled( partialCommitWrites );
 			// Do not spend more source requests on link inspection after a stall.
-			if ( routeDeadlines.stalled || urls.every(url => opts.governors?.forOrigin(url).blockedClient) ) break;
-			// Even after the budget closes, offer this wave's links to the
-			// frontier so rejected targets receive budget diagnostics.
-			// Expand a breadth-first wave from actual rendered artifacts. The normal
+			if ( routeDeadlines.stalled || urls.every(url => opts.governors?.forOrigin(url).blockedClient) ) return;
+			// Expand finished routes from actual rendered artifacts. The normal
 			// navigation/capture contract proves local documents and external boundaries;
 			// successful HTML is never reduced to a classification-only probe.
 			const scheduled = new Set( urls.map( documentRequestUrl ) );
 			const candidates = new Set< string >();
 			const candidateDepths = new Map<string, number>();
-			for ( const url of urls ) {
+			for ( const url of completedUrls ) {
 				for ( const serverLink of serverLinks.get( url ) ?? [] ) {
 					const link = routeInScope( serverLink, opts.routeScope ) ? scopedRouteKey( serverLink, opts.routeScope ) : serverLink;
 					if ( routeInScope( link, opts.routeScope ) && ! scheduled.has( documentRequestUrl( link ) ) ) {
@@ -2265,7 +2272,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				const rankedCandidates = opts.groupLinkedRoutes && opts.prioritizePendingRoutes ? opts.prioritizePendingRoutes( [ ...candidates ] ) : candidates;
 				for (const url of rankedCandidates) enqueue(url, candidateDepths.get(url)!);
 				if ( opts.groupLinkedRoutes && opts.prioritizePendingRoutes ) {
-					urls.splice( segStart, urls.length - segStart, ...opts.prioritizePendingRoutes( urls.slice( segStart ) ) );
+					urls.splice( cursor, urls.length - cursor, ...opts.prioritizePendingRoutes( urls.slice( cursor ) ) );
 				}
 			} else if ( candidates.size ) {
 				let context: BrowserContext | undefined;
