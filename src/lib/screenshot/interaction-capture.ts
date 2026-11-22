@@ -1072,7 +1072,6 @@ async function markVisibleBeforeActivation( page: Page ): Promise< void > {
 	} ).catch( orElse( undefined ) );
 }
 
-/** Keep idle evidence out of the DOM and bound the added wait to one probe window. */
 /** Dismiss a surface still holding the page roots away from their resting classes. */
 async function restoreRestingRoots( page: Page, resting: Awaited< ReturnType< typeof rootClasses > > ): Promise< void > {
 	const current = await rootClasses( page ).catch( orElse( undefined ) );
@@ -1083,6 +1082,7 @@ async function restoreRestingRoots( page: Page, resting: Awaited< ReturnType< ty
 	await rootClassesRestored( page, leaked, DIALOG_WAIT_MS );
 }
 
+/** Keep idle evidence out of the DOM and bound the added wait to one probe window. */
 async function observeSpontaneousPanelChanges( page: Page ): Promise< void > {
 	await page.evaluate( async ( waitMs ) => {
 		const changed = new WeakSet< Element >();
