@@ -672,6 +672,29 @@ export interface ChromeReuse {
  * the page. With `learn`, chrome no evidence matches is read in full for
  * `learnSharedChrome`.
  */
+/**
+ * A panel's `css` holds only the rules its opening added to the page it was
+ * probed on; rules that page already held are in `baselineRules`. This route
+ * may lack some of those, so they join the reused panel's CSS, ahead of the
+ * added rules as in the source cascade.
+ */
+async function withRouteMissingRules< T extends CapturedDialogInteraction >( page: Page, states: T[] ): Promise< T[] > {
+	if ( ! states.some( state => state.dialog?.baselineRules?.length ) ) return states;
+	const present = new Set( await page.evaluate( () => Array.from( document.styleSheets ).flatMap( sheet => {
+		try {
+			return Array.from( sheet.cssRules ).map( rule => rule.cssText );
+		} catch {
+			return [];
+		}
+	} ) ).catch( orElse( [] as string[] ) ) );
+	if ( ! present.size ) return states;
+	return states.map( state => {
+		const missing = state.dialog?.baselineRules?.filter( rule => ! present.has( rule ) ) ?? [];
+		if ( ! state.dialog || ! missing.length ) return state;
+		return { ...state, dialog: { ...state.dialog, css: [ ...missing, ...( state.dialog.css ? [ state.dialog.css ] : [] ) ].join( '\n' ) } };
+	} );
+}
+
 export async function reuseSharedChrome( page: Page, probe: SharedChromeProbe, { learn: learning = false }: { learn?: boolean } = {} ): Promise< ChromeReuse > {
 	const entrypoint = probe.evidence;
 	if ( probe.status !== 'captured' || ! entrypoint ) {
@@ -740,8 +763,8 @@ export async function reuseSharedChrome( page: Page, probe: SharedChromeProbe, {
 		attribute: CHROME_REUSED_ATTRIBUTE,
 	} );
 	const rejected = eligible.length - reused.length;
-	const states = reused.filter( candidate => candidate.state.status === 'captured' || candidate.state.status === 'observed-incomplete' )
-		.map( candidate => ( { ...candidate.state, reusedFrom: evidence.url } ) );
+	const states = await withRouteMissingRules( page, reused.filter( candidate => candidate.state.status === 'captured' || candidate.state.status === 'observed-incomplete' )
+		.map( candidate => ( { ...candidate.state, reusedFrom: evidence.url } ) ) );
 	const source = evidence === entrypoint ? 'the entrypoint' : `the chrome learned on ${ evidence.url }`;
 	return {
 		decision: {
