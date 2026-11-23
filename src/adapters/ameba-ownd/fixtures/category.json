@@ -1,0 +1,117 @@
+{
+ "props": {
+  "pageProps": {
+   "state": {
+    "route": {
+     "route": {
+      "path": "/posts/categories/:category_id",
+      "route": {
+       "id": "0",
+       "type": "blog_post_category",
+       "idForType": "0",
+       "title": "",
+       "urlPath": "/posts/categories/:category_id",
+       "isHomePage": false
+      }
+     },
+     "params": {
+      "category_id": "2101016"
+     }
+    },
+    "postList": {
+     "postList-limit:12-page:1-siteId:662697-categoryIds:2101016": {
+      "fetching": false,
+      "loaded": true,
+      "meta": {
+       "code": 200,
+       "pagination": {
+        "total": 67,
+        "offset": 0,
+        "limit": 12,
+        "cursors": {
+         "after": "bGltaXQ9MTImb2Zmc2V0PTEy",
+         "before": ""
+        },
+        "page": 1
+       }
+      },
+      "data": [
+       {
+        "id": "59236919",
+        "siteId": "662697",
+        "status": "publish",
+        "title": "2026年北辰テスト第４回（９月）結果",
+        "contents": [
+         {
+          "type": "text",
+          "format": "html",
+          "value": "<p>９月の北辰テストが返ってきた。</p><p class=\"\">今回の北辰テストは以前書いた通り、謎に問題が謎に簡単すぎたせいで、上位陣の偏差値が出難いのではないか？と予想していたのだが、果たして結果はその通りであった。☟</p>"
+         }
+        ],
+        "urlPath": "",
+        "publishedUrl": "https://ymdjk-24365.amebaownd.com/posts/59236919",
+        "ogpImageUrl": "",
+        "blogCategories": [
+         {
+          "id": "2101016",
+          "siteId": "662697",
+          "label": "北辰テスト・公立入試関連",
+          "publishedCount": 67
+         },
+         {
+          "id": "2002410",
+          "siteId": "662697",
+          "label": "授業関連",
+          "publishedCount": 575
+         },
+         {
+          "id": "1950096",
+          "siteId": "662697",
+          "label": "日々雑感",
+          "publishedCount": 634
+         }
+        ],
+        "user": {
+         "id": "834539",
+         "nickname": "Site owner"
+        },
+        "publishedAt": "2026-09-15T10:14:47Z",
+        "createdAt": "2026-09-15T10:14:48Z",
+        "updatedAt": "2026-09-15T19:01:19Z"
+       }
+      ]
+     }
+    },
+    "category": {
+     "2101016": {
+      "fetching": false,
+      "loaded": true,
+      "meta": {
+       "code": 200
+      },
+      "data": {
+       "id": "2101016",
+       "siteId": "662697",
+       "label": "北辰テスト・公立入試関連",
+       "publishedCount": 67,
+       "createdAt": "2019-06-05T07:35:44Z",
+       "updatedAt": "2026-09-15T19:01:19Z"
+      },
+      "status": "success"
+     }
+    },
+    "siteConfig": {
+     "siteId": "662697",
+     "title": "蒼進塾（そうしんじゅく）～さいたま市～真剣に努力する姿勢を育む",
+     "homePageId": "2748387"
+    }
+   },
+   "url": "/"
+  }
+ },
+ "page": "/[[...path]]",
+ "query": {},
+ "buildId": "CcBAgFYO9zpfJIBjDg99I",
+ "isFallback": false,
+ "gssp": true
+}

@@ -16,6 +16,7 @@ import { netlifyHost } from '../hosts/netlify.js';
 import { boltHost } from '../hosts/bolt.js';
 import { nextjsAdapter } from '../adapters/nextjs/index.js';
 import { atombioAdapter } from '../adapters/atombio/index.js';
+import { amebaOwndAdapter } from '../adapters/ameba-ownd/index.js';
 import { carrdAdapter } from '../adapters/carrd/index.js';
 import { bloggerAdapter } from '../adapters/blogger/index.js';
 import { defaultAdapter } from '../adapters/default/index.js';
@@ -51,6 +52,7 @@ registerPlatform( defaultAdapter, { fallback: true } );
 // (the first matching platform wins). Specific platforms register before
 // frameworks whose infrastructure they may share.
 const builtins: Platform[] = [
+	amebaOwndAdapter,
 	atombioAdapter,
 	bloggerAdapter,
 	carrdAdapter,

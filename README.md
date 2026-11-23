@@ -92,6 +92,7 @@ Naming an unknown target lists the registered ones.
 
 | Platform | Status |
 |---|---|
+| Ameba Ownd | Sitemap discovery; posts, static pages and categories from the platform's page state, dated in Japan time |
 | Blogger | Browser capture + feed accounting; opt-in orchestrated HTTP review capture |
 | Carrd | Section routes with shared chrome and portable navigation |
 | Duda | Generic discovery + single-page blog pager marked inert |
