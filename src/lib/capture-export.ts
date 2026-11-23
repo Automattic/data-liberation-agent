@@ -28,6 +28,7 @@ import { materializePortableMedia } from './portable-media.js';
 import { omitDegenerateReplacements, preparePortableReplacements, preparePortableUrlResolver } from './portable-references.js';
 import { portableAssetUrl } from './portable-assets.js';
 import { materializePortableResources } from './portable-resources.js';
+import { projectWidthGatedFontFaces } from './width-gated-font-faces.js';
 import { assetExceedsFileLimit, DEFAULT_MAX_FILE_BYTES, validateMaxFileBytes } from './export-file-limit.js';
 import { assetExceedsTotalBudget, emptyExportBudgetExclusions, planExportBudget, redundantRenditionDropped, resolveExportTotalBudget, type DroppableAsset, type ExportBudgetExclusions, type ExportTotalBudget } from './export-total-budget.js';
 import { collectAssetEvidenceReferences, writeCaptureEvidence, writeSemanticEvidence, type SemanticEvidencePage } from './capture-export-evidence.js';
@@ -473,6 +474,8 @@ function buildExportCapture(
 	const rendered = renderRoutePages( { retainedEntries, websiteDir, resourceReplacements, portableUrlByFamily, mixedSrcsetReferences, portableMediaReplacements, replaceResources, replaceMedia, mediaMetadataPathsBySource: mediaStage.metadataPathsBySource, portablePathsBySource, routePathOf, capturedRouteKeys, absentRouteKeys, omittedRouteKeys, resourceInputKeys, routeScope: options.routeScope, boundaryRoutes, verifiedRouteObservations, sourceRouteLinks, portableServedPaths } );
 	unresolvedAnchors.push( ...rendered.unresolvedAnchors );
 	routeCaptureDiagnostics.push( ...rendered.diagnostics );
+	// Variant face sets stay selectable by width once a consumer drops the import gate.
+	projectWidthGatedFontFaces( websiteDir, routes.map( route => join( websiteDir, route.path.replace( /^website\//, '' ) ) ) );
 	const { inventory, diagnostics: projectionDiagnostics } = projectPortableWebsite( { websiteDir, stageDir, sourceUrl: options.sourceUrl, responsiveIdentities: rendered.responsiveIdentities, responsiveBodyClassProjections, collapsedBodyClassProjections, sourceHashesByPortablePath: resourceStage.sourceHashesByPortablePath, retainedEntries, routePathOf, interactionPages, scrollStatesPages, structuredContent: options.structuredContent, routes, portableRedirects, productMediaPaths: portablePathsBySource } );
 	routeCaptureDiagnostics.push( ...projectionDiagnostics );
 	exportPublicationBoundary( EXPORT_PUBLICATION_BOUNDARIES.afterHtml );
