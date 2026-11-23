@@ -112,7 +112,7 @@ function declaredRoutes( html: string, url: string ): Set< string > {
 	const declared = new Set< string >();
 	$( 'link[rel~="canonical" i][href], meta[property="og:url" i][content]' ).each( ( _, element ) => {
 		const node = $( element );
-		try { declared.add( normalizeRoute( new URL( node.attr( 'href' ) ?? node.attr( 'content' ) ?? '', url ).href ) ); } catch { /* Ignore unparseable declarations. */ }
+		try { declared.add( declaredRoute( new URL( node.attr( 'href' ) ?? node.attr( 'content' ) ?? '', url ).href ) ); } catch { /* Ignore unparseable declarations. */ }
 	} );
 	return declared;
 }
@@ -142,7 +142,7 @@ export class AbsentDocumentProbes {
 			this.parents.set( parent, probe );
 		}
 		const sibling = await probe;
-		return sibling?.signature === signature && ! sibling.declares.has( normalizeRoute( url ) );
+		return sibling?.signature === signature && ! sibling.declares.has( declaredRoute( url ) );
 	}
 }
 
@@ -189,6 +189,11 @@ export function isSourceCaptureUrl( url: string, sourceUrl: string | undefined )
 	} catch {
 		return url === sourceUrl;
 	}
+}
+
+/** A route as a document names it; the query stays, since query-routed pages share one path. */
+function declaredRoute( url: string ): string {
+	return `${ normalizeRoute( url ) }${ new URL( url ).search }`;
 }
 
 function normalizeRoute( url: string ): string {

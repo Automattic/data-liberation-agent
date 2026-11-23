@@ -33,6 +33,9 @@ describe( 'absent sibling corroboration (rendered HTML fixtures)', () => {
 		// A fallback that names itself, not the requested route, is still absent.
 		const selfNamed = vi.fn( async ( url: string ) => ( { status: 200, html: declared( url ) } ) );
 		expect( await new AbsentDocumentProbes().matches( 'https://example.com/events/broken', declared( 'https://example.com/events/broken' ), selfNamed ) ).toBe( true );
+		// Query-routed pages share one path: a fallback naming another query is still absent.
+		const otherQuery = vi.fn( async () => ( { status: 200, html: declared( 'https://example.com/product?id=7' ) } ) );
+		expect( await new AbsentDocumentProbes().matches( 'https://example.com/product?id=gone', declared( 'https://example.com/product?id=7' ), otherQuery ) ).toBe( true );
 	} );
 
 	it( 'leaves children untouched when their parent probe returns HTTP 404', async () => {
