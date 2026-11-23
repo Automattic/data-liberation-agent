@@ -114,6 +114,19 @@ it.skipIf( skipBrowserTests )( 'turns observed mobile client-routed tabs into na
 }, 30_000 );
 
 describe( 'captureTriggeredDialogs', () => {
+	it.skipIf( skipBrowserTests )( 'captures an opening dialog once its entrance animation has finished', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		await page.setContent( `<!doctype html><style>@keyframes reveal{from{transform:translateX(100%)}to{transform:none}}
+			#drawer{position:fixed;inset:0 0 0 50%;background:#fff}#drawer[data-animation-state=enterActive]{animation:reveal .8s linear}</style>
+			<body><button id="open" aria-haspopup="dialog">Menu</button>
+			<div id="drawer" role="dialog" aria-modal="true" aria-label="Site navigation" hidden><a href="/a">A</a></div>
+			<script>const drawer = document.getElementById('drawer');
+				document.getElementById('open').onclick = () => { drawer.dataset.animationState = 'enterActive'; drawer.hidden = false; };
+				drawer.addEventListener('animationend', () => { drawer.dataset.animationState = 'enterDone'; });
+				document.addEventListener('keydown', e => { if (e.key === 'Escape') { drawer.hidden = true; delete drawer.dataset.animationState; } });</script></body>` );
+		const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+		expect( report.states.find( state => state.trigger.id === 'open' )?.dialog?.html ).toContain( 'data-animation-state="enterDone"' );
+	}, 30_000 );
 	it.skipIf( skipBrowserTests )( 'does not attribute autoplay slides to an unrelated dialog trigger', async ({ newPage }) => {
 		const page = await newPage();
 		{

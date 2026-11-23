@@ -1592,14 +1592,16 @@ async function observeInlineRestingPanels( page: Page, candidates: readonly numb
 
 async function waitForDialogContentStable( page: Page, selector: string ): Promise< void > {
 	// Content is stable once the dialog subtree has not changed for two
-	// 150 ms intervals, the window the previous sampled-size poll required.
-	await settleDocument( page, 'dialog-content', { selector, quietMs: 300, timeoutMs: DIALOG_WAIT_MS } );
+	// 150 ms intervals, the window the previous sampled-size poll required, and
+	// its entrance animations have finished: runtimes mark the open state
+	// (`data-animation-state="enterDone"`) only once they end.
+	await settleDocument( page, 'dialog-content', { selector, quietMs: 300, timeoutMs: DIALOG_WAIT_MS, animations: true } );
 	// A panel whose content mounts on first open is still an empty shell after a
 	// quiet window; capturing it then ships an empty panel on that route only
 	// (#1261). Wait, bounded, for content, then let it settle again.
 	const content = await page.evaluate( waitForDialogContent, { selector, timeoutMs: DIALOG_CONTENT_MOUNT_MS } ).catch( orElse( 'present' as const ) );
 	if ( content !== 'mounted' ) return;
-	await settleDocument( page, 'dialog-content', { selector, quietMs: 300, timeoutMs: DIALOG_WAIT_MS } );
+	await settleDocument( page, 'dialog-content', { selector, quietMs: 300, timeoutMs: DIALOG_WAIT_MS, animations: true } );
 }
 
 async function snapshotDialog(
