@@ -50,7 +50,7 @@ it( 'defers only members whose phone document derives from the phone server pair
 				desktop: { html: `html/${ index }.html`, viewport: { width: 1440, height: 900 } },
 				mobile: { html: `html-mobile/${ index }.html`, userAgent: PHONE, viewport: { width: 402, height: 681 } },
 			} as unknown as CapturedProfiles;
-			deferral.routeCaptured( url, `html/${ index }.html`, false, profiles );
+			deferral.routeCaptured( url, `html/${ index }.html`, undefined, profiles );
 		}
 		await deferral.close();
 		// Both desktop documents derive; only the embed's phone document
