@@ -15,6 +15,15 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.41.1] - 2026-11-23
+
+### Changed
+- regenerate plugin bundles
+- keep fragment links on their route when the captured base document lacks the target
+
+### Fixed
+- learn width-driven transforms that scroll-linked parallax also rewrites
+
 ## [0.41.0] - 2026-11-23
 
 ### Added
