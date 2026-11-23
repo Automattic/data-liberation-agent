@@ -102,10 +102,25 @@ export function absentDocumentSignature( html: string, url: string ): string | u
 
 export interface AbsentSiblingRender { status: number; html: string }
 
+interface SiblingProbe { signature: string; declares: Set< string > }
+
+/** Routes the document names as itself. A sibling that names the requested
+ * route is that route served under a decorative slug (id-routed platforms),
+ * not an absent screen: a fallback cannot know which real route it stands for. */
+function declaredRoutes( html: string, url: string ): Set< string > {
+	const $ = cheerio.load( html );
+	const declared = new Set< string >();
+	$( 'link[rel~="canonical" i][href], meta[property="og:url" i][content]' ).each( ( _, element ) => {
+		const node = $( element );
+		try { declared.add( normalizeRoute( new URL( node.attr( 'href' ) ?? node.attr( 'content' ) ?? '', url ).href ) ); } catch { /* Ignore unparseable declarations. */ }
+	} );
+	return declared;
+}
+
 /** One render per parent, including failed/HTTP-404 probes. Store the promise
  * before awaiting it so concurrent children cannot duplicate the probe. */
 export class AbsentDocumentProbes {
-	private readonly parents = new Map< string, Promise< string | undefined > >();
+	private readonly parents = new Map< string, Promise< SiblingProbe | undefined > >();
 
 	async matches( url: string, html: string, render: ( url: string ) => Promise< AbsentSiblingRender | undefined > ): Promise< boolean > {
 		const signature = absentDocumentSignature( html, url );
@@ -119,11 +134,15 @@ export class AbsentDocumentProbes {
 		if ( ! probe ) {
 			route.pathname += `liberation-absent-${ randomUUID() }`;
 			const sibling = route.href;
-			probe = render( sibling ).then( result => result && result.status === 200
-				? absentDocumentSignature( result.html, sibling ) : undefined );
+			probe = render( sibling ).then( result => {
+				if ( ! result || result.status !== 200 ) return undefined;
+				const siblingSignature = absentDocumentSignature( result.html, sibling );
+				return siblingSignature ? { signature: siblingSignature, declares: declaredRoutes( result.html, sibling ) } : undefined;
+			} );
 			this.parents.set( parent, probe );
 		}
-		return signature === await probe;
+		const sibling = await probe;
+		return sibling?.signature === signature && ! sibling.declares.has( normalizeRoute( url ) );
 	}
 }
 
