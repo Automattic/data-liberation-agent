@@ -13,8 +13,24 @@ export function authoredBaseUrl( html: string, documentUrl: string ): string {
 	try { return href === undefined ? documentUrl : new URL( href, documentUrl ).href; } catch { return documentUrl; }
 }
 
+/** The fragment targets (element ids and legacy `<a name>`) a document declares. */
+export function declaredFragmentTargets( $: cheerio.CheerioAPI ): Set< string > {
+	const targets = new Set< string >();
+	$( '[id]' ).each( ( _, element ) => { targets.add( $( element ).attr( 'id' )! ); } );
+	$( 'a[name]' ).each( ( _, element ) => { targets.add( $( element ).attr( 'name' )! ); } );
+	return targets;
+}
+
+export interface DocumentReferenceOptions {
+	/**
+	 * Whether the captured document at `documentUrl` declares `fragment`:
+	 * `undefined` when that document was not captured.
+	 */
+	fragmentDeclaredAt?: ( documentUrl: string, fragment: string ) => boolean | undefined;
+}
+
 /** Resolve source references before removing <base> or combining viewport documents. */
-export function resolveDocumentReferences( html: string, documentUrl: string, browserBaseUrl?: string ): string {
+export function resolveDocumentReferences( html: string, documentUrl: string, browserBaseUrl?: string, options: DocumentReferenceOptions = {} ): string {
 	// Legacy captures without browser metadata or an authored base already use
 	// the route URL. Avoid an extra DOM allocation for those large documents.
 	if ( browserBaseUrl === undefined && ! /<base(?:\s|>)/i.test( html ) ) return html;
@@ -27,12 +43,29 @@ export function resolveDocumentReferences( html: string, documentUrl: string, br
 	} catch {
 		baseUrl = documentUrl;
 	}
+	const baseNamesDocument = new URL( baseUrl ).href.split( '#' )[ 0 ] === documentUrl.split( '#' )[ 0 ];
+	let targets: Set< string > | undefined;
+	const fragmentOf = ( reference: string ): string => {
+		try { return decodeURIComponent( reference.slice( 1 ) ); } catch { return reference.slice( 1 ); }
+	};
+	// A fragment-only link that a browser would send to the base document, when
+	// this document declares the target and the captured base document does
+	// not. An SPA's <base href="/"> serves its assets; its router keeps `#id`
+	// on the current route. Following the base would land on a page without
+	// the id and leave this route (#2229). Anything else keeps browser semantics.
+	const keepsSameDocumentFragment = ( reference: string ): boolean => {
+		const fragment = fragmentOf( reference );
+		if ( ! fragment || ! options.fragmentDeclaredAt ) return false;
+		targets ??= declaredFragmentTargets( $ );
+		if ( ! targets.has( fragment ) && ! targets.has( reference.slice( 1 ) ) ) return false;
+		return options.fragmentDeclaredAt( new URL( baseUrl ).href.split( '#' )[ 0 ], fragment ) === false;
+	};
 	const resolve = ( reference: string ): string => {
 		// An absolute reference names its target already. Re-serializing it
 		// (URL#href) would change authored spelling, such as an origin's slash.
 		if ( ! reference.trim() || /^[a-z][a-z0-9+.-]*:/i.test( reference ) ) return reference;
 		// A document fragment remains local when its base still names this document.
-		if ( reference.startsWith( '#' ) && new URL( baseUrl ).href.split( '#' )[ 0 ] === documentUrl.split( '#' )[ 0 ] ) return reference;
+		if ( reference.startsWith( '#' ) && ( baseNamesDocument || keepsSameDocumentFragment( reference ) ) ) return reference;
 		try {
 			const url = new URL( reference, baseUrl );
 			return /^https?:$/.test( url.protocol ) ? url.href : reference;

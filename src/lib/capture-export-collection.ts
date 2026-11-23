@@ -27,7 +27,7 @@ import type { CapturedResourceManifest } from './screenshot/resource-capture.js'
 import { galleryFrameMediaUrls } from './screenshot/gallery-capture.js';
 import { NON_DOCUMENT_URL } from './screenshot/linked-frontier.js';
 import { srcsetReferences } from './srcset.js';
-import { resolveDocumentReferences } from './document-resource-base.js';
+import { declaredFragmentTargets, resolveDocumentReferences, type DocumentReferenceOptions } from './document-resource-base.js';
 import { pathWithin } from './portable-assets.js';
 import type { FailedPortableMedia } from './portable-media.js';
 import { elementSrcReferences } from './portable-references.js';
@@ -280,6 +280,34 @@ export interface RouteLinks {
  boundaryRoutes: Set<string>; capturedRouteKeys: Set<string>; absentRoutes: Set<string>; absentRouteKeys: Set<string>; omittedRouteKeys: Set<string>; resourceInputKeys: Set<string>;
  verifiedRouteObservations: NonNullable<InteractionStatesReport['routeNavigation']>;
 }
+/**
+ * Answers which captured route documents declare a fragment, so a fragment-only
+ * link that a `<base>` sends to another captured document can be checked against
+ * that document. Each document is parsed only when a link names it.
+ */
+export function capturedDocumentReferences( entries: ScreenshotManifest['entries'], outputDir: string ): DocumentReferenceOptions {
+	const paths = new Map< string, string >();
+	for ( const [ url, entry ] of Object.entries( entries ) ) {
+		if ( ! entry.html || entry.redirectedTo || entry.sourceAbsentStatus ) continue;
+		const path = resolve( outputDir, entry.html );
+		if ( ! pathWithin( outputDir, path ) ) continue;
+		for ( const documentUrl of [ url, entry.documents?.desktop?.url ] ) {
+			if ( documentUrl && ! paths.has( normalizedUrl( documentUrl ) ) ) paths.set( normalizedUrl( documentUrl ), path );
+		}
+	}
+	const targets = new Map< string, Set< string > | undefined >();
+	return {
+		fragmentDeclaredAt( documentUrl, fragment ) {
+			const key = normalizedUrl( documentUrl );
+			if ( ! targets.has( key ) ) {
+				const path = paths.get( key );
+				targets.set( key, path && existsSync( path ) ? declaredFragmentTargets( cheerio.load( readFileSync( path, 'utf8' ) ) ) : undefined );
+			}
+			return targets.get( key )?.has( fragment );
+		},
+	};
+}
+
 export function collectCapturedRoutes( { entries, sourceUrl, routeScope, failures, structuredEntries, deviceMode: siteDeviceMode, input, resolveDocumentSelection, outputDir, embedded, embeddedSources, hasHttpInput, siteSwitchWidth, phoneSwitchWidth, stagedHtmlDir, resourceManifest, routeFailureReasons, maxFileBytes, budget, exclusions }: {
  entries: ScreenshotManifest['entries']; sourceUrl: string; routeScope?: SiteRouteScope; failures: Array<{ url: unknown; error: unknown }>; structuredEntries?: StructuredContentEntry[];
  deviceMode?: DeviceMode; input?: HttpExportInput; resolveDocumentSelection?: ( documents: Readonly<Record<string, string>> ) => DocumentSelection | undefined;
@@ -304,6 +332,7 @@ export function collectCapturedRoutes( { entries, sourceUrl, routeScope, failure
 			canonicalHost = entrypointCanonicalHost( sourceUrl, readFileSync( path, 'utf8' ), homepage.metadata?.openGraph?.[ 'og:url' ] );
 		}
 	}
+	const documentReferences = capturedDocumentReferences( entries, outputDir );
 	const responsiveBodyClassProjections = new Map<string, { moved: ReadonlyMap<string, string>; documentClasses?: readonly string[] }>();
 	const collapsedBodyClassProjections = new Map<string, { moved: Map<string, string>; aliases: Map<string, string>; width: number }>();
 	for ( const [ url, entry ] of Object.entries( entries ) ) {
@@ -386,7 +415,7 @@ export function collectCapturedRoutes( { entries, sourceUrl, routeScope, failure
 			const acquiredDesktopHtml = readFileSync(capturedHtmlPath, 'utf8');
 			const desktopHash = createHash('sha256').update(acquiredDesktopHtml).digest('hex');
 			let rawDesktopHtml = embedded && input ? projectRuntimePresentation(projectEmbeddedRegions(acquiredDesktopHtml, url, input.desktopVariant, desktopHash, embedded.receipt.regions), url, input.desktopVariant, desktopHash, embedded.receipt) : acquiredDesktopHtml;
-			rawDesktopHtml = resolveDocumentReferences(rawDesktopHtml, entry.documents?.desktop?.url ?? url, entry.documents?.desktop?.baseUrl);
+			rawDesktopHtml = resolveDocumentReferences(rawDesktopHtml, entry.documents?.desktop?.url ?? url, entry.documents?.desktop?.baseUrl, documentReferences);
 			// A builder's own logo is not the site's icon; owner-uploaded icons stay.
 			rawDesktopHtml = withoutPlatformDefaultIcons(rawDesktopHtml, entry.documents?.desktop?.url ?? url);
 			// Each profile's scripted links take the destinations observed in that profile.
@@ -426,7 +455,7 @@ export function collectCapturedRoutes( { entries, sourceUrl, routeScope, failure
 					: undefined;
 			const mobileHash = acquiredMobileHtml === undefined ? undefined : createHash('sha256').update(acquiredMobileHtml).digest('hex');
 			let rawMobileHtml = embedded && input?.mobileVariant && acquiredMobileHtml !== undefined ? projectRuntimePresentation(projectEmbeddedRegions(acquiredMobileHtml, url, input.mobileVariant, mobileHash!, embedded.receipt.regions), url, input.mobileVariant, mobileHash!, embedded.receipt) : acquiredMobileHtml;
-			if (rawMobileHtml !== undefined) rawMobileHtml = withoutPlatformDefaultIcons(resolveDocumentReferences(rawMobileHtml, entry.documents?.mobile?.url ?? url, entry.documents?.mobile?.baseUrl), entry.documents?.mobile?.url ?? url);
+			if (rawMobileHtml !== undefined) rawMobileHtml = withoutPlatformDefaultIcons(resolveDocumentReferences(rawMobileHtml, entry.documents?.mobile?.url ?? url, entry.documents?.mobile?.baseUrl, documentReferences), entry.documents?.mobile?.url ?? url);
 			if (rawMobileHtml !== undefined) rawMobileHtml = lowerScriptedLinks(rawMobileHtml, entry.scriptedLinks?.mobile);
 			const sourceDocuments: Record<string, string> = { desktop: rawDesktopHtml, ...( rawMobileHtml === undefined ? {} : { mobile: rawMobileHtml } ) };
 			for ( const [ key, profile ] of Object.entries( entry.profiles ?? {} ) ) {
@@ -434,7 +463,7 @@ export function collectCapturedRoutes( { entries, sourceUrl, routeScope, failure
 				const path = resolve( outputDir, profile.html );
 				if ( ! pathWithin( outputDir, path ) || ! existsSync( path ) ) throw new IntegrityError( `Device document is missing or outside capture: ${ key }` );
 				const documentUrl = entry.documents?.[ key ];
-				sourceDocuments[ key ] = lowerScriptedLinks( withoutPlatformDefaultIcons( resolveDocumentReferences( readFileSync( path, 'utf8' ), documentUrl?.url ?? url, documentUrl?.baseUrl ), documentUrl?.url ?? url ), entry.scriptedLinks?.[ key ] );
+				sourceDocuments[ key ] = lowerScriptedLinks( withoutPlatformDefaultIcons( resolveDocumentReferences( readFileSync( path, 'utf8' ), documentUrl?.url ?? url, documentUrl?.baseUrl, documentReferences ), documentUrl?.url ?? url ), entry.scriptedLinks?.[ key ] );
 			}
 			const selection = resolveDocumentSelection?.( sourceDocuments );
 			if ( selection?.kind === 'width' ) {
