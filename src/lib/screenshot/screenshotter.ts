@@ -234,7 +234,6 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 	const stylesRewritten = await page.evaluate(
 		( { factorySrc, serverHtml } ) => {
 			let rewritten = false;
-			( window as typeof window & { __dlaEntrances?: { stamp(): void } } ).__dlaEntrances?.stamp();
 			const authoredStyles = new Set<string>();
 			if ( serverHtml ) {
 				const baseline = new DOMParser().parseFromString( serverHtml, 'text/html' );
@@ -329,6 +328,10 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 		// after the last sweep, and no source script runs between these two.
 		const result = await page.evaluate( async ( { normalizeDocumentSource, boxTreeSource, boxTreeProperties, captureBoxes, stampSource, nodeIdAttribute, observeControlSource, controlAttribute, portMapsSource, mapHostSource, iframeEvidenceAttributes, scaffoldingSource, shadowSource, parseSrcsetSource, srcsetShapedSource, initialScrollClassAttribute } ) => {
 			( window as unknown as { __dlaCleanup?: { sweep: () => void } } ).__dlaCleanup?.sweep();
+			// Entrance poses are read in the serializing task, under the motion hold:
+			// read any earlier, an autoplaying slide can rotate out of the pose it
+			// is stamped with before the document is serialized.
+			( window as typeof window & { __dlaEntrances?: { stamp(): void } } ).__dlaEntrances?.stamp();
 			// Independent computed-style sentinels from the styled baseline, before
 			// any serialization-only DOM trials. Never validate evidence against itself.
 			const sentinelProperties = [ 'position', 'display', 'font-family', 'margin-top' ];
