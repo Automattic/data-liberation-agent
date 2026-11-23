@@ -118,6 +118,25 @@ function recordInterruptedLoad(request: Request): void {
   } catch { /* Service workers have no owning page. */ }
 }
 
+const pacedLoads = new WeakMap<Page, number>();
+
+/**
+ * Monotonic per-page milliseconds this capture's own rate ceiling held the
+ * page's source loads back. A navigation that times out while it grew was
+ * slowed by our pacing, not by the source.
+ */
+export function sourcePacingDelayMs(page: Page): number {
+  return pacedLoads.get(page) ?? 0;
+}
+
+function recordPacedLoad(request: Request, ms: number): void {
+  if (ms <= 0) return;
+  try {
+    const page = request.frame().page();
+    pacedLoads.set(page, sourcePacingDelayMs(page) + ms);
+  } catch { /* Service workers have no owning page. */ }
+}
+
 const nativeRequests = new WeakMap<Request, {
   governor: ReturnType<SourceRequestGovernors['forOrigin']>;
   category: SourceRequestCategory;
@@ -144,8 +163,12 @@ export async function continueSourceRoute(route: Route, context: BrowserContext,
   const abort = new AbortController();
   const close = () => abort.abort();
   context.once('close', close);
+  const pacingStartedAt = Date.now();
   try { await governor.pace(abort.signal); }
-  finally { context.off('close', close); }
+  finally {
+    context.off('close', close);
+    recordPacedLoad(request, Date.now() - pacingStartedAt);
+  }
   nativeRequests.set(request, { governor, attribution: requestAttribution, category: request.resourceType() === 'document' ? traffic.get(context)?.category ?? 'document' : 'subresource', routeUrl: owningDocumentUrl(request), refusalAdmission: governor.refusalAdmission() });
   try { await route.continue(options); }
   catch (error) {
