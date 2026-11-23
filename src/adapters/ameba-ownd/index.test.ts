@@ -50,6 +50,9 @@ describe( 'Ameba Ownd detection', () => {
 	it( 'leaves other Next.js documents to the Next.js adapter', () => {
 		const html = '<html><head><meta name="twitter:app:url:iphone" content="otherapp://sites/1"/><script src="/_next/static/chunks/main.js"></script></head><body><script id="__NEXT_DATA__" type="application/json">{}</script></body></html>';
 		expect( detectFromDocument( 'https://www.example.jp/', new Headers(), html ).platform ).toBe( 'nextjs' );
+		// A hint to the platform's CDN is not the platform's own stylesheet.
+		const preconnect = html.replace( '<head>', '<head><link rel="preconnect" href="https://static.amebaowndme.com/madrid-frontend/css/">' );
+		expect( detectFromDocument( 'https://www.example.jp/', new Headers(), preconnect ).platform ).toBe( 'nextjs' );
 	} );
 } );
 
@@ -189,6 +192,37 @@ describe( 'Ameba Ownd structured content', () => {
 		}
 	} );
 
+	it( 'reads list pages until one is empty when no total is declared', async () => {
+		const posts = listPosts();
+		const untotaled = ( slice: unknown[] ) => listPage( slice, null as never, 2 );
+		const pages: Record< string, string > = {
+			[ `${ ORIGIN }/posts/page/1` ]: untotaled( posts.slice( 0, 2 ) ),
+			[ `${ ORIGIN }/posts/page/2` ]: untotaled( posts.slice( 2 ) ),
+			[ `${ ORIGIN }/posts/page/3` ]: untotaled( [] ),
+		};
+		const fetch = vi.spyOn( fetching, 'safeFetch' ).mockImplementation( async url => response( pages[ String( url ) ], String( url ) ) );
+		try {
+			const result = await enumerateAmebaContent( `${ ORIGIN }/`, { governors: new SourceRequestGovernors() } );
+			expect( result.entries.map( entry => entry.slug ) ).toEqual( [ '59201354', '59187999', '59177220' ] );
+		} finally {
+			fetch.mockRestore();
+		}
+	} );
+
+	it( 'learns category ids afresh on each enumeration', async () => {
+		const recreated = listPosts().map( post => ( { ...post, blogCategories: ( post.blogCategories as Array< { id: string; label: string } > | undefined )?.map( category => category.label === 'お知らせ' ? { ...category, id: '9999999' } : category ) } ) );
+		const fetch = vi.spyOn( fetching, 'safeFetch' );
+		try {
+			for ( const posts of [ listPosts(), recreated ] ) {
+				fetch.mockImplementation( async url => response( String( url ) === `${ ORIGIN }/posts/page/1` ? listPage( posts, posts.length, posts.length ) : undefined, String( url ) ) );
+				await enumerateAmebaContent( `${ ORIGIN }/`, { governors: new SourceRequestGovernors() } );
+			}
+			expect( amebaStructuredContent.termArchiveUrl( 'お知らせ', ORIGIN ) ).toBe( `${ ORIGIN }/posts/categories/9999999` );
+		} finally {
+			fetch.mockRestore();
+		}
+	} );
+
 	it( 'reports an unavailable post list instead of inventing entries', async () => {
 		const fetch = vi.spyOn( fetching, 'safeFetch' ).mockImplementation( async url => response( undefined, String( url ) ) );
 		try {
@@ -222,6 +256,17 @@ describe( 'Ameba Ownd structured content', () => {
 		const withImage = { ...listPosts()[ 1 ], contents: [ { type: 'image', url: 'https://cdn.example/a.png' } ] };
 		expect( amebaMemberDocument( postHtml, representative, amebaPostEntry( withImage as never, ORIGIN )! ) ).toBeUndefined();
 		expect( amebaMemberDocument( postHtml, representative, amebaPostEntry( { ...listPosts()[ 1 ], title: '' } as never, ORIGIN )! ) ).toBeUndefined();
+
+		// A member's own link to the representative is authored content and stays as written.
+		const repPath = new URL( representative.permalink ).pathname;
+		const linking = { ...listPosts()[ 1 ], contents: [ { type: 'text', value: `<p><a href="${ repPath }">Earlier post</a></p>` } ] };
+		const linked = cheerio.load( amebaMemberDocument( postHtml, representative, amebaPostEntry( linking as never, ORIGIN )! )! );
+		expect( linked( '.blog-article__body a' ).attr( 'href' ) ).toBe( repPath );
+
+		// An uncategorized representative has nowhere to put a member's categories.
+		const uncategorized = cheerio.load( postHtml );
+		uncategorized( '.bloginfo-category-list' ).remove();
+		expect( amebaMemberDocument( uncategorized.html(), representative, member ) ).toBeUndefined();
 	} );
 } );
 

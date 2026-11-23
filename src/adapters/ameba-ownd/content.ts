@@ -134,6 +134,8 @@ function inventoryUrls( inventory: unknown ): string[] {
  */
 export async function enumerateAmebaContent( sourceUrl: string, { governors, inventory }: { governors: SourceRequestGovernors; inventory?: unknown } ): Promise< StructuredContentEnumeration > {
 	const origin = new URL( sourceUrl ).origin;
+	// Each enumeration learns the site's current categories afresh.
+	categoryIds.delete( origin );
 	const result: StructuredContentEnumeration = { entries: [], diagnostics: [] };
 	const diagnostic = ( code: string, url: string, reason: string ) => result.diagnostics.push( { code, url, reason } );
 	const seen = new Set< string >();
@@ -160,7 +162,8 @@ export async function enumerateAmebaContent( sourceUrl: string, { governors, inv
 		if ( pages === null ) {
 			total = list.total;
 			const limit = list.limit || list.posts.length;
-			pages = total !== null && limit ? Math.ceil( total / limit ) : 1;
+			// Without a declared total, read on until a list page comes back empty.
+			pages = total !== null && limit ? Math.ceil( total / limit ) : AMEBA_LIST_PAGE_CAP + 1;
 		}
 		if ( list.posts.length === 0 ) break;
 		for ( const post of list.posts ) {
@@ -240,7 +243,8 @@ export function amebaMemberDocument( html: string, representative: StructuredCon
 	const dates = $( 'time.blog-article__date' );
 	const categoryLists = $( '.bloginfo-category-list' );
 	if ( titles.length !== 1 || dates.length !== 1 || categoryLists.length > 1 ) return undefined;
-	$( BODY ).html( member.contentHtml );
+	// An uncategorized representative has no list to carry a member's categories.
+	if ( categoryLists.length === 0 && memberDetails.categories.length > 0 ) return undefined;
 	titles.text( member.title );
 	dates.attr( 'datetime', memberDetails.publishedAt ).text( amebaDisplayDate( memberDetails.publishedAt ) );
 	const origin = new URL( member.permalink ).origin;
@@ -265,6 +269,8 @@ export function amebaMemberDocument( html: string, representative: StructuredCon
 		const value = element.attr( attribute ) ?? '';
 		element.attr( attribute, value.replace( repPath, memberPath ) );
 	} );
+	// The member's own body goes in last, so links it makes to the representative stay as written.
+	$( BODY ).html( member.contentHtml );
 	return $.html();
 }
 
