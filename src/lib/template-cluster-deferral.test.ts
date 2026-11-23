@@ -100,17 +100,17 @@ it( 'verifies an interactive cluster from light renders and renders the members 
 	}
 } );
 
-const menuState = ( label: string ) => ( {
-	status: 'captured' as const,
-	trigger: { selector: `#${ label }-button`, tag: 'button', id: `${ label }-button`, ariaHaspopup: 'menu', label, dataBindings: {} },
-	dialog: { selector: '[data-lib-interaction-dialog="captured"]', tag: 'div', ariaModal: false, presentation: 'dropdown' as const, html: `<div role="menu" aria-labelledby="${ label }-button"><a href="/">${ label }</a></div>`, htmlBytes: 64, htmlTruncated: false },
+/** Content gallery states in each post's body, which `chromeInteractionStates` does not carry. */
+const contentState = ( label: string ) => ( {
+	status: 'captured' as const, kind: 'gallery' as const,
+	trigger: { selector: 'main .gallery-next', tag: 'button', ariaHaspopup: '', label, dataBindings: {} },
 } );
-const report = ( url: string, labels: string[] ) => ( { schema: 'blocks-engine-capture/interaction-states/v2' as const, sourceUrl: url, viewport: { width: 1440, height: 900 }, capturedAt: new Date().toISOString(), states: labels.map( menuState ) } );
+const report = ( url: string, labels: string[] ): InteractionStatesReport => ( { schema: INTERACTION_STATES_SCHEMA, sourceUrl: url, viewport: { width: 1440, height: 900 }, capturedAt: new Date().toISOString(), states: labels.map( contentState ) } );
 
 it.each( [
-	{ name: 'defers members when the projected menus match the verifier', verifierMenus: [ 'Menu' ], deferred: true },
-	{ name: 'keeps browser capture when the verifier captured another menu', verifierMenus: [ 'Menu', 'Share' ], deferred: false },
-] )( '$name', async ( { verifierMenus, deferred } ) => {
+	{ name: 'defers members when the projected content states match the verifier', verifierStates: [ 'Next' ], deferred: true },
+	{ name: 'keeps browser capture when the verifier captured another state', verifierStates: [ 'Next', 'Share' ], deferred: false },
+] )( '$name', async ( { verifierStates, deferred } ) => {
 	const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 	const outputDir = mkdtempSync( join( parent, 'template-deferral-interactions-' ) );
 	const urls = [ '/post/rep/', '/post/alpha/', '/post/beta/', '/post/gamma/' ].map( path => origin + path );
@@ -121,7 +121,7 @@ it.each( [
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		for ( const [ index, url ] of seeds.entries() ) {
 			writeFileSync( join( outputDir, `html/seed-${ index }.html` ), page( new URL( url ).pathname ) );
-			deferral.routeCaptured( url, `html/seed-${ index }.html`, report( url, url === group.representative ? [ 'Menu' ] : verifierMenus ) );
+			deferral.routeCaptured( url, `html/seed-${ index }.html`, report( url, url === group.representative ? [ 'Next' ] : verifierStates ) );
 		}
 		await deferral.close();
 		const tail = urls.filter( url => ! seeds.includes( url ) );
