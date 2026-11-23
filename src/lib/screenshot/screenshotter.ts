@@ -719,7 +719,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		return canonicalizeHtml ? canonicalizeInteractionReport( report, html => canonicalizeHtml( html, baseline.rawDocument ) ) : report;
 	};
 
-	resourceStore.observe( page );
+	resourceStore.observe( page, { profile: viewport.id } );
 	const sourceCrashes: string[] = [];
 	const sourceRuntime = args.observeSource ? await watchSourceRuntimeErrors( page ) : undefined;
 	if ( args.observeSource ) page.on( 'crash', () => sourceCrashes.push( 'source renderer crashed' ) );

@@ -486,7 +486,7 @@ export function baselineSteps(
 			const resource = resourceStore.getReplayableResponse( absolute, 'stylesheet' );
 			return resource ? { css: readFileSync( resource.path, 'utf8' ), url: absolute } : undefined;
 		};
-		const projected = projectRootClassContracts( projectInitialDocument( state.initialDocument, learned, linkedSheet ), state.rootClassWidths, linkedSheet );
+		const projected = await resourceStore.withProfileStylesheets( page, projectRootClassContracts( projectInitialDocument( state.initialDocument, learned, linkedSheet ), state.rootClassWidths, linkedSheet ), baseUrl );
 		const captured = typeof state.initialTitle === 'string' ? withDocumentTitle( projected, state.initialTitle ) : projected;
 		state.rawDocument = frozen ? sanitizeFrozenHtml( captured ) : captured;
 		const html = canonicalize( state.rawDocument );

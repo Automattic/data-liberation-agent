@@ -27,6 +27,7 @@ vi.mock( './resource-capture.js', async ( importOriginal ) => ( {
 		captureSelectedSrcsets = vi.fn().mockResolvedValue( undefined );
 		getReplayableResponse = mocks.getReplayableResponse;
 		observe = vi.fn();
+		withProfileStylesheets = vi.fn( async ( _page: unknown, html: string ) => html );
 		settle = vi.fn().mockResolvedValue( undefined );
 		flush = vi.fn().mockResolvedValue( undefined );
 	},
