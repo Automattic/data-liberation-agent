@@ -891,17 +891,3 @@ export function chromeInteractionStates( repHtml: string, derivedHtml: string, r
 	} );
 	return states.length ? { schema: report.schema, sourceUrl: report.sourceUrl, viewport: report.viewport, capturedAt: report.capturedAt, states } : undefined;
 }
-
-/**
- * Whether a document derived from `repHtml` keeps all of `report`'s interaction
- * evidence: every opened state (captured or observed-incomplete) carries over
- * through `chromeInteractionStates`, and the report holds no component,
- * route-navigation or initial-dialog evidence, which derivation never
- * transplants. States whose probe opened nothing hold no behaviour to lose.
- */
-export function interactionEvidenceCarried( repHtml: string, derivedHtml: string, report: InteractionStatesReport | undefined ): boolean {
-	if ( ! report ) return true;
-	if ( report.components?.length || report.routeNavigation?.length || report.initialDialogs?.length ) return false;
-	const opened = report.states.filter( state => state.status === 'captured' || state.status === 'observed-incomplete' ).length;
-	return opened === 0 || chromeInteractionStates( repHtml, derivedHtml, report )?.states.length === opened;
-}

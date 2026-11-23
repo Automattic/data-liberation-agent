@@ -2,13 +2,14 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Browser, BrowserContext, BrowserContextOptions } from 'playwright';
 import { mapPool, withTimeout } from './concurrency.js';
+import { interactionReportMismatch, projectInteractionReport } from './interaction-projection.js';
 import { safeFetch } from './media-fetch/safe-fetch.js';
 import { pathWithin } from './portable-assets.js';
 import { templateVerificationMember } from './route-budget.js';
 import { normalizedUrl } from './url/route-key.js';
 import type { SiteRouteScope } from '../platform/types.js';
-import type { SourceRequestGovernors } from './source-request-governor.js';
 import type { InteractionStatesReport } from './screenshot/interaction-capture.js';
+import type { SourceRequestGovernors } from './source-request-governor.js';
 import type { TemplateGroup, TemplateIdentity, TemplateStyleNormalization } from './template-groups.js';
 
 /**
@@ -169,7 +170,6 @@ export class TemplateClusterDeferral {
 
 	private async check( group: Group, verifier: string ): Promise< void > {
 		const { deriveMemberDocument, compareDerivedWithCapture } = await import( './template-clusters.js' );
-		const { interactionEvidenceCarried } = await import( './static-dialogs.js' );
 		const repProcessedHtml = this.capturedHtml( group.representative );
 		const realHtml = this.capturedHtml( verifier );
 		if ( repProcessedHtml === undefined || realHtml === undefined ) return;
@@ -193,16 +193,15 @@ export class TemplateClusterDeferral {
 			process.stderr.write( `[template-clusters] deferral: ${ group.representative } did not verify; its members keep browser capture\n` );
 			return;
 		}
-		// Derivation transplants HTML. Export wires menus, dialogs and galleries
-		// from separate interaction reports, which a derived member only
-		// inherits for site chrome identical to the representative's
-		// (`chromeInteractionStates`). A member whose seeds recorded evidence
-		// outside that keeps browser capture. The verdict above still stands:
-		// post-capture derivation derives the members the browser budget omits.
-		const seeds = [ { html: repProcessedHtml, report: this.interactions.get( normalizedUrl( group.representative ) ) }, { html: realHtml, report: this.interactions.get( normalizedUrl( verifier ) ) } ];
-		const keepsInteractions = ( derivedHtml: string ) => seeds.every( seed => interactionEvidenceCarried( seed.html, derivedHtml, seed.report ) );
-		if ( ! keepsInteractions( verifiedHtml ) ) {
-			process.stderr.write( `[template-clusters] deferral: ${ group.representative } verified from ${ source } documents; its seeds record interaction states derivation cannot carry, so members keep browser capture\n` );
+		// Export wires menus, dialogs and galleries from the interaction report,
+		// which derivation projects from the representative's. A deferred member
+		// has no capture of its own, so the projection must reproduce the
+		// verifier's. The verdict above still stands: post-capture derivation
+		// derives the members the browser budget omits.
+		const interactionMismatch = interactionReportMismatch( projectInteractionReport( repProcessedHtml, verifiedHtml, this.interactions.get( normalizedUrl( group.representative ) ) ), this.interactions.get( normalizedUrl( verifier ) ) );
+		if ( interactionMismatch ) {
+			process.stderr.write( `[template-clusters] deferral: ${ group.representative } verified from ${ source } documents; interaction states did not verify (${ interactionMismatch }), so members keep browser capture
+` );
 			if ( source === 'rendered' || this.input.rewriteDerivedMedia ) this.prefetchRenders( group );
 			return;
 		}
@@ -216,9 +215,7 @@ export class TemplateClusterDeferral {
 			const member = await this.document( url, source );
 			const media = this.input.rewriteDerivedMedia ? await this.document( url, 'rendered' ) : undefined;
 			const mediaHtml = media && 'html' in media ? media.html : undefined;
-			if ( ! ( 'html' in member ) ) return;
-			const derivation = derive( repServerHtml, member.html, mediaHtml );
-			if ( ! derivation.ok || ! keepsInteractions( derivation.html ) ) return;
+			if ( ! ( 'html' in member ) || ! derive( repServerHtml, member.html, mediaHtml ).ok ) return;
 			for ( const profile of profiles ) {
 				if ( ! profile.server ) {
 					if ( ! derive( repServerHtml, member.html, mediaHtml, { repProcessedHtml: profile.repProcessedHtml } ).ok ) return;
