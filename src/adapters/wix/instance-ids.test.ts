@@ -98,6 +98,27 @@ describe( 'canonicalizeWixInstanceIds', () => {
 		const html = '<div id="comp-abc" class="comp-abc-container">x</div>';
 		expect( canonicalizeWixInstanceIds( html ) ).toBe( html );
 	} );
+
+	it( 'names markup reused from another page after the instance on this page that shares its components', () => {
+		// Shared chrome's opened menu is captured once, on the first page, and
+		// reused here: it still carries the first page's instance prefix.
+		// The open panel's own components never render in the closed page.
+		const dialog = ( instance: string ) => `<nav id="${ instance }_r_comp-logo" class="${ instance }_r_comp-panel"><a id="${ instance }_r_comp-panel-link" href="/">Home</a></nav>`;
+		const first = page( 'comp-aaaa1111' ), second = page( 'comp-bbbb2222' );
+		const own = canonicalizeWixInstanceIds( dialog( 'comp-aaaa1111' ), first );
+		const reused = canonicalizeWixInstanceIds( dialog( 'comp-aaaa1111' ), second );
+		expect( reused ).toBe( own );
+		const instance = /id="(comp-dla[0-9a-f]{8})_r_comp-logo"/.exec( canonicalizeWixInstanceIds( second ) )?.[ 1 ];
+		expect( reused ).toContain( `id="${ instance }_r_comp-logo"` );
+	} );
+
+	it( 'names reused markup on its own when no single instance on this page shares its components', () => {
+		const dialog = '<nav id="comp-aaaa1111_r_comp-other" class="comp-aaaa1111_r_comp-panel"></nav>';
+		const out = canonicalizeWixInstanceIds( dialog, page( 'comp-bbbb2222' ) );
+		const instance = /id="(comp-dla[0-9a-f]{8})_r_comp-logo"/.exec( canonicalizeWixInstanceIds( page( 'comp-bbbb2222' ) ) )?.[ 1 ];
+		expect( out ).not.toContain( instance );
+		expect( out ).toMatch( /id="comp-dla[0-9a-f]{8}_r_comp-other"/ );
+	} );
 } );
 
 describe( 'canonicalizeWixFormControlIds', () => {
