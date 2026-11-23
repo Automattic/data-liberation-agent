@@ -365,3 +365,42 @@ it( 'memoizes a shared header toggle rejected by the repeat pass (#2222)', async
 		await browser.close();
 	}
 }, 60_000 );
+
+// One browser pass per page (~3s). Fifty repeated list items each toggle the
+// same stylesheet-named token at a width derived from their layout position
+// (#2264); before grouping each item was bisected on its own.
+it( 'rejects a token repeated siblings flip at different widths without bisecting each (#2264)', async () => {
+	const browser = await chromium.launch();
+	const fixture = ( headers: number ) => `<!doctype html><style>body{margin:0}li{height:20px}.item.is-folded{opacity:.5}.header.is-compact{color:red}</style>
+		${ Array.from( { length: headers }, ( _, i ) => `<div><header class="header" id="h${ i }">Header</header></div>` ).join( '' ) }
+		<ul>${ Array.from( { length: 50 }, ( _, i ) => `<li class="item">Item ${ i }</li>` ).join( '' ) }</ul><script>
+		const sync=()=>{
+			document.querySelectorAll('.header').forEach((header,i)=>header.classList.toggle('is-compact',innerWidth<1000+i*150));
+			document.querySelectorAll('.item').forEach(item=>item.classList.toggle('is-folded',innerWidth<400+item.offsetTop*1.4));
+		};addEventListener('resize',sync);sync();</script>`;
+	try {
+		const memo: ViewportClassMemo = new Map();
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await page.setContent( fixture( 1 ) );
+		const result = await captureViewportClassStates( page, { settleMs: 0, memo } );
+		// Main bisected every item: 296 sampled widths. Now the ladder plus the header's search.
+		expect( result.sampledWidths.length ).toBeLessThan( 20 );
+		expect( result.aliased ).toBe( 1 );
+		expect( result.budgetExhausted ).toBeUndefined();
+		expect( await page.locator( '#h0' ).getAttribute( 'data-blocks-engine-capture-width-classes' ) ).toContain( 'is-compact' );
+		expect( [ ...memo.values() ].filter( value => value === 'rejected' ) ).toHaveLength( 50 );
+		await page.close();
+
+		// Distinct parents keep the headers separate contracts. A spent search
+		// budget keeps the contracts already proven and fails soft.
+		const bounded = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await bounded.setContent( fixture( 3 ) );
+		const partial = await captureViewportClassStates( bounded, { settleMs: 0, maxProbes: 12 } );
+		expect( partial.budgetExhausted ).toBe( true );
+		expect( partial.aliased ).toBeGreaterThanOrEqual( 1 );
+		expect( partial.aliased ).toBeLessThan( 3 );
+		await bounded.close();
+	} finally {
+		await browser.close();
+	}
+}, 60_000 );

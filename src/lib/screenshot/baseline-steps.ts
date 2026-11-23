@@ -690,7 +690,10 @@ export function baselineSteps(
 					settleMs: Math.max( args.settleMs, 800 ),
 					...( args.classBreakpoints ? { breakpoints: args.classBreakpoints } : {} ),
 					...( args.classMemo ? { memo: args.classMemo } : {} ),
+					// An optional optimization: never more than a quarter of the route.
+					budgetMs: Math.min( args.routeDeadlineMs || 600_000, args.routeRemainingMs() ) / 4,
 				} ).catch ( orElse( undefined ) ) : undefined;
+				if ( classes?.budgetExhausted ) args.diagnostics?.push( { code: 'viewport_class_sweep_budget_exhausted', reason: `viewport class sweep stopped at its probe or time budget after ${ classes.sampledWidths.length } widths; unproven class toggles stay at the capture width` } );
 				const documentId = isDesktop ? 'desktop' : viewport.id === MIDDLE_PROFILE_ID ? 'middle' : 'mobile';
 				let sweep: FluidSweepStats | undefined;
 				try {
