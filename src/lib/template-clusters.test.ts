@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compareDerivedWithCapture, deriveMemberDocument, TEMPLATE_CLUSTERS_SCHEMA, writeTemplateClusters } from './template-clusters.js';
+import { compareDerivedWithCapture, deriveMemberDocument, runtimeMountSelector, TEMPLATE_CLUSTERS_SCHEMA, writeTemplateClusters } from './template-clusters.js';
 import { TEMPLATE_FINGERPRINT_VERSION, templateFingerprint } from './template-groups.js';
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -587,6 +587,50 @@ describe( 'slots anchor on element identity, not position (#784)', () => {
 		expect( result ).toMatchObject( { ok: false, gate: { code: 'slot_anchor_unmapped' } } );
 		if ( result.ok ) return;
 		expect( result.gate.reason ).toContain( 'has no matching anchor' );
+	} );
+} );
+
+describe( 'slots resolve through app roots capture unwrapped', () => {
+	// Portable scaffolding removes an inert single-child app root from the
+	// captured document; the server documents still carry it.
+	const server = ( root: string, title: string, words: string, mount = '' ) => `<html><head><title>${ title }</title></head><body><div id="${ root }"><div class="page"><header class="bar"><a href="/">Home</a></header><main class="post"><h1>${ title }</h1><p>${ words }</p>${ mount }</main></div></div><script id="page-data">{}</script></body></html>`;
+	const unwrapped = ( html: string, root: string ) => html.replace( `<div id="${ root }">`, '' ).replace( '</div></div><script', '</div><script' );
+
+	it.each( [ '__next', 'shell' ] )( 'derives a member under an unwrapped #%s', root => {
+		const result = deriveMemberDocument( {
+			repServerHtml: server( root, 'First post', 'Original words' ),
+			repProcessedHtml: unwrapped( server( root, 'First post', 'Original words' ), root ),
+			memberServerHtml: server( root, 'Second post', 'Member words' ),
+			baseUrl: BASE,
+		} );
+		expect( result.ok, JSON.stringify( result ) ).toBe( true );
+		if ( ! result.ok ) return;
+		expect( result.html ).toContain( '<main class="post"><h1>Second post</h1><p>Member words</p></main>' );
+		expect( result.html ).not.toContain( `id="${ root }"` );
+	} );
+
+	it( 'still rejects rewritten server text under an unwrapped app root', () => {
+		const result = deriveMemberDocument( {
+			repServerHtml: server( '__next', 'First post', 'Original words' ),
+			repProcessedHtml: unwrapped( server( '__next', 'First post', 'Rewritten words' ), '__next' ),
+			memberServerHtml: server( '__next', 'Second post', 'Member words' ),
+			baseUrl: BASE,
+		} );
+		expect( result ).toMatchObject( { ok: false, gate: { code: 'slot_anchor_unmapped' } } );
+	} );
+
+	it( 'gates a runtime mount under an unwrapped app root on its server anchor', () => {
+		const repServerHtml = server( '__next', 'First post', 'Original words', '<x-recs data-id="1"></x-recs>' );
+		const result = deriveMemberDocument( {
+			repServerHtml,
+			repProcessedHtml: unwrapped( server( '__next', 'First post', 'Original words', '<x-recs data-id="1"><p>Recommendations</p></x-recs>' ), '__next' ),
+			memberServerHtml: server( '__next', 'Second post', 'Member words', '<x-recs data-id="2"></x-recs>' ),
+			baseUrl: BASE,
+		} );
+		expect( result ).toMatchObject( { ok: false, gate: { code: 'runtime_mount_member_keyed', runtimeAnchor: { attribute: 'id', value: '__next' } } } );
+		if ( result.ok || ! result.gate.runtimeAnchor ) return;
+		// The runtime render resolves this anchor in HTTP and live documents, which keep the app root.
+		expect( runtimeMountSelector( repServerHtml, result.gate.runtimeAnchor ) ).toBe( 'body > :nth-child(1) > :nth-child(1) > :nth-child(2) > :nth-child(3)' );
 	} );
 } );
 
