@@ -11,7 +11,7 @@ import { CAPTURED_INTERACTIONS_SCHEMA, resolveInteractionComponents, type Compon
 import { routeComponents, type CapturedComponent } from './component-states.js';
 import { startStaticServer } from '../replicate/local-site/static-server.js';
 import { anchorChromeStates, readChromeLandmarks, retargetCurrentRoute, reuseSharedChrome, rebaseChromeState, selectorFields, summarizeSharedChrome } from './chrome-reuse.js';
-import type { CapturedDialogInteraction } from './interaction-capture.js';
+import { captureTriggeredDialogs, type CapturedDialogInteraction } from './interaction-capture.js';
 import type { ManifestEntry } from './manifest-queue.js';
 import type { ScreenshotResult } from './types.js';
 
@@ -158,6 +158,39 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'chrome copies und
 			await view.locator( 'header div' ).evaluate( node => node.removeAttribute( 'id' ) );
 			expect( ( await reuseSharedChrome( view, { status: 'captured', durationMs: 0, evidence } ) ).decision ).toMatchObject( { chromeReused: false } );
 		}
+	} );
+
+	it( 'carries the panel rules the probed page already held to a route that lacks them', async ( { newPage } ) => {
+		const view = await newPage( { viewport: { width: 1280, height: 800 } } );
+		// The drawer's rules ship with the page on the route it is probed on
+		// (a page that embeds the drawer's component) and arrive only when it
+		// opens on every other route.
+		const drawerRules = '.drawer { position: fixed; inset: 0px 0px 0px auto; width: 320px; background: rgb(1, 2, 3); }';
+		const fixture = ( preloaded: boolean ) => `<style>header{display:flex}${ preloaded ? drawerRules : '' }.unrelated{color:red}</style>
+<header><button id="cart" aria-haspopup="dialog">Cart</button></header><main>Body</main>
+<script>document.getElementById( 'cart' ).addEventListener( 'click', () => {
+	if ( ! [ ...document.styleSheets ].some( sheet => [ ...sheet.cssRules ].some( rule => rule.selectorText === '.drawer' ) ) ) {
+		const style = document.createElement( 'style' ); style.textContent = ${ JSON.stringify( drawerRules ) }; document.head.append( style );
+	}
+	const panel = document.createElement( 'div' ); panel.className = 'drawer'; panel.setAttribute( 'role', 'dialog' ); panel.textContent = 'Your cart';
+	document.body.append( panel );
+} ); document.addEventListener( 'keydown', event => { if ( event.key === 'Escape' ) document.querySelector( '.drawer' )?.remove(); } );</script>`;
+		await view.route( 'https://fixture/**', route => route.fulfill( { contentType: 'text/html', body: fixture( new URL( route.request().url() ).pathname === '/cart' ) } ) );
+		await view.goto( 'https://fixture/cart' );
+		const landmarks = await readChromeLandmarks( view );
+		const report = await captureTriggeredDialogs( view, 'https://fixture/cart' );
+		expect( report.states ).toMatchObject( [ { status: 'captured', trigger: { label: 'Cart' } } ] );
+		const evidence = { url: 'https://fixture/cart', landmarks, ...await anchorChromeStates( view, landmarks, report.states ) };
+
+		await view.goto( 'https://fixture/shop' );
+		const reuse = await reuseSharedChrome( view, { status: 'captured', durationMs: 0, evidence } );
+		expect( reuse.decision ).toMatchObject( { chromeReused: true, reusedStates: 1 } );
+		expect( reuse.states[ 0 ]?.dialog?.css ?? '' ).toContain( '.drawer' );
+		expect( reuse.states[ 0 ]?.dialog?.css ).not.toContain( '.unrelated' );
+
+		// Where the route already holds them, nothing is repeated.
+		await view.goto( 'https://fixture/cart' );
+		expect( ( await reuseSharedChrome( view, { status: 'captured', durationMs: 0, evidence } ) ).states[ 0 ]?.dialog?.css ?? '' ).not.toContain( '.drawer' );
 	} );
 } );
 

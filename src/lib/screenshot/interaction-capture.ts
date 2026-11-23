@@ -134,6 +134,13 @@ export interface CapturedDialogInteraction {
 		 * serialized styles predate the panel, so without these it renders unstyled.
 		 */
 		css?: string;
+		/**
+		 * Rules the page already held before the panel opened that style the open
+		 * panel. They are not part of `css` - they are already in this page's
+		 * styles - but another route the panel is reused on may lack them (see
+		 * `chrome-reuse.ts`).
+		 */
+		baselineRules?: string[];
 		/** Observed local ancestor transitions and panel placement, verified by source restoration. */
 		ancestorState?: CapturedDropdownAncestorState;
 		rootClassState?: CapturedRootClassState[];
@@ -298,6 +305,7 @@ export async function captureControlledDisclosure( page: Page, selector: string 
 	const ancestors = await observeDropdownAncestors( page, revealed.selector, true );
 	const rootClassState = rootClassDelta( closedRoots, await rootClasses( page ) );
 	const css = await rulesAddedSinceActivation( page );
+	const baselineRules = await baselineRulesStyling( page, revealed.selector );
 	const bounded = boundHtml( snapshot.html );
 	// The controlled form can be an in-flow wrapper around a fixed lightbox.
 	const presentation = await page.locator( revealed.selector ).evaluate( panel => {
@@ -320,7 +328,7 @@ export async function captureControlledDisclosure( page: Page, selector: string 
 			...snapshot, ...( revealed.role ? { role: revealed.role } : {} ),
 			selector: panelSelector ?? revealed.selector, presentation,
 			html: bounded.html, htmlBytes: bounded.bytes, htmlTruncated: bounded.truncated,
-			ancestorState, ...( rootsRestored ? { rootClassState } : {} ), ...( css ? { css } : {} ),
+			ancestorState, ...( rootsRestored ? { rootClassState } : {} ), ...( css ? { css } : {} ), ...( baselineRules.length ? { baselineRules } : {} ),
 		},
 	} };
 }
@@ -652,6 +660,7 @@ export async function captureTriggeredDialogs(
 				continue;
 			}
 			const addedCss = await rulesAddedSinceActivation( page );
+			const baselineRules = await baselineRulesStyling( page, dialog.selector );
 			// A modal can be shown by a class its runtime adds to an ancestor, such
 			// as an open-menu class on the body. Record that only when opening it
 			// changed an ancestor; a dropdown always reports its evidence.
@@ -681,6 +690,7 @@ export async function captureTriggeredDialogs(
 				...surface,
 				...( restingInline ? { restingInline: true } : {} ),
 				...( addedCss ? { css: addedCss } : {} ),
+				...( baselineRules.length ? { baselineRules } : {} ),
 				...( closeControl ? { closeControl } : {} ),
 				...( restoredAncestorState ? { ancestorState: restoredAncestorState } : {} ),
 				...( rootsRestored && rootClassState.length ? { rootClassState } : {} ),
@@ -1017,6 +1027,52 @@ async function rulesAddedSinceActivation( page: Page ): Promise< string > {
 		return added.join( '\n' );
 	} ).catch( orElse( '' ) );
 	return Buffer.byteLength( css ) <= MAX_DIALOG_HTML_BYTES ? css : '';
+}
+
+/**
+ * The rules present before activation that style the open panel: a top-level
+ * rule is kept when it (or a rule nested in its group) selects the panel or a
+ * descendant, ignoring interaction pseudo-classes and pseudo-elements, and a
+ * keyframes rule when a kept rule names it.
+ */
+async function baselineRulesStyling( page: Page, panelSelector: string ): Promise< string[] > {
+	const rules = await page.evaluate( selector => {
+		const panel = document.querySelector( selector );
+		const before = new Set( ( globalThis as unknown as { __dlaRulesBefore?: string[] } ).__dlaRulesBefore ?? [] );
+		if ( ! panel || ! before.size ) return [];
+		const dynamic = /::?(?:hover|focus-visible|focus-within|focus|active|visited|before|after|placeholder|selection|marker|first-line|first-letter|backdrop|-webkit-[\w-]+|-moz-[\w-]+)\b/g;
+		const styles = ( rule: CSSRule ): boolean => {
+			if ( rule instanceof CSSStyleRule ) {
+				return rule.selectorText.split( ',' ).some( part => {
+					const plain = part.replace( dynamic, '' ).trim() || '*';
+					try {
+						return panel.matches( plain ) || panel.querySelector( plain ) !== null;
+					} catch {
+						return false;
+					}
+				} );
+			}
+			const nested = ( rule as CSSRule & { cssRules?: CSSRuleList } ).cssRules;
+			return rule instanceof CSSKeyframesRule || ! nested ? false : Array.from( nested ).some( styles );
+		};
+		const kept: string[] = [];
+		const keyframes: CSSKeyframesRule[] = [];
+		for ( const sheet of Array.from( document.styleSheets ) ) {
+			try {
+				for ( const rule of Array.from( sheet.cssRules ) ) {
+					if ( ! before.has( rule.cssText ) ) continue;
+					if ( rule instanceof CSSKeyframesRule ) keyframes.push( rule );
+					else if ( styles( rule ) ) kept.push( rule.cssText );
+				}
+			} catch {
+				// Cross-origin sheets are captured with the page.
+			}
+		}
+		const text = kept.join( '\n' );
+		for ( const rule of keyframes ) if ( new RegExp( `(?<![\\w-])${ rule.name.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' ) }(?![\\w-])` ).test( text ) ) kept.push( rule.cssText );
+		return [ ...new Set( kept ) ];
+	}, panelSelector ).catch( orElse( [] as string[] ) );
+	return Buffer.byteLength( rules.join( '\n' ) ) <= MAX_DIALOG_HTML_BYTES ? rules : [];
 }
 
 async function rememberBaselinePanels( page: Page ): Promise< void > {
