@@ -15,6 +15,15 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.40.28] - 2026-11-23
+
+### Changed
+- regenerate plugin bundles
+- Project interaction states onto template-derived members
+
+### Fixed
+- activate open-disclosure and tab controls with the shared trigger budget
+
 ## [0.40.27] - 2026-11-23
 
 ### Changed
