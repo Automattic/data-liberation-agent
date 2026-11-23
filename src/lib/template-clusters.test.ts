@@ -596,6 +596,17 @@ describe( 'slots resolve through app roots capture unwrapped', () => {
 	const server = ( root: string, title: string, words: string, mount = '' ) => `<html><head><title>${ title }</title></head><body><div id="${ root }"><div class="page"><header class="bar"><a href="/">Home</a></header><main class="post"><h1>${ title }</h1><p>${ words }</p>${ mount }</main></div></div><script id="page-data">{}</script></body></html>`;
 	const unwrapped = ( html: string, root: string ) => html.replace( `<div id="${ root }">`, '' ).replace( '</div></div><script', '</div><script' );
 
+	it( 'unwraps an app root whose unique id sits beside a repeated test id', () => {
+		const tagged = ( html: string ) => html.replace( '<div id="__next">', '<div id="__next" data-testid="region">' ).replace( '<main class="post">', '<main class="post"><i data-testid="region"></i>' );
+		const result = deriveMemberDocument( {
+			repServerHtml: tagged( server( '__next', 'First post', 'Original words' ) ),
+			repProcessedHtml: unwrapped( server( '__next', 'First post', 'Original words' ), '__next' ).replace( '<main class="post">', '<main class="post"><i></i>' ),
+			memberServerHtml: tagged( server( '__next', 'Second post', 'Member words' ) ),
+			baseUrl: BASE,
+		} );
+		expect( result.ok, JSON.stringify( result ) ).toBe( true );
+	} );
+
 	it.each( [ '__next', 'shell' ] )( 'derives a member under an unwrapped #%s', root => {
 		const result = deriveMemberDocument( {
 			repServerHtml: server( root, 'First post', 'Original words' ),
