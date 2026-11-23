@@ -609,6 +609,19 @@ describe( 'slots resolve through app roots capture unwrapped', () => {
 		expect( result.html ).not.toContain( `id="${ root }"` );
 	} );
 
+	it( 'keeps wrappers whose repeated identity capture stripped on the slot path', () => {
+		const cards = ( first: string ) => `<html><head><title>Cards</title></head><body><main class="post"><div data-testid="card"><a class="link" href="${ first }">A</a></div><div data-testid="card"><a class="link" href="/old">B</a></div></main></body></html>`;
+		const result = deriveMemberDocument( {
+			repServerHtml: cards( '/old' ),
+			repProcessedHtml: cards( '/old' ).replace( / data-testid="card"/g, '' ),
+			memberServerHtml: cards( '/new' ),
+			baseUrl: BASE,
+		} );
+		expect( result.ok, JSON.stringify( result ) ).toBe( true );
+		if ( ! result.ok ) return;
+		expect( result.html ).toContain( '<div><a class="link" href="/new">A</a></div><div><a class="link" href="/old">B</a></div>' );
+	} );
+
 	it( 'still rejects rewritten server text under an unwrapped app root', () => {
 		const result = deriveMemberDocument( {
 			repServerHtml: server( '__next', 'First post', 'Original words' ),

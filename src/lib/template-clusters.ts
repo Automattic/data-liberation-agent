@@ -262,14 +262,17 @@ function slotAnchor( node: Element, body: Element, counts: Map< string, number >
 
 /**
  * Server wrappers capture unwrapped: a single-child element without its own
- * text whose identities are all absent from the captured document. Portable
- * scaffolding removes inert app roots (`#__next`, `#root`) after the source
- * renders, so the server documents still carry them.
+ * text whose identities are unique in the server document and all absent
+ * from the captured document. Portable scaffolding removes inert app roots
+ * (`#__next`, `#root`) after the source renders, so the server documents
+ * still carry them. A repeated identity was never an anchor, and capture may
+ * strip it while keeping the wrapper, so such wrappers stay on the path.
  */
-const unwrappedBy = ( captured: Map< string, number > ) => ( element: Element ): boolean => {
+const unwrappedBy = ( captured: Map< string, number >, server: Map< string, number > ) => ( element: Element ): boolean => {
 	const identities = ANCHOR_ATTRIBUTES.filter( attribute => element.attribs[ attribute ] );
+	const key = ( attribute: string ) => `${ attribute }\u0000${ element.attribs[ attribute ] }`;
 	return identities.length > 0 && slotChildren( element ).length === 1 && ownTextNodes( element ).length === 0 &&
-		identities.every( attribute => ! captured.has( `${ attribute }\u0000${ element.attribs[ attribute ] }` ) );
+		identities.every( attribute => server.get( key( attribute ) ) === 1 && ! captured.has( key( attribute ) ) );
 };
 
 /** The anchor of a server element in the captured document; undefined when capture unwrapped the element itself. */
@@ -722,7 +725,7 @@ export function deriveMemberDocument( input: {
 		return repProcessed.html();
 	};
 	const anchorCounts = anchorValueCounts( repBody );
-	const unwrapped = unwrappedBy( anchorValueCounts( processedBody ) );
+	const unwrapped = unwrappedBy( anchorValueCounts( processedBody ), anchorCounts );
 	const mountGate = runtimeMountGate( repBody, memberBody, processedBody, anchorCounts, unwrapped );
 	if ( mountGate ) return { ok: false, gate: mountGate };
 	const slots: Slot[] = [];
