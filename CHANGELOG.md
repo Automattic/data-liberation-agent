@@ -15,6 +15,15 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.41.2] - 2026-11-23
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- admit plain routes by their measured working set without a reference route
+- visual parity: pixel_region:page
+
 ## [0.41.1] - 2026-11-23
 
 ### Changed
