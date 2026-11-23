@@ -1,4 +1,4 @@
-import type { Page } from 'playwright';
+import type { Page, Request } from 'playwright';
 import { randomUUID } from 'node:crypto';
 import { PORTABLE_WIDGET_OWNERSHIP_SOURCE } from './portable-widget-ownership.js';
 import type { CapturedGallery } from './gallery-capture.js';
@@ -572,6 +572,7 @@ export async function captureTriggeredDialogs(
 			const pageBefore = await pageStateFingerprint( page );
 			let closedRoots = await rootClasses( page );
 			let before: string[] = [];
+			const codeLoads = watchCodeLoads( page );
 			try {
 				await activateTrigger( page, trigger.probeSelector, async () => {
 					before = await visibleDialogSelectors( page );
@@ -583,8 +584,10 @@ export async function captureTriggeredDialogs(
 					// from the resting page, so that leaked state is dismissed first.
 					if ( restingRoots ) restingRoots = await restoreRestingRoots( page, restingRoots );
 					closedRoots = await rootClasses( page );
+					codeLoads.arm();
 				} );
 			} catch ( error ) {
+				codeLoads.dispose();
 				const intercepting = await describeInterceptingElement( page, trigger.probeSelector );
 				states.push( {
 					status: 'click-failed',
@@ -597,6 +600,11 @@ export async function captureTriggeredDialogs(
 
 			let dialog: DialogDescriptor | undefined;
 			const deadline = Date.now() + DIALOG_WAIT_MS;
+			// A runtime can fetch a panel's code on its first activation and mount
+			// it only once that code arrives. While code the activation requested
+			// is still loading, the panel is pending, not absent: the window
+			// extends, bounded by the content mount budget.
+			const loadingDeadline = Date.now() + DIALOG_CONTENT_MOUNT_MS;
 			do {
 				// Source cleanup removes provider dialogs as they open, but its
 				// observer has a budget a busy page can spend before the probes run.
@@ -605,7 +613,8 @@ export async function captureTriggeredDialogs(
 				dialog = await firstNewVisibleDialog( page, before, trigger.probeSelector );
 				if ( dialog ) break;
 				await page.waitForTimeout( 100 );
-			} while ( Date.now() < deadline );
+			} while ( Date.now() < deadline || Date.now() < loadingDeadline && codeLoads.loading() );
+			codeLoads.dispose();
 
 			if ( ! dialog ) {
 				states.push( { status: 'no-dialog', trigger: triggerRecord( trigger ) } );
@@ -1180,6 +1189,35 @@ async function pageScrollBlocked( page: Page ): Promise< boolean > {
 		const style = getComputedStyle( root );
 		return [ 'hidden', 'clip' ].includes( style.overflowY ) || style.position === 'fixed';
 	} ) ).catch( orElse( false ) );
+}
+
+/** Code (scripts, stylesheets) requested after activation and not yet settled. */
+const CODE_SETTLE_MS = 500;
+function watchCodeLoads( page: Page ): { arm(): void; loading(): boolean; dispose(): void } {
+	const pending = new Set< Request >();
+	let armed = false;
+	let settledAt = 0;
+	const isCode = ( request: Request ) => [ 'script', 'stylesheet' ].includes( request.resourceType() ) ||
+		/\.(?:m?js|css)$/i.test( URL.canParse( request.url() ) ? new URL( request.url() ).pathname : '' );
+	const started = ( request: Request ) => {
+		if ( armed && isCode( request ) ) pending.add( request );
+	};
+	const ended = ( request: Request ) => {
+		if ( pending.delete( request ) ) settledAt = Date.now();
+	};
+	page.on( 'request', started );
+	page.on( 'requestfinished', ended );
+	page.on( 'requestfailed', ended );
+	return {
+		arm: () => { armed = true; },
+		// Arrived code still has to run (and may request more) before it mounts.
+		loading: () => pending.size > 0 || Date.now() - settledAt < CODE_SETTLE_MS,
+		dispose: () => {
+			page.off( 'request', started );
+			page.off( 'requestfinished', ended );
+			page.off( 'requestfailed', ended );
+		},
+	};
 }
 
 /** Keep idle evidence out of the DOM and bound the added wait to one probe window. */

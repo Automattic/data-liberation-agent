@@ -18,7 +18,7 @@ it.skipIf( skipBrowserTests )( 'replays a dropdown in its observed flow slot wit
 		.closed{background:transparent}.opened{background:rgba(2,6,23,.85)}
 		nav{height:64px}.panel{height:200px;display:flex;flex-direction:column}
 		</style><header id="header" class="closed" style="padding: 0px;"><nav><button id="toggle" aria-label="Toggle menu">Menu</button></nav><span id="tail"></span></header><main>Body</main>
-		<script>document.getElementById('toggle').addEventListener('click',()=>{
+		<script>document.getElementById('toggle').addEventListener('click',e=>{e.preventDefault();
 		const header=document.getElementById('header'),existing=document.getElementById('menu');
 		if(existing){existing.remove();header.className='closed';header.style.padding='0px';return;}
 		const panel=document.createElement('div');panel.id='menu';panel.className='panel';
@@ -64,7 +64,7 @@ it.skipIf( skipBrowserTests )( 'turns observed mobile client-routed tabs into na
 		<button id="resources" type="button">Resources</button><button id="contact" type="button">Contact</button>
 		<button id="action" type="button">Refresh</button>
 	</nav><button id="outside" type="button">Other action</button><main><h1>Home</h1></main>
-	<script>document.querySelectorAll('#bottom button:not(#action),#outside').forEach(button=>button.addEventListener('click',()=>{
+	<script>document.querySelectorAll('#bottom button:not(#action),#outside').forEach(button=>button.addEventListener('click',e=>{e.preventDefault();
 		const path=button.id==='home'?'/':'/'+button.id;history.pushState({},'',path);
 		document.querySelector('h1').textContent=button.textContent;
 	}));document.querySelector('#action').onclick=()=>document.body.dataset.refreshed='yes';</script></body></html>`;
@@ -1081,7 +1081,7 @@ describe( 'captureTriggeredDialogs', () => {
 							panel.innerHTML='<p>'+label+'</p><button aria-label="Close">Close</button>';
 							panel.querySelector('button').addEventListener('click',()=>panel.remove()); document.body.append(panel);
 						}
-						document.querySelector('#first').addEventListener('click',()=>{
+						document.querySelector('#first').addEventListener('click',e=>{e.preventDefault();
 							document.querySelector('#removed').remove();
 							const original=document.querySelector('#replaced'), replacement=original.cloneNode(true);
 							replacement.addEventListener('click',()=>window.replacementClicks++); original.replaceWith(replacement);
@@ -1291,7 +1291,7 @@ it.skipIf( skipBrowserTests )( 'reports a load-more listing as unsupported witho
 		await page.setContent( `<!doctype html><main><div role="list"><div role="listitem">One</div><div role="listitem" class="more" hidden>Two <a href="/two">Read more</a></div></div>
 		<button id="more">View more</button></main>
 		<script>window.resizes=0;addEventListener('resize',()=>window.resizes++);
-		document.getElementById('more').addEventListener('click',()=>{document.querySelector('.more').hidden=false;});</script>` );
+		document.getElementById('more').addEventListener('click',e=>{e.preventDefault();document.querySelector('.more').hidden=false;});</script>` );
 		const report = await captureTriggeredDialogs( page, 'https://example.test/' );
 		expect( report.states.find( item => item.trigger.id === 'more' ) ).toMatchObject( { status: 'unsupported', dialog: { role: 'listitem' } } );
 		// The resting-panel sweep resizes the viewport: evidence only a replayed surface uses.
@@ -1367,4 +1367,31 @@ describe( 'root class evidence', () => {
 		expect( cart?.status ).toBe( 'captured' );
 		expect( cart?.dialog?.rootClassState ).toEqual( [ { root: 'body', removed: [], added: [ 'locked' ] } ] );
 	}, 40_000 );
+} );
+
+describe( 'lazily loaded panels', () => {
+	// A panel whose code the runtime fetches on first activation mounts only
+	// once that code arrives; a slow chunk must not read as a trigger that
+	// opens nothing.
+	it.skipIf( skipBrowserTests )( 'waits for a panel whose code its first activation fetches', async ( { newPage } ) => {
+		const page = await newPage( { viewport: { width: 1280, height: 800 } } );
+		await page.route( 'https://lazy-panel.test/**', async route => {
+			const path = new URL( route.request().url() ).pathname;
+			if ( path === '/cart-controller.js' ) {
+				await new Promise( resolve => setTimeout( resolve, 1_500 ) );
+				return route.fulfill( { contentType: 'application/javascript', headers: { 'cache-control': 'no-store' }, body: `const s=document.createElement('script');s.src='/cart-view.js';document.head.append(s);` } );
+			}
+			if ( path === '/cart-view.js' ) {
+				await new Promise( resolve => setTimeout( resolve, 1_500 ) );
+				return route.fulfill( { contentType: 'application/javascript', headers: { 'cache-control': 'no-store' }, body: `const d=document.createElement('div');d.id='cart';d.setAttribute('role','dialog');d.setAttribute('aria-label','Cart');d.style.cssText='position:fixed;inset:0 0 0 auto;width:320px;background:#fff';d.innerHTML='<p>Your cart is empty</p><button id="close-cart" aria-label="Close">x</button>';d.querySelector('button').onclick=()=>d.remove();document.body.append(d);` } );
+			}
+			return route.fulfill( { contentType: 'text/html', body: `<!doctype html><body><header><a id="cart-button" role="button" href="/cart" aria-label="Cart">Cart</a></header><main>Body</main>
+			<script>document.getElementById('cart-button').addEventListener('click',e=>{e.preventDefault();const s=document.createElement('script');s.src='/cart-controller.js';document.head.append(s);});</script></body>` } );
+		} );
+		await page.goto( 'https://lazy-panel.test/' );
+		const report = await captureTriggeredDialogs( page, 'https://lazy-panel.test/' );
+		const state = report.states.find( item => item.trigger.id === 'cart-button' );
+		expect( state?.status ).toBe( 'captured' );
+		expect( state?.dialog ).toMatchObject( { role: 'dialog', ariaLabel: 'Cart' } );
+	}, 30_000 );
 } );
