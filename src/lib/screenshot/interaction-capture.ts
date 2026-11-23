@@ -5,7 +5,7 @@ import type { CapturedGallery } from './gallery-capture.js';
 import { settleDocument } from './page-helpers.js';
 import { DIALOG_CONTENT_MOUNT_MS, waitForDialogContent } from './chrome-hydration.js';
 import { sweepSourceCleanup } from '../source-cleanup.js';
-import { rootClasses, rootClassDelta, type CapturedRootClassState } from './root-class-state.js';
+import { rootClasses, rootClassDelta, rootClassesRestored, type CapturedRootClassState } from './root-class-state.js';
 import { rememberDropdownAncestors, observeDropdownAncestors, verifyDropdownRestoration, type CapturedDropdownAncestorState } from './dropdown-ancestor-state.js';
 import { orElse } from '../failure-class.js';
 
@@ -313,8 +313,7 @@ export async function captureControlledDisclosure( page: Page, selector: string 
 	const dismissal = await closeCapturedDialog( page, revealed.selector, selector, closed );
 	const restored = await page.locator( selector ).getAttribute( 'aria-expanded' ) === 'false' && await closed();
 	const ancestorState = await verifyDropdownRestoration( page, ancestors, revealed.selector );
-	const restoredRoots = await rootClasses( page );
-	const rootsRestored = rootClassState.every( row => row.removed.every( token => restoredRoots[row.root].includes( token ) ) && row.added.every( token => !restoredRoots[row.root].includes( token ) ) );
+	const rootsRestored = await rootClassesRestored( page, rootClassState, DIALOG_WAIT_MS );
 	return { restored, dismissal, evidence: {
 		status: 'captured', kind: 'disclosure', trigger,
 		dialog: {
@@ -332,6 +331,9 @@ export async function captureTriggeredDialogs(
 	options: { skip?: string; navigationSkip?: string } = {}
 ): Promise< InteractionStatesReport > {
 	const viewport = page.viewportSize() ?? { width: 0, height: 0 };
+	// The page's resting root classes, before any probe clicks a control.
+	const pageRoots = await rootClasses( page ).catch( orElse( undefined ) );
+	let restingRoots = pageRoots;
 	// Route transitions and popup transitions share controls. Observe routes
 	// first, restore them, then exclude proven destinations from popup clicks.
 	const routeNavigation = await captureRouteNavigation( page, sourceUrl, { skip: options.navigationSkip ?? options.skip } ).catch( orElse( [] ) );
@@ -567,6 +569,11 @@ export async function captureTriggeredDialogs(
 					before = await visibleDialogSelectors( page );
 					await markVisibleBeforeActivation( page );
 					await rememberDropdownAncestors( page, trigger.probeSelector );
+					// A control an earlier probe activated can open its surface late
+					// (a lazily loaded sign-in modal after a non-navigating route
+					// click) and lock the page roots. Opening this trigger is measured
+					// from the resting page, so that leaked state is dismissed first.
+					if ( restingRoots ) restingRoots = await restoreRestingRoots( page, restingRoots );
 					closedRoots = await rootClasses( page );
 				} );
 			} catch ( error ) {
@@ -651,11 +658,23 @@ export async function captureTriggeredDialogs(
 			const dropdown = dialog.presentation === 'dropdown';
 			const observedAncestors = await observeDropdownAncestors( page, dialog.selector, dropdown );
 			const ancestorState = dropdown || observedAncestors.ancestors.length > 0 || observedAncestors.trigger?.length ? observedAncestors : undefined;
-			const rootClassState = rootClassDelta( closedRoots, await rootClasses( page ) );
+			const openRoots = await rootClasses( page );
+			let rootClassState = rootClassDelta( closedRoots, openRoots );
+			// Classes the page took before this opening (a surface that never
+			// mounted still holds its lock) and still holds while it is open.
+			const held = pageRoots ? rootClassDelta( pageRoots, closedRoots ).flatMap( row => {
+				const added = row.added.filter( token => openRoots[row.root].includes( token ) );
+				return added.length ? [ { root: row.root, removed: [], added } ] : [];
+			} ) : [];
 			const closeControl = await clickAuthoredCloseControl( page, dialog.selector );
 			await closeCapturedDialog( page, dialog.selector, trigger.probeSelector );
-			const restoredRoots = await rootClasses( page );
-			const rootsRestored = rootClassState.every( row => row.removed.every( token => restoredRoots[row.root].includes( token ) ) && row.added.every( token => !restoredRoots[row.root].includes( token ) ) );
+			const rootsRestored = await rootClassesRestored( page, rootClassState, DIALOG_WAIT_MS );
+			// A held class that this dialog's closing releases is its own open
+			// state too: the page held it only because a lock was already taken.
+			if ( rootsRestored && held.length && await rootClassesRestored( page, held, DIALOG_WAIT_MS ) ) {
+				rootClassState = mergeRootClassStates( rootClassState, held );
+				restingRoots = await rootClasses( page ).catch( orElse( restingRoots ) );
+			}
 			const restoredAncestorState = ancestorState ? await verifyDropdownRestoration( page, ancestorState, dialog.selector ) : undefined;
 			const restingCandidate = await rememberRestingPanel( page, trigger.probeSelector, dialog.selector );
 			const capturedDialog = ( restingInline: boolean ): NonNullable< CapturedDialogInteraction[ 'dialog' ] > => ( {
@@ -1065,6 +1084,46 @@ async function markVisibleBeforeActivation( page: Page ): Promise< void > {
 			}
 		}
 	} ).catch( orElse( undefined ) );
+}
+
+/**
+ * Dismiss a surface still holding the page roots away from their resting
+ * classes, and return the resting classes to measure the next trigger from.
+ * A runtime can lock page scrolling before its surface mounts, when there is
+ * nothing yet to dismiss, so dismissal of a scroll-blocking leak repeats until
+ * the roots rest, bounded by the content mount budget. A leak that blocks
+ * nothing (a focus-style class) is page state, not a surface: it is adopted.
+ */
+async function restoreRestingRoots( page: Page, resting: RootClasses ): Promise< RootClasses > {
+	const current = await rootClasses( page ).catch( orElse( undefined ) );
+	if ( ! current ) return resting;
+	const leaked = rootClassDelta( resting, current );
+	if ( ! leaked.length ) return resting;
+	const deadline = Date.now() + DIALOG_CONTENT_MOUNT_MS;
+	do {
+		await page.keyboard.press( 'Escape' ).catch( orElse( undefined ) );
+		if ( await rootClassesRestored( page, leaked, Math.min( 500, deadline - Date.now() ) ) ) return resting;
+	} while ( Date.now() < deadline && await pageScrollBlocked( page ) );
+	return await rootClasses( page ).catch( orElse( current ) );
+}
+
+type RootClasses = Awaited< ReturnType< typeof rootClasses > >;
+
+function mergeRootClassStates( state: readonly CapturedRootClassState[], more: readonly CapturedRootClassState[] ): CapturedRootClassState[] {
+	return ( [ 'html', 'body' ] as const ).flatMap( root => {
+		const rows = [ ...state, ...more ].filter( row => row.root === root );
+		if ( ! rows.length ) return [];
+		return [ { root, removed: [ ...new Set( rows.flatMap( row => row.removed ) ) ], added: [ ...new Set( rows.flatMap( row => row.added ) ) ] } ];
+	} );
+}
+
+/** Whether the document roots prevent page scrolling (a modal surface's lock). */
+async function pageScrollBlocked( page: Page ): Promise< boolean > {
+	return page.evaluate( () => [ document.documentElement, document.body ].some( root => {
+		if ( ! root ) return false;
+		const style = getComputedStyle( root );
+		return [ 'hidden', 'clip' ].includes( style.overflowY ) || style.position === 'fixed';
+	} ) ).catch( orElse( false ) );
 }
 
 /** Keep idle evidence out of the DOM and bound the added wait to one probe window. */

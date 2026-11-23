@@ -1300,3 +1300,71 @@ it.skipIf( skipBrowserTests )( 'reports a load-more listing as unsupported witho
 		await page.close();
 	}
 } );
+
+describe( 'root class evidence', () => {
+	// A cart that locks page scrolling while open, releasing the lock a few
+	// frames after its panel closes; a sign-in control whose modal (with the
+	// same lock) loads late after a non-navigating click, optionally taking the
+	// lock before its modal mounts (Escape has nothing to close until then).
+	const source = ( { lateSignIn, releaseMs, lockFirst = false }: { lateSignIn: boolean; releaseMs: number; lockFirst?: boolean } ) => `<!doctype html><style>.locked{overflow:hidden}</style><body class="site">
+		<header><a id="cart" href="#" role="button" aria-haspopup="dialog" aria-label="Cart">Cart</a>${ lateSignIn ? '<button id="sign-in" type="button">Sign in</button>' : '' }</header><main>Body</main>
+		<script>
+		const open = id => { if ( document.getElementById( id ) ) return; const panel = document.createElement( 'div' ); panel.id = id; panel.setAttribute( 'role', 'dialog' ); panel.setAttribute( 'aria-modal', 'true' );
+			panel.style.cssText = 'position:fixed;inset:0;background:white'; panel.innerHTML = '<p>' + id + ' panel</p>'; document.body.append( panel ); document.body.classList.add( 'locked' ); };
+		const close = () => { const panels = document.querySelectorAll( '[role=dialog]' ); if ( ! panels.length ) return; panels.forEach( panel => panel.remove() ); setTimeout( () => document.body.classList.remove( 'locked' ), ${ releaseMs } ); };
+		document.getElementById( 'cart' ).addEventListener( 'click', event => { event.preventDefault(); setTimeout( () => open( 'cart-panel' ), 50 ); } );
+		document.getElementById( 'sign-in' )?.addEventListener( 'click', () => { ${ lockFirst ? "document.body.classList.add( 'locked' );" : '' } setTimeout( () => open( 'sign-in-panel' ), ${ lockFirst ? 3_000 : 700 } ); } );
+		document.addEventListener( 'keydown', event => { if ( event.key === 'Escape' ) close(); } );
+		</script></body>`;
+
+	it.skipIf( skipBrowserTests )( 'records the root classes a dialog adds when its runtime releases them after the panel closes', async ( { newPage } ) => {
+		const page = await newPage( { viewport: { width: 1280, height: 800 } } );
+		await page.setContent( source( { lateSignIn: false, releaseMs: 400 } ) );
+		const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+		const cart = report.states.find( state => state.trigger.label === 'Cart' );
+		expect( cart?.status ).toBe( 'captured' );
+		expect( cart?.dialog?.rootClassState ).toEqual( [ { root: 'body', removed: [], added: [ 'locked' ] } ] );
+	}, 30_000 );
+
+	it.skipIf( skipBrowserTests )( 'measures a dialog\'s root classes from the resting page when an earlier probe left a late modal open', async ( { newPage } ) => {
+		const page = await newPage( { viewport: { width: 1280, height: 800 } } );
+		await page.route( 'https://late-modal.test/**', route => route.fulfill( { contentType: 'text/html', body: source( { lateSignIn: true, releaseMs: 0 } ) } ) );
+		await page.goto( 'https://late-modal.test/' );
+		const report = await captureTriggeredDialogs( page, 'https://late-modal.test/' );
+		const cart = report.states.find( state => state.trigger.label === 'Cart' );
+		expect( cart?.status ).toBe( 'captured' );
+		expect( cart?.dialog?.rootClassState ).toEqual( [ { root: 'body', removed: [], added: [ 'locked' ] } ] );
+	}, 30_000 );
+
+	it.skipIf( skipBrowserTests )( 'measures from the resting page when a late modal locks the page before it mounts', async ( { newPage } ) => {
+		const page = await newPage( { viewport: { width: 1280, height: 800 } } );
+		await page.route( 'https://late-modal.test/**', route => route.fulfill( { contentType: 'text/html', body: source( { lateSignIn: true, releaseMs: 0, lockFirst: true } ) } ) );
+		await page.goto( 'https://late-modal.test/' );
+		const report = await captureTriggeredDialogs( page, 'https://late-modal.test/' );
+		const cart = report.states.find( state => state.trigger.label === 'Cart' );
+		expect( cart?.status ).toBe( 'captured' );
+		expect( cart?.dialog?.rootClassState ).toEqual( [ { root: 'body', removed: [], added: [ 'locked' ] } ] );
+	}, 30_000 );
+
+	// A runtime that counts nothing: one shared lock class, which any surface's
+	// close releases. A sign-in control takes it and never mounts its surface
+	// (its bootstrap request refused), so Escape has nothing to dismiss.
+	it.skipIf( skipBrowserTests )( 'attributes a held lock to the dialog whose close releases it', async ( { newPage } ) => {
+		const page = await newPage( { viewport: { width: 1280, height: 800 } } );
+		await page.route( 'https://orphan-lock.test/**', route => route.fulfill( { contentType: 'text/html', body: `<!doctype html><style>.locked{overflow:hidden}</style><body class="site">
+			<header><a id="cart" href="#" role="button" aria-haspopup="dialog" aria-label="Cart">Cart</a><button id="sign-in" type="button">Sign in</button></header><main>Body</main>
+			<script>
+			document.getElementById( 'sign-in' ).addEventListener( 'click', () => document.body.classList.add( 'locked' ) );
+			document.getElementById( 'cart' ).addEventListener( 'click', event => { event.preventDefault(); setTimeout( () => {
+				const panel = document.createElement( 'div' ); panel.id = 'cart-panel'; panel.setAttribute( 'role', 'dialog' ); panel.setAttribute( 'aria-modal', 'true' );
+				panel.style.cssText = 'position:fixed;inset:0;background:white'; panel.innerHTML = '<p>Cart panel</p>'; document.body.append( panel ); document.body.classList.add( 'locked' );
+			}, 50 ); } );
+			document.addEventListener( 'keydown', event => { if ( event.key !== 'Escape' ) return; const panel = document.getElementById( 'cart-panel' ); if ( ! panel ) return; panel.remove(); setTimeout( () => document.body.classList.remove( 'locked' ), 100 ); } );
+			</script></body>` } ) );
+		await page.goto( 'https://orphan-lock.test/' );
+		const report = await captureTriggeredDialogs( page, 'https://orphan-lock.test/' );
+		const cart = report.states.find( state => state.trigger.label === 'Cart' );
+		expect( cart?.status ).toBe( 'captured' );
+		expect( cart?.dialog?.rootClassState ).toEqual( [ { root: 'body', removed: [], added: [ 'locked' ] } ] );
+	}, 40_000 );
+} );
