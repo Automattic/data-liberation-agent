@@ -6,8 +6,12 @@ import type { InteractionStatesReport } from './screenshot/interaction-capture.j
 /** Capture marks every serialized element with its node id; derivation keeps the representative's skeleton ids. */
 const NODE_ID = 'data-blocks-engine-node-id';
 
-/** Fields that describe the capture run, not the page's behaviour. */
-const RUN_FIELDS = new Set( [ 'capturedAt', 'sourceUrl', 'coverage', 'reusedFrom' ] );
+/**
+ * Fields that describe the capture run, not the page's behaviour. `htmlBytes`
+ * counts the panel HTML with its per-document capture numbering, which the
+ * comparison strips from `html` itself.
+ */
+const RUN_FIELDS = new Set( [ 'capturedAt', 'sourceUrl', 'coverage', 'reusedFrom', 'htmlBytes' ] );
 
 /** Capture bookkeeping: per-document numbering and probe markers, not page markup. */
 const CAPTURE_ATTRIBUTE = /^data-(?:blocks-engine-[\w-]+|lib-(?:visible-before|offscreen-pos|motion-reveal))$/;
