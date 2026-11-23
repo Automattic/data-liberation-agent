@@ -1,6 +1,6 @@
 import type { Page } from 'playwright';
 import { snapshotCarousels, exploreCarousel, type Slideshow } from './carousel-components.js';
-import { captureControlledDisclosure, type CapturedDialogInteraction, type InteractionStatesReport } from './interaction-capture.js';
+import { activateTrigger, captureControlledDisclosure, type CapturedDialogInteraction, type InteractionStatesReport } from './interaction-capture.js';
 import { orElse } from '../failure-class.js';
 
 /** A route's stateful surfaces, not an inventory of individual trigger clicks. */
@@ -189,7 +189,7 @@ export async function exploreComponents(page: Page, baseline: ComponentBaseline,
 				const probe = { selector: component.selector, panel: component.panel, initial: component.initial, state: control.state, index };
 				const regions = component.kind === 'tabs' && !component.panel && current === component.initial && !await page.locator(control.selector).getAttribute('aria-controls') ? await page.evaluate(siblingPanel, probe) : null;
 				const unbound = regions && 'regions' in regions ? regions.regions : undefined;
-				await page.locator(control.selector).click({ timeout: 1_000 });
+				await activateTrigger(page, control.selector);
 				await page.waitForTimeout(150);
 				if (component.kind === 'tabs') await page.waitForFunction(selector => {
 					const tab = document.querySelector(selector)?.querySelector('[role="tab"][aria-selected="true"]');
