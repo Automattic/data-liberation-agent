@@ -59,10 +59,15 @@ export function createRouteAdmission( {
 	// per-route share: the largest growth sampled so far, but never less than
 	// a conservative fraction of the limit. Routes overlap during calibration
 	// when that share fits, instead of every route waiting on the first one.
+	// A plain route measured from plain-only samples reserves that measurement
+	// whether or not a reference route has completed: a capture whose sample
+	// is empty (deferred reference) never completes one, and the provisional
+	// share would otherwise bound every route of the run.
 	const provisional = Math.max( memoryLimit * PROVISIONAL_ROUTE_SHARE, PROVISIONAL_ROUTE_FLOOR_BYTES );
 	const routeEstimate = ( kind: RouteKind ): number => {
+		if ( kind === 'plain' && calibrated.plain ) return routeWorkingSet.plain;
 		if ( ! calibrated.reference ) return Math.max( routeWorkingSet.reference, routeWorkingSet.plain, provisional );
-		return kind === 'plain' && calibrated.plain ? routeWorkingSet.plain : routeWorkingSet.reference;
+		return routeWorkingSet.reference;
 	};
 	// Reserve one observed per-route working set of its kind for every
 	// running route whose peak may still be ahead, plus the route being
