@@ -18,6 +18,12 @@ import * as cheerio from 'cheerio';
  * Markup captured from a page, such as an opened dialog, takes the names of
  * its `document`: a fragment holds only some of an instance's components, and
  * named on its own it would no longer match the page CSS that styles it.
+ * Markup reused from another page (shared chrome's opened menu) still carries
+ * that page's instance prefix, and holds components (the open panel's) this
+ * page's closed copy never renders. A component id belongs to one widget, so
+ * when exactly one of the document's instances scopes any component the
+ * foreign instance does, the fragment is that chrome on this page and takes
+ * that instance's name.
  *
  * An instance already named by this canonicalization keeps its name. Export
  * applies the hook before splitting shared inline styles into linked files;
@@ -31,14 +37,21 @@ const CANONICAL_INSTANCE = /^comp-dla[0-9a-f]{8}$/i;
 export function canonicalizeWixInstanceIds( html: string, document: string = html ): string {
 	const page = documentInstances( document );
 	const tokenByInstance = new Map( page.tokens );
+	const hosted = new Map< string, string >();
 	if ( document !== html ) {
-		for ( const [ instance, token ] of instanceTokens( html ) ) if ( ! tokenByInstance.has( instance ) ) tokenByInstance.set( instance, token );
+		for ( const [ instance, components ] of instanceComponents( html ) ) {
+			if ( tokenByInstance.has( instance ) ) continue;
+			const hosts = [ ...page.components ].filter( ( [ , scope ] ) => [ ...components ].some( component => scope.has( component ) ) );
+			if ( hosts.length === 1 ) hosted.set( instance, page.tokens.get( hosts[ 0 ]![ 0 ] )! );
+			else tokenByInstance.set( instance, instanceToken( components ) );
+		}
 	}
-	if ( tokenByInstance.size === 0 ) return html;
+	if ( tokenByInstance.size === 0 && hosted.size === 0 ) return html;
 	// Two instances scoping the same components on one page would collapse into
 	// one token and merge rules meant for different elements. Keep such a page
 	// exactly as captured rather than guess.
 	if ( new Set( tokenByInstance.values() ).size !== tokenByInstance.size ) return html;
+	for ( const [ instance, token ] of hosted ) tokenByInstance.set( instance, token );
 	const named = document === html ? page.named : new Set( [ ...page.named, ...namedInstances( html ) ] );
 	if ( [ ...tokenByInstance.values() ].some( token => named.has( token ) ) ) return html;
 
@@ -67,7 +80,10 @@ function lastResult< T >( derive: ( text: string ) => T ): ( text: string ) => T
 	};
 }
 
-const documentInstances = lastResult( document => ( { tokens: instanceTokens( document ), named: namedInstances( document ) } ) );
+const documentInstances = lastResult( document => {
+	const components = instanceComponents( document );
+	return { components, tokens: new Map( [ ...components ].map( ( [ instance, scope ] ) => [ instance, instanceToken( scope ) ] ) ), named: namedInstances( document ) };
+} );
 const canonicalDocument = lastResult( document => canonicalizeWixInstanceIds( document ) );
 const documentFormControlTokens = lastResult( formControlTokens );
 
@@ -75,7 +91,11 @@ function namedInstances( html: string ): Set< string > {
 	return new Set( [ ...html.matchAll( INSTANCE_REFERENCE ) ].map( ( [ , instance ] ) => instance!.toLowerCase() ).filter( instance => CANONICAL_INSTANCE.test( instance ) ) );
 }
 
-function instanceTokens( html: string ): Map< string, string > {
+function instanceToken( components: ReadonlySet< string > ): string {
+	return `comp-dla${ fnv1a( [ ...components ].sort().join( ' ' ) ) }`;
+}
+
+function instanceComponents( html: string ): Map< string, Set< string > > {
 	const componentsByInstance = new Map< string, Set< string > >();
 	// Styles may contain dead selectors, and may already be linked on another
 	// route. Only rendered markup defines the scope's identity.
@@ -89,7 +109,7 @@ function instanceTokens( html: string ): Map< string, string > {
 		components.add( component!.toLowerCase() );
 		componentsByInstance.set( instance!, components );
 	}
-	return new Map( [ ...componentsByInstance ].map( ( [ instance, components ] ) => [ instance, `comp-dla${ fnv1a( [ ...components ].sort().join( ' ' ) ) }` ] ) );
+	return componentsByInstance;
 }
 
 /**
