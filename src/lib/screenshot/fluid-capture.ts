@@ -709,7 +709,9 @@ async function learnFluidGeometry(
 							if ( raw ) declared[ property ] = raw;
 						}
 					}
-					const transformOrigin = getComputedStyle( element ).transformOrigin;
+					// An authored inline origin owns the relationship (`66% 48%`); its
+					// computed px value moves with the box and would read as varying.
+					const transformOrigin = element.style.transformOrigin || getComputedStyle( element ).transformOrigin;
 					const rect = element.getBoundingClientRect();
 					const minHeight = element.style.getPropertyValue( 'min-height' );
 					let redundantMinHeight = false;
