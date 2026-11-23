@@ -40,6 +40,7 @@ describe( 'member light-render media', () => {
 	it.each( [
 		[ 'never hydrated, sized', { targetWidth: 450, targetHeight: 253 }, undefined, 'https://static.wixstatic.com/media/second%7Emv2.jpg/v1/fill/w_450,h_253,al_c,q_85,enc_avif,quality_auto/second%7Emv2.jpg' ],
 		[ 'hidden on its blurred placeholder, unsized', {}, rendition( 'second%7Emv2.jpg' ).replace( 'q_85', 'blur_2' ), 'https://static.wixstatic.com/media/second%7Emv2.jpg' ],
+		[ 'on a cropped image\'s blurred placeholder', {}, rendition( 'second%7Emv2.jpg' ).replace( '/v1/fill/', '/v1/crop/x_0,y_19,w_500,h_113/fill/' ).replace( 'q_85', 'blur_2' ), 'https://static.wixstatic.com/media/second%7Emv2.jpg' ],
 	] )( 'gives an image the render left %s its declared source, as capture does', ( _case, size, src, expected ) => {
 		const declared = `<wow-image data-image-info='${ JSON.stringify( { ...size, imageData: { uri: 'second%7Emv2.jpg' } } ) }'><picture><img alt="Photo"${ src ? ` src="${ src }"` : '' }></picture></wow-image>`;
 		const result = deriveMemberDocument( { ...source, memberRenderedHtml: page( `<p>Member</p>${ image( 'second%7Emv2.jpg', rendition( 'second%7Emv2.jpg' ) ) }${ declared }` ), rewriteDerivedMedia: rewriteWixDerivedMedia } );
