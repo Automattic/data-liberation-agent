@@ -231,8 +231,11 @@ const describes = ( element: Element, tag: string, classes: readonly string[] ):
 	return element.name === tag && classes.every( token => own.has( token ) );
 };
 
-/** The slot's anchor in `H_R`: nearest ancestor-or-self with an identity unique in `H_R`. */
-function slotAnchor( node: Element, body: Element, counts: Map< string, number > ): SlotAnchor {
+/**
+ * The slot's anchor in `H_R`: nearest ancestor-or-self with an identity unique in `H_R`.
+ * Ancestors `unwrapped` reports are skipped: their one child sits in their place.
+ */
+function slotAnchor( node: Element, body: Element, counts: Map< string, number >, unwrapped: ( element: Element ) => boolean = () => false ): SlotAnchor {
 	const path: number[] = [];
 	const descriptors: Array< [ string, string[], number ] > = [];
 	let current: Element = node;
@@ -241,16 +244,40 @@ function slotAnchor( node: Element, body: Element, counts: Map< string, number >
 			const value = current.attribs[ attribute ];
 			if ( value && counts.get( `${ attribute }\u0000${ value }` ) === 1 ) return { attribute, value, path, descriptors };
 		}
-		const parent = current.parent as Element | null;
+		let placed = current;
+		let parent = current.parent as Element | null;
+		while ( parent && isElement( parent ) && parent !== body && unwrapped( parent ) ) {
+			placed = parent;
+			parent = parent.parent as Element | null;
+		}
 		if ( ! parent || ! isElement( parent ) ) break;
 		const siblings = slotChildren( parent );
 		const tag = current.name, classes = classTokens( current );
-		path.unshift( siblings.indexOf( current ) );
-		descriptors.unshift( [ tag, classes, siblings.slice( 0, siblings.indexOf( current ) ).filter( sibling => describes( sibling, tag, classes ) ).length ] );
+		path.unshift( siblings.indexOf( placed ) );
+		descriptors.unshift( [ tag, classes, siblings.slice( 0, siblings.indexOf( placed ) ).filter( sibling => describes( sibling, tag, classes ) ).length ] );
 		current = parent;
 	}
 	return { attribute: 'body', value: '', path, descriptors };
 }
+
+/**
+ * Server wrappers capture unwrapped: a single-child element without its own
+ * text with an identity unique in the server document and every identity
+ * absent from the captured document. Portable scaffolding removes inert app roots
+ * (`#__next`, `#root`) after the source renders, so the server documents
+ * still carry them. A repeated identity was never an anchor, and capture may
+ * strip it while keeping the wrapper, so such wrappers stay on the path.
+ */
+const unwrappedBy = ( captured: Map< string, number >, server: Map< string, number > ) => ( element: Element ): boolean => {
+	const identities = ANCHOR_ATTRIBUTES.filter( attribute => element.attribs[ attribute ] );
+	const key = ( attribute: string ) => `${ attribute }\u0000${ element.attribs[ attribute ] }`;
+	return identities.length > 0 && slotChildren( element ).length === 1 && ownTextNodes( element ).length === 0 &&
+		identities.some( attribute => server.get( key( attribute ) ) === 1 ) && identities.every( attribute => ! captured.has( key( attribute ) ) );
+};
+
+/** The anchor of a server element in the captured document; undefined when capture unwrapped the element itself. */
+const capturedAnchor = ( node: Element, body: Element, counts: Map< string, number >, unwrapped: ( element: Element ) => boolean ): SlotAnchor | undefined =>
+	unwrapped( node ) ? undefined : slotAnchor( node, body, counts, unwrapped );
 
 /**
  * Resolve an anchor in the representative's processed document; undefined when
@@ -435,12 +462,13 @@ function anchorText( element: Element, ignored: ReadonlySet< Element > = new Set
  * Use the same identity/descriptor resolution as slots, not a text-prefix test
  * that could hide a rewrite of authored content elsewhere in the anchor.
  */
-function hydratedMounts( serverBody: Element, processedBody: Element, counts: Map< string, number > ): Set< Element > {
+function hydratedMounts( serverBody: Element, processedBody: Element, counts: Map< string, number >, unwrapped: ( element: Element ) => boolean ): Set< Element > {
 	const mounts = new Set< Element >();
 	const walk = ( node: Element ): void => {
-		if ( anchorText( node ) === '' ) {
+		const anchor = anchorText( node ) === '' ? capturedAnchor( node, serverBody, counts, unwrapped ) : undefined;
+		if ( anchor ) {
 			const matches = ( candidate: Element ) => describes( candidate, node.name, classTokens( node ) );
-			const counterpart = resolveAnchor( processedBody, slotAnchor( node, serverBody, counts ), matches );
+			const counterpart = resolveAnchor( processedBody, anchor, matches );
 			if ( counterpart && matches( counterpart ) ) mounts.add( counterpart );
 		}
 		// Descendants are mapped too: a slot nested inside a mount needs its
@@ -456,13 +484,15 @@ function hydratedMounts( serverBody: Element, processedBody: Element, counts: Ma
  * or replaced by a member's pre-hydration content. Check even when the slot
  * walk sees no differences: runtime keys can live in any attribute.
  */
-function runtimeMountGate( serverBody: Element, memberBody: Element, processedBody: Element, counts: Map< string, number > ): MemberGate | undefined {
+function runtimeMountGate( serverBody: Element, memberBody: Element, processedBody: Element, counts: Map< string, number >, unwrapped: ( element: Element ) => boolean ): MemberGate | undefined {
 	const hasContent = ( node: Element ): boolean => node.children.some( child => isElement( child ) || ( child.type === 'text' && normalizedWhitespace( child.data ) !== '' ) );
 	const walk = ( representative: Element, member: Element ): MemberGate | undefined => {
-		if ( ! hasContent( representative ) ) {
+		const resolvable = hasContent( representative ) ? undefined : capturedAnchor( representative, serverBody, counts, unwrapped );
+		if ( resolvable ) {
+			// The gate reports the server anchor: the runtime render resolves it in HTTP and live documents.
 			const anchor = slotAnchor( representative, serverBody, counts );
 			const matches = ( candidate: Element ) => describes( candidate, representative.name, classTokens( representative ) );
-			const captured = resolveAnchor( processedBody, anchor, matches );
+			const captured = resolveAnchor( processedBody, resolvable, matches );
 			if ( captured && matches( captured ) && hasContent( captured ) ) {
 				const attributes = new Set( [ ...Object.keys( representative.attribs ), ...Object.keys( member.attribs ) ] );
 				if ( [ ...attributes ].some( attribute => representative.attribs[ attribute ] !== member.attribs[ attribute ] ) ) {
@@ -695,7 +725,8 @@ export function deriveMemberDocument( input: {
 		return repProcessed.html();
 	};
 	const anchorCounts = anchorValueCounts( repBody );
-	const mountGate = runtimeMountGate( repBody, memberBody, processedBody, anchorCounts );
+	const unwrapped = unwrappedBy( anchorValueCounts( processedBody ), anchorCounts );
+	const mountGate = runtimeMountGate( repBody, memberBody, processedBody, anchorCounts, unwrapped );
 	if ( mountGate ) return { ok: false, gate: mountGate };
 	const slots: Slot[] = [];
 	findServerSlots( repBody, memberBody, slots );
@@ -704,7 +735,7 @@ export function deriveMemberDocument( input: {
 		// in content. That is a legitimate derived member with zero slots.
 		return finish( islands.length ? restoreIslands() : input.repProcessedHtml, { slots: 0, subtreeSlots: 0 }, 0 );
 	}
-	const mounts = hydratedMounts( repBody, processedBody, anchorCounts );
+	const mounts = hydratedMounts( repBody, processedBody, anchorCounts, unwrapped );
 	const located = slots.map( slot => ( { slot, anchor: slotAnchor( slot.repNode, repBody, anchorCounts ) } ) );
 	const slotRuntimeObservation = slotRuntimeObserver();
 	// Content gate before any mapping: one runtime-only slot escalates the member.
@@ -730,7 +761,8 @@ export function deriveMemberDocument( input: {
 	const mapped: Array< { slot: Slot; anchor: SlotAnchor; node: Element } > = [];
 	for ( const { slot, anchor } of located ) {
 		const matchesText = ( candidate: Element ): boolean => slot.kind === 'attribute' || anchorText( candidate, mounts ) === anchorText( slot.repNode );
-		const node = resolveAnchor( processedBody, anchor, candidate => candidate.name === slot.repNode.name && matchesText( candidate ) );
+		const resolvable = capturedAnchor( slot.repNode, repBody, anchorCounts, unwrapped );
+		const node = resolvable && resolveAnchor( processedBody, resolvable, candidate => candidate.name === slot.repNode.name && matchesText( candidate ) );
 		if ( ! node || node.name !== slot.repNode.name ) {
 			return { ok: false, gate: { code: 'slot_anchor_unmapped', reason: `slot at ${ describeAnchor( anchor ) } has no matching anchor in the representative's captured document` } };
 		}
