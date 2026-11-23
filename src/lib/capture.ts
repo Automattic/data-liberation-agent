@@ -1310,6 +1310,7 @@ export async function deriveTemplateClusterMembers( input: {
 	const deriveMemberDocument: typeof derive = options => derive( { ...options, runtimeWidgetSelectors: input.runtimeWidgetSelectors, canonicalizeHtml: input.canonicalizeHtml } );
 	const { templateClusterUnits } = await import( './template-groups.js' );
 	const { chromeInteractionStates } = await import( './static-dialogs.js' );
+	const { interactionReportMismatch, projectInteractionReport } = await import( './interaction-projection.js' );
 	const { compareServerHtml } = await import( './screenshot/device-mode.js' );
 	const { TEMPLATE_DEFERRAL_LIMITS } = await import( './template-cluster-deferral.js' );
 	const memberShape = structuredMemberShape( input.contentSource, input.contentEntries );
@@ -1528,12 +1529,16 @@ export async function deriveTemplateClusterMembers( input: {
 				const verificationCaptured = verificationUrl !== undefined &&
 					isCaptured( verificationUrl );
 				let verified = false;
+				// Whether the representative's interaction report, projected onto the
+				// verification member's derived document, reproduces its capture.
+				let interactionsVerified = false;
 				let failureReason: string | undefined;
 				let verificationRecord: import('./template-clusters.js').TemplateClusterRecord['verification'] =
 					{ url: verificationUrl ?? group.representative, captured: verificationCaptured };
 
 				if ( verificationCaptured ) {
 					const realEntry = capturedEntry( verificationUrl )!;
+					let verifiedHtml = '';
 					const realHtml = readFileSync( resolve( input.outputDir, realEntry.html! ), 'utf8' );
 					const verificationFeed = feedEntries.get( normalizedUrl( verificationUrl ) );
 					feedVerified = feedVerified && Boolean( verificationFeed && feedBodyEquivalent( realHtml, verificationFeed ) );
@@ -1562,6 +1567,7 @@ export async function deriveTemplateClusterMembers( input: {
 						const comparison = compareDerivedWithCapture( { derivedHtml: derivation.html, realHtml, repServerHtml, memberServerHtml: memberHtml, styleNormalization: input.styleNormalization, runtimeStateClasses: input.runtimeStateClasses, baseUrl: group.representative } );
 						verificationRecord = { url: verificationUrl, captured: true, checks: { ...comparison.checks, ...( repFeed ? { feedBody: feedVerified } : {} ) }, equal: comparison.equal };
 						verified = comparison.equal;
+						verifiedHtml = derivation.html;
 						if ( ! comparison.equal ) {
 							const failing = Object.entries( comparison.checks ).filter( ( [ , ok ] ) => ! ok ).map( ( [ name ] ) => name ).join( ', ' );
 							clusterFailure = { code: 'cluster_verification_mismatch', reason: `derived-vs-real comparison failed (${ failing })` };
@@ -1582,14 +1588,20 @@ export async function deriveTemplateClusterMembers( input: {
 						if ( repRender && memberRender && 'html' in repRender && 'html' in memberRender ) {
 							const renderedDerivation = deriveMemberDocument( { ...mediaContext, repServerHtml: repRender.html, repProcessedHtml, memberServerHtml: memberRender.html, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization } );
 							const comparison = renderedDerivation.ok ? compareDerivedWithCapture( { derivedHtml: renderedDerivation.html, realHtml, repServerHtml: repRender.html, memberServerHtml: memberRender.html, styleNormalization: input.styleNormalization, baseUrl: group.representative } ) : undefined;
-							if ( comparison?.equal ) {
+							if ( comparison?.equal && renderedDerivation.ok ) {
 								verified = rendered = true;
+								verifiedHtml = renderedDerivation.html;
 								repServerHtml = repRender.html;
 								verificationRecord = { url: verificationUrl, captured: true, documents: 'rendered', checks: comparison.checks, equal: true };
 							}
 						}
 					}
 					if ( ! verified && failureReason ) diagnostics.push( { code: ROUTE_TEMPLATE_ESCALATED, url: verificationUrl, reason: failureReason, metrics: { clusterSize: group.size } } );
+					if ( verified ) {
+						const mismatch = interactionReportMismatch( projectInteractionReport( repProcessedHtml, verifiedHtml, repEntry.interactions ), realEntry.interactions );
+						interactionsVerified = mismatch === undefined;
+						if ( mismatch ) process.stderr.write( `[template-clusters] ${ group.representative } interaction states did not verify (${ mismatch }); derived members keep site-chrome states only\n` );
+					}
 				}
 				// The verdict is final here: record it so a failed cluster is visible
 				// in the receipt, not only in the diagnostics.
@@ -1722,9 +1734,12 @@ export async function deriveTemplateClusterMembers( input: {
 					const slug = await queue.claimSlug( memberFeed?.slug ?? slugify( url ) );
 					const capturedAtNow = new Date().toISOString();
 					const repProfile = repEntry.profiles?.desktop;
-					// Site chrome identical to the representative's keeps its
-					// observed dropdowns and menus, as on captured routes.
-					const chromeStates = chromeInteractionStates( repProcessedHtml, derivation.html, repEntry.interactions );
+					// A verified projection carries every observed menu and dialog
+					// over to the member; otherwise only site chrome identical to the
+					// representative's keeps its dropdowns and menus.
+					const memberInteractions = interactionsVerified
+						? projectInteractionReport( repProcessedHtml, derivation.html, repEntry.interactions )
+						: chromeInteractionStates( repProcessedHtml, derivation.html, repEntry.interactions );
 					const repMobileProfile = memberMobilePath ? repEntry.profiles?.mobile : undefined;
 					await queue.updateEntry( url, {
 						slug,
@@ -1735,7 +1750,7 @@ export async function deriveTemplateClusterMembers( input: {
 						...( memberMobilePath && repEntry.deviceMode ? { deviceMode: repEntry.deviceMode } : {} ),
 						...( memberMobilePath && repEntry.fluidMobile ? { fluidMobile: repEntry.fluidMobile } : {} ),
 						...( repEntry.fluid ? { fluid: repEntry.fluid } : {} ),
-						...( chromeStates ? { interactions: chromeStates } : {} ),
+						...( memberInteractions ? { interactions: memberInteractions } : {} ),
 					} as import('./screenshot/manifest-queue.js').ManifestEntry );
 					lap( 'manifest' );
 					diagnostics.push( {

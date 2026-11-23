@@ -63,39 +63,11 @@ it.each( [ 'unavailable', 'rejected' ] )( 'releases pending members after a %s c
 	}
 } );
 
-/** One observed state: `header` triggers are site chrome every member shares; `main` ones are the member's own content. */
-const state = ( region: 'header' | 'main' ): InteractionStatesReport => ( {
+/** A content gallery state, which the tail's own markup does not carry. */
+const galleryState: InteractionStatesReport = {
 	schema: INTERACTION_STATES_SCHEMA, sourceUrl: origin, viewport: { width: 1440, height: 900 }, capturedAt: '2026-01-01T00:00:00.000Z',
-	states: [ region === 'header'
-		? { status: 'captured', kind: 'dialog', trigger: { selector: 'header .menu-toggle', tag: 'button', label: 'Menu', ariaHaspopup: 'true', dataBindings: {} } }
-		: { status: 'captured', kind: 'gallery', trigger: { selector: 'main .gallery-next', tag: 'button', label: 'Next', ariaHaspopup: '', dataBindings: {} } } ],
-} );
-
-it.each( [
-	{ seed: 0, name: 'representative content', region: 'main', defers: false },
-	{ seed: 1, name: 'verifier content', region: 'main', defers: false },
-	{ seed: 0, name: 'representative site-chrome', region: 'header', defers: true },
-	{ seed: 1, name: 'verifier site-chrome', region: 'header', defers: true },
-] as const )( 'defers a tail member only when its seeds\' interaction states carry to it: $name', async ( { seed, region, defers } ) => {
-	const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
-	const outputDir = mkdtempSync( join( parent, 'template-deferral-interactions-' ) );
-	const members = [ '/', '/verifier/', '/tail/' ].map( path => origin + path );
-	const group = { size: members.length, representative: members[ 0 ]!, members };
-	const deferral = new TemplateClusterDeferral( { sourceUrl: origin, outputDir, governors: new SourceRequestGovernors() }, () => [ group ] );
-	try {
-		for ( const [ index, url ] of members.slice( 0, 2 ).entries() ) {
-			writeFileSync( join( outputDir, `seed-${ index }.html` ), page( new URL( url ).pathname ) );
-			deferral.routeCaptured( url, `seed-${ index }.html`, index === seed ? state( region ) : undefined );
-		}
-		await deferral.waitForCheck();
-		expect( deferral.pending( members[ 2 ]! ) ).toBe( false );
-		// Derivation keeps site-chrome states only; content states keep browser capture (#2225).
-		expect( deferral.defers( members[ 2 ]! ) ).toBe( defers );
-	} finally {
-		await deferral.close();
-		rmSync( outputDir, { recursive: true, force: true } );
-	}
-} );
+	states: [ { status: 'captured', kind: 'gallery', trigger: { selector: 'main .gallery-next', tag: 'button', label: 'Next', ariaHaspopup: '', dataBindings: {} } } ],
+};
 
 it( 'verifies an interactive cluster from light renders and renders the members it keeps in browser capture (#2232)', async () => {
 	const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
@@ -114,7 +86,7 @@ it( 'verifies an interactive cluster from light renders and renders the members 
 	try {
 		for ( const [ index, url ] of members.slice( 0, 2 ).entries() ) {
 			writeFileSync( join( outputDir, `seed-${ index }.html` ), counter( url, 'rendered' ) );
-			deferral.routeCaptured( url, `seed-${ index }.html`, index === 0 ? state( 'main' ) : undefined );
+			deferral.routeCaptured( url, `seed-${ index }.html`, index === 0 ? galleryState : undefined );
 		}
 		await deferral.waitForCheck();
 		expect( deferral.pending( members[ 2 ]! ) ).toBe( false );
@@ -124,6 +96,38 @@ it( 'verifies an interactive cluster from light renders and renders the members 
 		expect( document ).toHaveBeenCalledWith( members[ 2 ], 'rendered' );
 	} finally {
 		await deferral.close();
+		rmSync( outputDir, { recursive: true, force: true } );
+	}
+} );
+
+const menuState = ( label: string ) => ( {
+	status: 'captured' as const,
+	trigger: { selector: `#${ label }-button`, tag: 'button', id: `${ label }-button`, ariaHaspopup: 'menu', label, dataBindings: {} },
+	dialog: { selector: '[data-lib-interaction-dialog="captured"]', tag: 'div', ariaModal: false, presentation: 'dropdown' as const, html: `<div role="menu" aria-labelledby="${ label }-button"><a href="/">${ label }</a></div>`, htmlBytes: 64, htmlTruncated: false },
+} );
+const report = ( url: string, labels: string[] ) => ( { schema: 'blocks-engine-capture/interaction-states/v2' as const, sourceUrl: url, viewport: { width: 1440, height: 900 }, capturedAt: new Date().toISOString(), states: labels.map( menuState ) } );
+
+it.each( [
+	{ name: 'defers members when the projected menus match the verifier', verifierMenus: [ 'Menu' ], deferred: true },
+	{ name: 'keeps browser capture when the verifier captured another menu', verifierMenus: [ 'Menu', 'Share' ], deferred: false },
+] )( '$name', async ( { verifierMenus, deferred } ) => {
+	const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
+	const outputDir = mkdtempSync( join( parent, 'template-deferral-interactions-' ) );
+	const urls = [ '/post/rep/', '/post/alpha/', '/post/beta/', '/post/gamma/' ].map( path => origin + path );
+	const group = { size: urls.length, representative: urls[ 0 ]!, members: urls };
+	const deferral = new TemplateClusterDeferral( { sourceUrl: `${ origin }/`, outputDir, governors: new SourceRequestGovernors() }, () => [ group ] );
+	try {
+		const seeds = rankTemplateClusterRoutes( [ `${ origin }/`, ...urls ], `${ origin }/`, [ group ], new Set() ).slice( 1, 3 );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		for ( const [ index, url ] of seeds.entries() ) {
+			writeFileSync( join( outputDir, `html/seed-${ index }.html` ), page( new URL( url ).pathname ) );
+			deferral.routeCaptured( url, `html/seed-${ index }.html`, report( url, url === group.representative ? [ 'Menu' ] : verifierMenus ) );
+		}
+		await deferral.close();
+		const tail = urls.filter( url => ! seeds.includes( url ) );
+		expect( tail.map( url => deferral.defers( url ) ) ).toEqual( tail.map( () => deferred ) );
+		expect( tail.map( url => deferral.pending( url ) ) ).toEqual( tail.map( () => false ) );
+	} finally {
 		rmSync( outputDir, { recursive: true, force: true } );
 	}
 } );
