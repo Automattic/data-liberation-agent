@@ -191,9 +191,12 @@ export function isSourceCaptureUrl( url: string, sourceUrl: string | undefined )
 	}
 }
 
-/** A route as a document names it; the query stays, since query-routed pages share one path. */
+/** A route as a document names it; the query stays, in a stable order, since query-routed pages share one path. */
 function declaredRoute( url: string ): string {
-	return `${ normalizeRoute( url ) }${ new URL( url ).search }`;
+	const query = new URL( url ).searchParams;
+	query.sort();
+	const search = query.toString();
+	return search ? `${ normalizeRoute( url ) }?${ search }` : normalizeRoute( url );
 }
 
 function normalizeRoute( url: string ): string {

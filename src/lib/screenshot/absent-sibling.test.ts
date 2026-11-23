@@ -36,6 +36,9 @@ describe( 'absent sibling corroboration (rendered HTML fixtures)', () => {
 		// Query-routed pages share one path: a fallback naming another query is still absent.
 		const otherQuery = vi.fn( async () => ( { status: 200, html: declared( 'https://example.com/product?id=7' ) } ) );
 		expect( await new AbsentDocumentProbes().matches( 'https://example.com/product?id=gone', declared( 'https://example.com/product?id=7' ), otherQuery ) ).toBe( true );
+		// The same query in another order names the same page.
+		const reordered = vi.fn( async () => ( { status: 200, html: declared( 'https://example.com/product?id=7&lang=en' ) } ) );
+		expect( await new AbsentDocumentProbes().matches( 'https://example.com/product?lang=en&id=7', declared( 'https://example.com/product?id=7&lang=en' ), reordered ) ).toBe( false );
 	} );
 
 	it( 'leaves children untouched when their parent probe returns HTTP 404', async () => {
