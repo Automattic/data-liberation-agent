@@ -1,0 +1,161 @@
+{
+ "props": {
+  "pageProps": {
+   "state": {
+    "route": {
+     "route": {
+      "path": "/posts/page/:page_num",
+      "route": {
+       "id": "0",
+       "type": "blog",
+       "idForType": "0",
+       "title": "",
+       "urlPath": "/posts/page/:page_num",
+       "isHomePage": false
+      }
+     },
+     "params": {
+      "page_num": "2"
+     }
+    },
+    "postList": {
+     "postList-limit:12-page:2-siteId:100001": {
+      "fetching": false,
+      "loaded": true,
+      "meta": {
+       "code": 200,
+       "pagination": {
+        "total": 120,
+        "offset": 12,
+        "limit": 12,
+        "cursors": {
+         "after": "bGltaXQ9MTImb2Zmc2V0PTI0",
+         "before": "bGltaXQ9MTImb2Zmc2V0PTA="
+        },
+        "page": 2
+       }
+      },
+      "data": [
+       {
+        "id": "20000303",
+        "siteId": "100001",
+        "status": "publish",
+        "title": "三番目の投稿",
+        "contents": [
+         {
+          "type": "text",
+          "format": "html",
+          "value": "<p>これはテスト用の架空の記事です。</p><p><br></p><p>本文の二段落目です。</p>"
+         }
+        ],
+        "urlPath": "",
+        "publishedUrl": "https://example.amebaownd.com/posts/20000303",
+        "ogpImageUrl": "",
+        "blogCategories": [
+         {
+          "id": "400002",
+          "siteId": "100001",
+          "label": "日記",
+          "publishedCount": 30
+         },
+         {
+          "id": "400003",
+          "siteId": "100001",
+          "label": "雑記",
+          "publishedCount": 41
+         }
+        ],
+        "user": {
+         "id": "500001",
+         "nickname": "Site owner"
+        },
+        "publishedAt": "2026-09-04T17:09:47Z",
+        "createdAt": "2026-09-04T17:09:48Z",
+        "updatedAt": "2026-09-15T19:05:21Z"
+       },
+       {
+        "id": "20000302",
+        "siteId": "100001",
+        "status": "publish",
+        "title": "二番目の投稿",
+        "contents": [
+         {
+          "type": "text",
+          "format": "html",
+          "value": "<p>月末の夜に公開した架空の記事です。</p><p>日本時間では翌月になります。</p>"
+         }
+        ],
+        "urlPath": "",
+        "publishedUrl": "https://example.amebaownd.com/posts/20000302",
+        "ogpImageUrl": "",
+        "blogCategories": [
+         {
+          "id": "400002",
+          "siteId": "100001",
+          "label": "日記",
+          "publishedCount": 30
+         },
+         {
+          "id": "400003",
+          "siteId": "100001",
+          "label": "雑記",
+          "publishedCount": 41
+         }
+        ],
+        "user": {
+         "id": "500001",
+         "nickname": "Site owner"
+        },
+        "publishedAt": "2026-08-31T21:23:05Z",
+        "createdAt": "2026-08-31T21:23:05Z",
+        "updatedAt": "2026-09-15T19:03:19Z"
+       },
+       {
+        "id": "20000301",
+        "siteId": "100001",
+        "status": "publish",
+        "title": "週末の予定",
+        "contents": [
+         {
+          "type": "text",
+          "format": "html",
+          "value": "<h1><b>土曜日</b></h1><h1><b>午前10:00～午後1:00</b></h1><p><br></p><p>架空の予定表です。</p><p data-placeholder=\"\">よろしくお願いします。</p>"
+         }
+        ],
+        "urlPath": "",
+        "publishedUrl": "https://example.amebaownd.com/posts/20000301",
+        "ogpImageUrl": "",
+        "blogCategories": [
+         {
+          "id": "400001",
+          "siteId": "100001",
+          "label": "お知らせ",
+          "publishedCount": 12
+         }
+        ],
+        "user": {
+         "id": "500001",
+         "nickname": "Site owner"
+        },
+        "publishedAt": "2026-08-28T17:28:45Z",
+        "createdAt": "2026-08-28T17:28:50Z",
+        "updatedAt": "2026-08-28T17:28:50Z"
+       }
+      ]
+     }
+    },
+    "siteConfig": {
+     "siteId": "100001",
+     "title": "サンプルブログ",
+     "homePageId": "300010"
+    }
+   },
+   "url": "/"
+  }
+ },
+ "page": "/[[...path]]",
+ "query": {},
+ "buildId": "SampleBuildId0000000",
+ "isFallback": false,
+ "gssp": true
+}
