@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { CheerioAPI } from 'cheerio';
-import type { AnyNode } from 'domhandler';
+import type { AnyNode, Element } from 'domhandler';
 import { parseLocatedStructure } from '../site-includes.js';
 
 export const LAYOUT_GEOMETRY_PROOF_SCHEMA =
@@ -47,7 +47,6 @@ interface GeometryInput {
 }
 
 interface DocumentGeometry {
-	nodes: Array< { node: AnyNode; depth: number } >;
 	nodeForSelector: ( selector: string ) => AnyNode | undefined;
 	intervalFor: ( node: AnyNode ) => { start: number; end: number } | undefined;
 }
@@ -75,27 +74,39 @@ function stableId( sourcePath: string, selector: string ): string {
 	return `node-${ hash( `${ sourcePath }\0${ selector }` ).slice( 0, 24 ) }`;
 }
 
-function selectorForIdentity( $: CheerioAPI, identity: string ): string | undefined {
-	try {
-		const node = $( `[data-blocks-engine-capture-geometry-id~="${ identity }"]` );
-		if ( node.length !== 1 ) return undefined;
-		const parts: string[] = [];
-		let current: AnyNode | null = node[ 0 ];
-		while ( current?.type === 'tag' ) {
-			const name = current.name;
-			if ( name === 'body' ) break;
-			const siblings = ( current.parent?.children ?? [] ).filter(
-				( sibling ) => sibling.type === 'tag' && sibling.name === name
-			);
-			const index = siblings.indexOf( current );
-			if ( index < 0 ) return undefined;
-			parts.unshift( `${ name }:nth-of-type(${ index + 1 })` );
-			current = current.parent?.type === 'tag' ? current.parent : null;
+/** Index a document's `data-blocks-engine-capture-geometry-id` tokens once. */
+function geometryIdentityIndex( $: CheerioAPI ): Map< string, AnyNode[] > {
+	const index = new Map< string, AnyNode[] >();
+	for ( const node of $( '[data-blocks-engine-capture-geometry-id]' ).toArray() ) {
+		const value = node.type === 'tag' ? node.attribs[ 'data-blocks-engine-capture-geometry-id' ] ?? '' : '';
+		for ( const token of new Set( value.split( /[ \t\n\f\r]+/ ).filter( Boolean ) ) ) {
+			const nodes = index.get( token ) ?? [];
+			nodes.push( node );
+			index.set( token, nodes );
 		}
-		return parts.length > 0 ? parts.join( ' > ' ) : undefined;
-	} catch {
-		return undefined;
 	}
+	return index;
+}
+
+function selectorForIdentity( identities: ReadonlyMap< string, AnyNode[] >, identity: string ): string | undefined {
+	// Identities are attribute tokens; one with selector syntax never matched.
+	if ( ! identity || /[\s"\\]/.test( identity ) ) return undefined;
+	const nodes = identities.get( identity );
+	if ( nodes?.length !== 1 ) return undefined;
+	const parts: string[] = [];
+	let current: AnyNode | null = nodes[ 0 ]!;
+	while ( current?.type === 'tag' ) {
+		const name = current.name;
+		if ( name === 'body' ) break;
+		const siblings = ( current.parent?.children ?? [] ).filter(
+			( sibling ) => sibling.type === 'tag' && sibling.name === name
+		);
+		const index = siblings.indexOf( current );
+		if ( index < 0 ) return undefined;
+		parts.unshift( `${ name }:nth-of-type(${ index + 1 })` );
+		current = current.parent?.type === 'tag' ? current.parent : null;
+	}
+	return parts.length > 0 ? parts.join( ' > ' ) : undefined;
 }
 
 function sameBox( left: GeometryBox, right: GeometryBox ): boolean {
@@ -114,6 +125,51 @@ function elementDepth( node: AnyNode ): number {
 	return depth;
 }
 
+const isElementNode = ( node: AnyNode ): node is Element => node.type === 'tag' || node.type === 'script' || node.type === 'style';
+
+/**
+ * The first element in document order matching a `name:nth-of-type(n) > …`
+ * chain, as `querySelector` resolves it, from a per-document position index
+ * rather than a whole-document selector scan per lookup.
+ */
+function nthOfTypeChainResolver( $: CheerioAPI ): ( selector: string ) => AnyNode | undefined {
+	const byStep = new Map< string, Element[] >();
+	const position = new Map< Element, number >();
+	const keyOf = ( name: string, nth: number ) => `${ name }\0${ nth }`;
+	const visit = ( parent: AnyNode ) => {
+		if ( ! ( 'children' in parent ) ) return;
+		const counts = new Map< string, number >();
+		for ( const child of parent.children ) {
+			if ( ! isElementNode( child ) ) continue;
+			const nth = ( counts.get( child.name ) ?? 0 ) + 1;
+			counts.set( child.name, nth );
+			position.set( child, nth );
+			const key = keyOf( child.name, nth );
+			const list = byStep.get( key ) ?? [];
+			list.push( child );
+			byStep.set( key, list );
+			visit( child );
+		}
+	};
+	visit( $.root()[ 0 ] as AnyNode );
+	return selector => {
+		const steps = selector.split( ' > ' ).map( part => /^([^:\s>]+):nth-of-type\((\d+)\)$/.exec( part ) );
+		if ( ! steps.length || steps.some( step => ! step ) ) return $( selector )[ 0 ];
+		const chain = ( steps as RegExpExecArray[] ).map( step => ( { name: step[ 1 ]!.toLowerCase(), nth: Number( step[ 2 ] ) } ) );
+		const last = chain[ chain.length - 1 ]!;
+		candidates: for ( const candidate of byStep.get( keyOf( last.name, last.nth ) ) ?? [] ) {
+			let current: Element = candidate;
+			for ( let i = chain.length - 2; i >= 0; i-- ) {
+				const parent = current.parent;
+				if ( ! parent || ! isElementNode( parent ) || parent.name !== chain[ i ]!.name || position.get( parent ) !== chain[ i ]!.nth ) continue candidates;
+				current = parent;
+			}
+			return candidate;
+		}
+		return undefined;
+	};
+}
+
 function collectDocumentGeometry( html: string ): DocumentGeometry {
 	const $ = parseLocatedStructure( html );
 	const intervals = new Map< AnyNode, { start: number; end: number } >();
@@ -125,13 +181,17 @@ function collectDocumentGeometry( html: string ): DocumentGeometry {
 	};
 	visit( $.root()[ 0 ] );
 	return {
-		nodes: $( '*' )
-			.toArray()
-			.filter( ( node ): node is AnyNode => node.type === 'tag' )
-			.map( ( node ) => ( { node, depth: elementDepth( node ) } ) ),
-		nodeForSelector: ( selector ) => $( selector )[ 0 ],
+		nodeForSelector: nthOfTypeChainResolver( $ ),
 		intervalFor: ( node ) => intervals.get( node ),
 	};
+}
+
+/** Levels of element descendants under `node`, counting `node` itself. */
+function subtreeHeight( node: AnyNode ): number {
+	let height = 0;
+	for ( const child of 'children' in node ? node.children : [] )
+		if ( child.type === 'tag' ) height = Math.max( height, subtreeHeight( child ) );
+	return height + 1;
 }
 
 function overlapsSelectedWrapper(
@@ -171,7 +231,7 @@ export function buildLayoutGeometryProof(
 
 	for ( const input of orderedInputs ) {
 		const document = collectDocumentGeometry( input.html );
-		const identityDocument = parseLocatedStructure( input.identityHtml );
+		const identityDocument = geometryIdentityIndex( parseLocatedStructure( input.identityHtml ) );
 		const sourceHash = hash( input.html );
 		const byPair = new Map< string, GeometryObservation[] >();
 		for ( const observation of input.observations ) {
@@ -239,14 +299,7 @@ export function buildLayoutGeometryProof(
 				/^(img|picture)$/.test( targetNode.name )
 				? 'article_image_well'
 				: 'generic';
-			const deepestChainImpact = document.nodes.reduce( ( deepest, { node, depth } ) => {
-				let current: AnyNode | null = node;
-				while ( current?.type === 'tag' ) {
-					if ( current === wrapperNode ) return Math.max( deepest, depth - wrapperDepth + 1 );
-					current = current.parent?.type === 'tag' ? current.parent : null;
-				}
-				return deepest;
-			}, 0 );
+			const deepestChainImpact = subtreeHeight( wrapperNode );
 			candidates.push( {
 				sourcePath: input.sourcePath,
 				wrapperIdentity,
