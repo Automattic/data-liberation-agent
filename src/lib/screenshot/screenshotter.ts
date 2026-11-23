@@ -1470,6 +1470,18 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		if ( ! deferredRoutes.has( url ) && opts.deferRoute?.( url ) ) deferredRoutes.add( url );
 		return deferredRoutes.has( url );
 	};
+	// The entrypoint's rendered desktop document, published once source
+	// observation finishes. Its links and navigation targets are what successor
+	// ordering needs, so admission does not wait for the rest of the route (#2240).
+	type RenderedDocument = { html: string; url: string; baseUrl: string };
+	let entryRendered: RenderedDocument | undefined;
+	let signalEntryRendered: () => void = () => {};
+	const entryRenderedReady = new Promise< void >( resolve => { signalEntryRendered = resolve; } );
+	const publishEntryLinks = ( document: RenderedDocument ): void => {
+		if ( entryRendered ) return;
+		entryRendered = document;
+		signalEntryRendered();
+	};
 	const processUrl = async ( url: string, reuseOnly = false ): Promise< void > => {
 		const routeStartedAt = Date.now();
 		const base = slugify( url );
@@ -1854,6 +1866,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							beforeFluid: opts.beforeFluid,
 							beforeSerialize: opts.beforeSerialize,
 							observeSource: opts.observeSource,
+							...( url === urls[ 0 ] && viewport.id === 'desktop' ? { publishRenderedLinks: publishEntryLinks } : {} ),
 							...( opts.canonicalizeHtml ? { canonicalizeHtml: opts.canonicalizeHtml } : {} ),
 							...( opts.probeExclusions ? { probeExclusions: opts.probeExclusions } : {} ),
 						} );
@@ -2135,6 +2148,11 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		let cursor = 0;
 		let pendingPrioritized = ! opts.prioritizePendingRoutes;
 		let entrypointSettled = reusedRoutes.has( urls[ 0 ]! );
+		// Successors are admitted once the entrypoint's rendered links are expanded,
+		// or when it settles if it never published them.
+		let entryLinksExpanded = false;
+		const entryReleased = (): boolean => entrypointSettled || entryLinksExpanded;
+		const poolStartedAt = Date.now();
 		const entryFirst = Boolean( opts.groupLinkedRoutes || ( opts.prioritizePendingRoutes
 			&& ! routeBudget?.fits( urls.filter( url => ! reusedRoutes.has( url ) ).length, concurrency ) ) );
 		const finished: string[] = [ ...reusedRoutes ];
@@ -2160,14 +2178,22 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			if ( candidate < 0 ) return false;
 			if ( candidate > cursor ) urls.splice( cursor, 0, urls.splice( candidate, 1 )[ 0 ]! );
 			return cursor < urls.length && ! routeDeadlines.stalled
-				&& ( ! entryFirst || cursor === 0 || entrypointSettled )
+				&& ( ! entryFirst || cursor === 0 || entryReleased() )
 				&& ( browserRestartEvery <= 0 || urlsSinceRestart < browserRestartEvery )
 				&& ( ! routeBudget || routeBudget.admits( urls[ cursor ]!, running.size + 1 ) );
 		};
 		try {
 			while ( true ) {
 				while ( finished.length ) await expandLinks( finished.splice( 0 ) );
-				if ( entrypointSettled ) {
+				if ( entryFirst && ! entryReleased() && entryRendered ) {
+					// The same expansion and grouping its serialized documents get at
+					// completion; links only those documents hold are expanded then.
+					if ( frontier ) await expandLinks( [], { url: urls[ 0 ]!, document: entryRendered } );
+					entryLinksExpanded = true;
+					process.stderr.write( `[timing] entry-admission ${ Date.now() - poolStartedAt }ms ${ urls[ 0 ] } (rendered link evidence)\n` );
+					if ( finished.length ) continue;
+				}
+				if ( entryReleased() ) {
 					if ( ! pendingPrioritized ) {
 						pendingPrioritized = true;
 						const from = Math.max( 1, cursor );
@@ -2207,6 +2233,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					void slot.then( () => { if ( url === urls[ 0 ] ) entrypointSettled = true; running.delete( slot ); runningKinds.delete( slot ); finished.push( url ); }, () => {} );
 				}
 				const progress = new Set( running );
+				if ( entryFirst && ! entryReleased() && running.size ) progress.add( entryRenderedReady );
 				if ( waitingForDeferral && cursor < urls.length && ! routeBudget?.closed() && ! routeDeadlines.stalled ) progress.add( waitingForDeferral );
 				if ( ! progress.size ) break;
 				if ( ! routeBudget ) await Promise.race( progress );
@@ -2223,7 +2250,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		// targets retain diagnostics, including routes completed during drain.
 		if ( finished.length ) await expandLinks( finished.splice( 0 ) );
 
-		async function expandLinks( completedUrls: string[] ): Promise<void> {
+		async function expandLinks( completedUrls: string[], rendered?: { url: string; document: RenderedDocument } ): Promise<void> {
 			// Deadline-kept profiles are in the manifest before links are read from it.
 			await Promise.allSettled( partialCommitWrites );
 			// Do not spend more source requests on link inspection after a stall.
@@ -2234,7 +2261,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			const scheduled = new Set( urls.map( documentRequestUrl ) );
 			const candidates = new Set< string >();
 			const candidateDepths = new Map<string, number>();
-			for ( const url of completedUrls ) {
+			const addServerLinks = ( url: string ): void => {
 				for ( const serverLink of serverLinks.get( url ) ?? [] ) {
 					const link = routeInScope( serverLink, opts.routeScope ) ? scopedRouteKey( serverLink, opts.routeScope ) : serverLink;
 					if ( routeInScope( link, opts.routeScope ) && ! scheduled.has( documentRequestUrl( link ) ) ) {
@@ -2242,6 +2269,23 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 						candidateDepths.set( link, 1 + ( frontier?.depths.get( url ) ?? 0 ) );
 					}
 				}
+			};
+			const addAnchors = ( url: string, anchors: string[] ): void => {
+				for ( const anchor of anchors ) {
+					if (!routeInScope(anchor, opts.routeScope)) continue;
+					const link = scopedRouteKey( anchor, opts.routeScope );
+					if ( ! scheduled.has( documentRequestUrl( link ) ) ) {
+						candidates.add(link);
+						candidateDepths.set(link, Math.min(candidateDepths.get(link) ?? Infinity, 1 + (frontier?.depths.get(url) ?? 0)));
+					}
+				}
+			};
+			if ( rendered ) {
+				addServerLinks( rendered.url );
+				addAnchors( rendered.url, sameOriginPageAnchors( resolveDocumentReferences( rendered.document.html, rendered.document.url, rendered.document.baseUrl ), rendered.url ) );
+			}
+			for ( const url of completedUrls ) {
+				addServerLinks( url );
 				const entry = manifest.getEntry( url );
 				if ( ! entry?.html ) continue;
 				const documents: Array<{ path: string; document?: { url?: string; baseUrl?: string } }> = [ { path: join( opts.outputDir, entry.html ), document: entry.documents?.desktop } ];
@@ -2250,14 +2294,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					if ( ! existsSync( htmlPath ) ) continue;
 					const html = resolveDocumentReferences( readFileSync( htmlPath, 'utf8' ), document?.url ?? url, document?.baseUrl );
 					const collectionLinks = ( entry.interactions?.components ?? [] ).flatMap( component => component.collection?.members.flatMap( member => member.url ? [ member.url ] : [] ) ?? [] ).filter( link => new URL( link ).origin === new URL( url ).origin );
-					for ( const anchor of [ ...sameOriginPageAnchors( html, url ), ...collectionLinks ] ) {
-						if (!routeInScope(anchor, opts.routeScope)) continue;
-						const link = scopedRouteKey( anchor, opts.routeScope );
-						if ( ! scheduled.has( documentRequestUrl( link ) ) ) {
-							candidates.add(link);
-							candidateDepths.set(link, Math.min(candidateDepths.get(link) ?? Infinity, 1 + (frontier?.depths.get(url) ?? 0)));
-						}
-					}
+					addAnchors( url, [ ...sameOriginPageAnchors( html, url ), ...collectionLinks ] );
 				}
 			}
 			if (frontier) {
