@@ -6,6 +6,7 @@ import * as fetching from '../../lib/media-fetch/safe-fetch.js';
 import * as cheerio from 'cheerio';
 import { deriveMemberDocument, compareDerivedWithCapture } from '../../lib/template-clusters.js';
 import type { StructuredContentEntry } from '../../platform/types.js';
+import { structuredContentIndex, structuredTermArchiveUrls } from '../../lib/content-index.js';
 
 const origin = 'https://fixture.squarespace.com';
 const post = (id: string) => ({ id: `id-${id}`, fullUrl: `/journal/${id}`, title: `Post ${id}`, body: `<p>Body ${id} <a href="/about">About</a><img src="/photo.jpg" srcset="/photo.jpg 1x"></p>`, publishOn: 1704067200000, updatedOn: 1704153600000, author: { displayName: 'Writer' }, categories: ['Real Estate'], tags: ['Local', 'Real Estate'], assetUrl: `${origin}/featured.jpg` });
@@ -37,6 +38,19 @@ describe('Squarespace structured blog content', () => {
 		expect(result.entries).toEqual([entry('one'), entry('two')]);
 		expect(result.diagnostics).toEqual([expect.objectContaining({ code: 'collection_item_rejected', url: 'https://elsewhere.com/post' })]);
 		expect(fetch).toHaveBeenCalledTimes(6);
+	});
+
+	it('derives term archives from the collection entries belong to, not a /blog default', async () => {
+		vi.spyOn(fetching, 'safeFetch').mockImplementation(async url => ({
+			body: Buffer.from(String(url).includes('format=json') ? JSON.stringify({ collection: { typeName: 'blog', fullUrl: '/journal' }, items: [{ ...post('one'), categories: [], tags: ['Foo'] }] }) : '<html></html>'),
+			status: 200, finalUrl: String(url), headers: new Headers(),
+		}));
+		const { entries } = await source.enumerate(`${origin}/journal`, { governors: new SourceRequestGovernors() });
+		const inventory = structuredTermArchiveUrls(entries, source);
+		const index = structuredContentIndex(entries, [], source, `${origin}/`);
+		expect(inventory).toEqual([`${origin}/journal/tag/Foo`]);
+		expect(index.terms.map(term => term.sourceUrl)).toEqual([`${origin}/journal/tag/Foo`]);
+		expect(JSON.stringify([inventory, index.terms, index.redirects])).not.toContain('/blog/tag');
 	});
 
 	it('starts from an entry collection JSON and stops a repeated offset visibly', async () => {

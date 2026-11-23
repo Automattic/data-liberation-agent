@@ -14,6 +14,8 @@ const FONTS = 'style[data-sqsp-font-ids]';
 // identity keeps collection/run state out of the shared adapter singleton.
 interface ItemDetails { id?: string; image?: string; categories: string[]; date: string; shortDate: string; dateOnly: string; newer?: StructuredContentEntry; older?: StructuredContentEntry }
 const details = new WeakMap<StructuredContentEntry, ItemDetails>();
+/** Each enumerated permalink's collection path, so term archives follow the collection. */
+const permalinkCollections = new Map<string, string>();
 
 const itemDate = (epoch: number, options: Intl.DateTimeFormatOptions, timeZone?: string, locale = 'en-US'): string => {
 	try { return new Intl.DateTimeFormat(locale, { ...options, ...(timeZone ? { timeZone } : {}) }).format(epoch); } catch { return new Intl.DateTimeFormat(locale, options).format(epoch); }
@@ -111,11 +113,15 @@ export function squarespaceTermName(url: string): string | undefined {
 	} catch { return undefined; }
 }
 
-/** Preserve an archive's taxonomy kind; otherwise tags are the canonical archive. */
+/**
+ * The archive in the collection of `url`: an enumerated post permalink, a
+ * collection or a term archive. Preserve an archive's taxonomy kind;
+ * otherwise tags are the canonical archive.
+ */
 export function squarespaceTermArchiveUrl(term: string, sourceUrl: string): string {
 	const url = new URL(sourceUrl);
 	const kind = /\/category\//.test(url.pathname) ? 'category' : 'tag';
-	const collection = url.pathname.replace(/\/(?:tag|category)\/.*$/, '').replace(/\/$/, '') || '/blog';
+	const collection = permalinkCollections.get(url.href) ?? (url.pathname.replace(/\/(?:tag|category)\/.*$/, '').replace(/\/$/, '') || '/blog');
 	return new URL(`${collection}/${kind}/${encodeURIComponent(term).replace(/%20/g, '+')}`, url.origin).href;
 }
 
@@ -178,6 +184,7 @@ export const squarespaceStructuredContent: StructuredContentSource = {
 					permalink.hash = '';
 					if (seenEntries.has(permalink.href)) continue;
 					seenEntries.add(permalink.href);
+					permalinkCollections.set(permalink.href, collection.pathname.replace(/\/$/, ''));
 					let slug = permalink.pathname.split('/').filter(Boolean).at(-1) ?? '';
 					try { slug = decodeURIComponent(slug); } catch { /* Preserve source escapes. */ }
 					const entry: StructuredContentEntry = { permalink: permalink.href, slug, kind: 'post', title: item.title, contentHtml: item.body, published, updated, author: item.author?.displayName ?? '', terms: [...new Set([...(item.categories ?? []), ...(item.tags ?? [])].filter(term => typeof term === 'string' && term.trim()))], ...(typeof item.assetUrl === 'string' ? { image: item.assetUrl } : {}) };

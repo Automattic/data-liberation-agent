@@ -35,6 +35,7 @@ import { captureTimeBudgetWindow, validateTimeBudgetMs, validateRouteReserveMs, 
 import { validateMaxFileBytes } from './export-file-limit.js';
 import { captureExportLimits, recordFinalWebsiteSize, validateMaxFiles, validateMaxTotalBytes } from './export-total-budget.js';
 import { assertEntrypointHasContent } from './source-content.js';
+import { structuredTermArchiveUrls } from './content-index.js';
 
 export { isUsableCapture, USABLE_PARTIAL_CAPTURE_POLICY, type MissingRoute } from './capture-usability.js';
 export { DEFAULT_CAPTURE_TIME_BUDGET_MS, DEFAULT_ROUTE_SELECTION, ROUTE_SELECTIONS, type RouteLimit, type RouteSelection } from './route-budget.js';
@@ -538,7 +539,7 @@ async function runCaptureWebsite(
 	const inventoryUrls = await normalizeDiscoveredRoutes( [
 		sourceUrl,
 		...contentEntries.map( entry => entry.permalink ),
-		...( contentSource ? [ ...new Set( contentEntries.flatMap( entry => entry.terms ) ) ].map( term => contentSource.termArchiveUrl( term, sourceUrl ) ) : [] ),
+		...( contentSource ? structuredTermArchiveUrls( contentEntries, contentSource ) : [] ),
 		...( inventory.urls ?? [] )
 			.map( ( entry ) => entry.url )
 			.filter( ( url ) => {
