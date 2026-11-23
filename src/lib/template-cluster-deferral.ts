@@ -75,6 +75,13 @@ export interface TemplateClusterDeferralInput {
 	templateIdentity?: TemplateIdentity;
 	styleNormalization?: TemplateStyleNormalization;
 	rewriteDerivedMedia?: import('../adapters/page-actions.js').LiberationHooks['rewriteDerivedMedia'];
+	/**
+	 * The adapter's derivation contract, the same post-capture derivation
+	 * applies: a member deferred here has no browser capture to fall back on.
+	 */
+	runtimeWidgetSelectors?: readonly string[];
+	canonicalizeHtml?: ( html: string ) => string;
+	runtimeStateClasses?: readonly RegExp[];
 	/** No light render starts after this instant. */
 	deadline?: number;
 }
@@ -173,7 +180,7 @@ export class TemplateClusterDeferral {
 		const repProcessedHtml = this.capturedHtml( group.representative );
 		const realHtml = this.capturedHtml( verifier );
 		if ( repProcessedHtml === undefined || realHtml === undefined ) return;
-		const derive = ( repServerHtml: string, memberServerHtml: string, memberRenderedHtml?: string, documents: { repProcessedHtml?: string; clusterKeyDocuments?: { repServerHtml: string; memberServerHtml: string } } = {} ) => deriveMemberDocument( { rewriteDerivedMedia: this.input.rewriteDerivedMedia, memberRenderedHtml, repServerHtml, repProcessedHtml, memberServerHtml, baseUrl: group.representative, templateIdentity: this.input.templateIdentity, styleNormalization: this.input.styleNormalization, ...documents } );
+		const derive = ( repServerHtml: string, memberServerHtml: string, memberRenderedHtml?: string, documents: { repProcessedHtml?: string; clusterKeyDocuments?: { repServerHtml: string; memberServerHtml: string } } = {} ) => deriveMemberDocument( { rewriteDerivedMedia: this.input.rewriteDerivedMedia, memberRenderedHtml, repServerHtml, repProcessedHtml, memberServerHtml, baseUrl: group.representative, templateIdentity: this.input.templateIdentity, styleNormalization: this.input.styleNormalization, runtimeWidgetSelectors: this.input.runtimeWidgetSelectors, canonicalizeHtml: this.input.canonicalizeHtml, ...documents } );
 		let source: MemberDocumentSource | undefined;
 		let repServerHtml = '';
 		let verifiedHtml = '';
@@ -182,7 +189,7 @@ export class TemplateClusterDeferral {
 			if ( ! ( 'html' in rep ) || ! ( 'html' in member ) ) continue;
 			const media = this.input.rewriteDerivedMedia ? await this.document( verifier, 'rendered' ) : undefined;
 			const derivation = derive( rep.html, member.html, media && 'html' in media ? media.html : undefined );
-			if ( derivation.ok && compareDerivedWithCapture( { derivedHtml: derivation.html, realHtml, repServerHtml: rep.html, memberServerHtml: member.html, styleNormalization: this.input.styleNormalization, baseUrl: group.representative } ).equal ) {
+			if ( derivation.ok && compareDerivedWithCapture( { derivedHtml: derivation.html, realHtml, repServerHtml: rep.html, memberServerHtml: member.html, styleNormalization: this.input.styleNormalization, runtimeStateClasses: this.input.runtimeStateClasses, baseUrl: group.representative } ).equal ) {
 				source = candidate;
 				repServerHtml = rep.html;
 				verifiedHtml = derivation.html;

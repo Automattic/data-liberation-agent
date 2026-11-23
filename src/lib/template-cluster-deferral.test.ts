@@ -165,3 +165,30 @@ it.each( [
 		rmSync( outputDir, { recursive: true, force: true } );
 	}
 } );
+
+// A deferred member skips the browser, so the check applies the adapter's
+// derivation contract that post-capture derivation will: a declared runtime
+// island the representative's capture cannot map fails closed in both.
+it.each( [
+	{ name: 'without a declared island', contract: {}, deferred: true },
+	{ name: 'with a declared island the capture cannot map', contract: { runtimeWidgetSelectors: [ '.gallery-next' ] }, deferred: false },
+] )( 'derives under the adapter contract $name', async ( { contract, deferred } ) => {
+	const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
+	const outputDir = mkdtempSync( join( parent, 'template-deferral-contract-' ) );
+	const urls = [ '/post/rep/', '/post/alpha/', '/post/beta/', '/post/gamma/' ].map( path => origin + path );
+	const group = { size: urls.length, representative: urls[ 0 ]!, members: urls };
+	const deferral = new TemplateClusterDeferral( { sourceUrl: `${ origin }/`, outputDir, governors: new SourceRequestGovernors(), ...contract }, () => [ group ] );
+	try {
+		const seeds = rankTemplateClusterRoutes( [ `${ origin }/`, ...urls ], `${ origin }/`, [ group ], new Set() ).slice( 1, 3 );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		for ( const [ index, url ] of seeds.entries() ) {
+			writeFileSync( join( outputDir, `html/seed-${ index }.html` ), page( new URL( url ).pathname ).replace( '<button class="gallery-next" type="button">Next</button>', '' ) );
+			deferral.routeCaptured( url, `html/seed-${ index }.html` );
+		}
+		await deferral.close();
+		const tail = urls.filter( url => ! seeds.includes( url ) );
+		expect( tail.map( url => deferral.defers( url ) ) ).toEqual( tail.map( () => deferred ) );
+	} finally {
+		rmSync( outputDir, { recursive: true, force: true } );
+	}
+} );

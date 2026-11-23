@@ -648,12 +648,21 @@ async function runCaptureWebsite(
 	let frontierRemaining = frontierGroupingLimits?.maxRoutes === 'all' ? 1000 : frontierGroupingLimits?.maxRoutes ?? 0;
 	let frontierDeadline: number | undefined;
 	const assetQueue = new AssetAcquisitionQueue( outputDir, timeBudget?.abandonAt, adapter.resolveImageOriginal?.bind( adapter ), undefined, timeBudget?.admitUntil );
+	// Deferral and post-capture derivation derive members under one contract:
+	// a member the deferral check accepts must derive after capture too.
+	const derivationContract = {
+		templateIdentity: adapter.templateIdentity,
+		styleNormalization: adapter.templateStyleNormalization,
+		rewriteDerivedMedia: adapter.liberation?.rewriteDerivedMedia?.bind( adapter.liberation ),
+		runtimeWidgetSelectors: adapter.liberation?.runtimeWidgetSelectors,
+		canonicalizeHtml: adapter.liberation?.canonicalizeHtml?.bind( adapter.liberation ),
+		runtimeStateClasses: adapter.runtimeStateClasses,
+	};
 	// Verified clusters' members leave the browser pass for derivation (#784).
 	const deferral = templateClusters && templateGrouping?.report
 		? new ( await import( './template-cluster-deferral.js' ) ).TemplateClusterDeferral( {
 				sourceUrl, outputDir, routeScope, governors: sourceGovernors,
-				templateIdentity: adapter.templateIdentity, styleNormalization: adapter.templateStyleNormalization,
-				rewriteDerivedMedia: adapter.liberation?.rewriteDerivedMedia?.bind( adapter.liberation ),
+				...derivationContract,
 				// Light renders stop with the capture window, or the default one without a time budget.
 				deadline: timeBudget?.abandonAt ?? startedAt + DEFAULT_CAPTURE_TIME_BUDGET_MS,
 			}, () => clusterRankingGroups )
@@ -838,17 +847,12 @@ async function runCaptureWebsite(
 				sourceUrl,
 				outputDir,
 				report: templateGrouping.report,
-				rewriteDerivedMedia: adapter.liberation?.rewriteDerivedMedia?.bind( adapter.liberation ),
+				...derivationContract,
 				routeScope,
 				timeBudgetMs: options.timeBudgetMs,
 				frontierUrls: screenshotResult.linkedPageCoverage?.requiredUrls ?? [],
 				aliasUrls: new Set( aliasProbe.aliases.map( alias => normalizedUrl( alias.url ) ) ),
 				governors: sourceGovernors,
-				styleNormalization: adapter.templateStyleNormalization,
-				templateIdentity: adapter.templateIdentity,
-				runtimeWidgetSelectors: adapter.liberation?.runtimeWidgetSelectors,
-				canonicalizeHtml: adapter.liberation?.canonicalizeHtml?.bind( adapter.liberation ),
-				runtimeStateClasses: adapter.runtimeStateClasses,
 				maxTotalBytes: options.maxTotalBytes,
 				resolveImageOriginal: adapter.resolveImageOriginal?.bind( adapter ),
 				acquisition: adapter.acquisition,
