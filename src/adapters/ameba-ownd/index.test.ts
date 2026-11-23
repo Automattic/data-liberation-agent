@@ -53,6 +53,10 @@ describe( 'Ameba Ownd detection', () => {
 		// A hint to the platform's CDN is not the platform's own stylesheet.
 		const preconnect = html.replace( '<head>', '<head><link rel="preconnect" href="https://static.amebaowndme.com/madrid-frontend/css/">' );
 		expect( detectFromDocument( 'https://www.example.jp/', new Headers(), preconnect ).platform ).toBe( 'nextjs' );
+		const preload = html.replace( '<head>', '<head><link rel="preload" data-rel="stylesheet" href="https://static.amebaowndme.com/madrid-frontend/css/user.min-1.css">' );
+		expect( detectFromDocument( 'https://www.example.jp/', new Headers(), preload ).platform ).toBe( 'nextjs' );
+		const alternate = html.replace( '<head>', '<head><link rel="alternate stylesheet" href="https://static.amebaowndme.com/madrid-frontend/css/user.min-1.css">' );
+		expect( detectFromDocument( 'https://www.example.jp/', new Headers(), alternate ).platform ).toBe( 'ameba-ownd' );
 	} );
 } );
 
@@ -200,6 +204,15 @@ describe( 'Ameba Ownd structured content', () => {
 			[ `${ ORIGIN }/posts/page/2` ]: untotaled( posts.slice( 2 ) ),
 			[ `${ ORIGIN }/posts/page/3` ]: untotaled( [] ),
 		};
+		// A host that repeats its last page past the end stops once nothing is new.
+		const repeating = vi.spyOn( fetching, 'safeFetch' ).mockImplementation( async url => response( pages[ String( url ) ] && ! String( url ).endsWith( '/3' ) ? pages[ String( url ) ] : untotaled( posts.slice( 2 ) ), String( url ) ) );
+		try {
+			const result = await enumerateAmebaContent( `${ ORIGIN }/`, { governors: new SourceRequestGovernors() } );
+			expect( result.entries ).toHaveLength( 3 );
+			expect( repeating ).toHaveBeenCalledTimes( 3 );
+		} finally {
+			repeating.mockRestore();
+		}
 		const fetch = vi.spyOn( fetching, 'safeFetch' ).mockImplementation( async url => response( pages[ String( url ) ], String( url ) ) );
 		try {
 			const result = await enumerateAmebaContent( `${ ORIGIN }/`, { governors: new SourceRequestGovernors() } );

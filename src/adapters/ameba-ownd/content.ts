@@ -92,9 +92,7 @@ export function amebaPostEntry( post: AmebaPost, origin: string ): StructuredCon
 	return entry;
 }
 
-function rememberCategories( origin: string, categories: readonly AmebaCategory[] ): void {
-	let byLabel = categoryIds.get( origin );
-	if ( ! byLabel ) categoryIds.set( origin, byLabel = new Map() );
+function rememberCategories( byLabel: Map< string, string >, categories: readonly AmebaCategory[] ): void {
 	for ( const category of categories ) if ( ! byLabel.has( category.label ) ) byLabel.set( category.label, category.id );
 }
 
@@ -134,8 +132,9 @@ function inventoryUrls( inventory: unknown ): string[] {
  */
 export async function enumerateAmebaContent( sourceUrl: string, { governors, inventory }: { governors: SourceRequestGovernors; inventory?: unknown } ): Promise< StructuredContentEnumeration > {
 	const origin = new URL( sourceUrl ).origin;
-	// Each enumeration learns the site's current categories afresh.
-	categoryIds.delete( origin );
+	// Each enumeration learns the site's current categories afresh and
+	// publishes them once complete, so a concurrent capture keeps its own.
+	const learnedCategories = new Map< string, string >();
 	const result: StructuredContentEnumeration = { entries: [], diagnostics: [] };
 	const diagnostic = ( code: string, url: string, reason: string ) => result.diagnostics.push( { code, url, reason } );
 	const seen = new Set< string >();
@@ -166,6 +165,7 @@ export async function enumerateAmebaContent( sourceUrl: string, { governors, inv
 			pages = total !== null && limit ? Math.ceil( total / limit ) : AMEBA_LIST_PAGE_CAP + 1;
 		}
 		if ( list.posts.length === 0 ) break;
+		const before = seen.size;
 		for ( const post of list.posts ) {
 			const entry = amebaPostEntry( post, origin );
 			if ( ! entry ) {
@@ -174,10 +174,13 @@ export async function enumerateAmebaContent( sourceUrl: string, { governors, inv
 			}
 			if ( seen.has( entry.permalink ) ) continue;
 			seen.add( entry.permalink );
-			rememberCategories( origin, details.get( entry )!.categories );
+			rememberCategories( learnedCategories, details.get( entry )!.categories );
 			result.entries.push( entry );
 		}
+		// Hosts that repeat their last page past the end add nothing new.
+		if ( seen.size === before ) break;
 	}
+	categoryIds.set( origin, learnedCategories );
 	if ( total !== null && seen.size < total ) {
 		diagnostic( 'ameba_post_list_incomplete', origin, `${ seen.size } of ${ total } declared posts enumerated` );
 	}

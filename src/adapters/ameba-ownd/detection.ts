@@ -10,7 +10,7 @@ export const detection: PlatformDetection = {
 			signal: 'Ameba Ownd app deep link meta tag',
 		},
 		{
-			pattern: /<link\b(?=[^>]*\brel\s*=\s*["']?stylesheet\b)[^>]*\bhref\s*=\s*["']https:\/\/static\.amebaowndme\.com\/madrid-frontend\/css\/[^"']+\.css/i,
+			pattern: /<link\b(?=[^>]*\srel\s*=\s*(?:"[^"]*\bstylesheet\b[^"]*"|'[^']*\bstylesheet\b[^']*'|stylesheet\b))[^>]*\shref\s*=\s*["']https:\/\/static\.amebaowndme\.com\/madrid-frontend\/css\/[^"']+\.css/i,
 			signal: 'Ameba Ownd frontend stylesheet',
 		},
 	],
