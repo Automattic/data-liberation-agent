@@ -770,9 +770,9 @@ async function runCaptureWebsite(
 		...( timeBudget ? { timeBudget: { ...timeBudget, assetBacklog: () => assetQueue.backlog() } } : {} ),
 		...( options.routeDeadlineMs !== undefined ? { routeDeadlineMs: options.routeDeadlineMs } : {} ),
 		onProgress: ( current, total, url ) => progress( { phase: 'capturing', current, total, url } ),
-		onRouteCaptured: ( url, documents, stored, hasInteractionStates, profiles ) => {
+		onRouteCaptured: ( url, documents, stored, interactions, profiles ) => {
 			assetQueue.enqueueRoute( url, documents, stored );
-			deferral?.routeCaptured( url, documents[ 0 ], hasInteractionStates, profiles );
+			deferral?.routeCaptured( url, documents[ 0 ], interactions, profiles );
 		},
 		...( deferral ? {
 			deferRoute: ( url: string ) => deferral.defers( url ),

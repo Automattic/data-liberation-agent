@@ -8,6 +8,7 @@ import { templateVerificationMember } from './route-budget.js';
 import { normalizedUrl } from './url/route-key.js';
 import type { SiteRouteScope } from '../platform/types.js';
 import type { SourceRequestGovernors } from './source-request-governor.js';
+import type { InteractionStatesReport } from './screenshot/interaction-capture.js';
 import type { TemplateGroup, TemplateIdentity, TemplateStyleNormalization } from './template-groups.js';
 
 /**
@@ -83,7 +84,7 @@ function documentKey( url: string, source: MemberDocumentSource, profile: Render
 
 export class TemplateClusterDeferral {
 	private readonly captured = new Map< string, string >();
-	private readonly interactive = new Set< string >();
+	private readonly interactions = new Map< string, InteractionStatesReport >();
 	private readonly capturedProfiles = new Map< string, CapturedProfiles >();
 	private readonly started = new Set< string >();
 	private readonly settled = new Set< string >();
@@ -91,6 +92,8 @@ export class TemplateClusterDeferral {
 	private readonly deferred = new Set< string >();
 	private readonly documents = new Map< string, Promise< MemberDocument > >();
 	private readonly checks: Promise< void >[] = [];
+	private readonly prefetchQueue: string[] = [];
+	private prefetching = 0;
 	private browser?: Promise< Browser >;
 	private identity?: Promise< BrowserContextOptions >;
 	private closing = false;
@@ -98,11 +101,11 @@ export class TemplateClusterDeferral {
 	constructor( private readonly input: TemplateClusterDeferralInput, private readonly groups: () => readonly Group[] ) {}
 
 	/** The browser pass captured `url`; `htmlPath` is its desktop document. */
-	routeCaptured( url: string, htmlPath: string | undefined, hasInteractionStates = false, profiles?: CapturedProfiles ): void {
+	routeCaptured( url: string, htmlPath: string | undefined, interactions?: InteractionStatesReport, profiles?: CapturedProfiles ): void {
 		const file = this.outputFile( htmlPath );
 		if ( ! file ) return;
 		this.captured.set( normalizedUrl( url ), file );
-		if ( hasInteractionStates ) this.interactive.add( normalizedUrl( url ) );
+		if ( interactions ) this.interactions.set( normalizedUrl( url ), interactions );
 		if ( profiles ) this.capturedProfiles.set( normalizedUrl( url ), profiles );
 		for ( const group of this.groups() ) {
 			if ( group.size < 2 || this.started.has( group.representative ) ) continue;
@@ -165,17 +168,15 @@ export class TemplateClusterDeferral {
 	}
 
 	private async check( group: Group, verifier: string ): Promise< void > {
-		// Derivation transplants HTML, not the separate interaction reports used
-		// by export to wire menus and dialogs. Until it can project those reports,
-		// interactive seeds cannot prove that a tail member is portable.
-		if ( [ group.representative, verifier ].some( url => this.interactive.has( normalizedUrl( url ) ) ) ) return;
 		const { deriveMemberDocument, compareDerivedWithCapture } = await import( './template-clusters.js' );
+		const { interactionEvidenceCarried } = await import( './static-dialogs.js' );
 		const repProcessedHtml = this.capturedHtml( group.representative );
 		const realHtml = this.capturedHtml( verifier );
 		if ( repProcessedHtml === undefined || realHtml === undefined ) return;
 		const derive = ( repServerHtml: string, memberServerHtml: string, memberRenderedHtml?: string, documents: { repProcessedHtml?: string; clusterKeyDocuments?: { repServerHtml: string; memberServerHtml: string } } = {} ) => deriveMemberDocument( { rewriteDerivedMedia: this.input.rewriteDerivedMedia, memberRenderedHtml, repServerHtml, repProcessedHtml, memberServerHtml, baseUrl: group.representative, templateIdentity: this.input.templateIdentity, styleNormalization: this.input.styleNormalization, ...documents } );
 		let source: MemberDocumentSource | undefined;
 		let repServerHtml = '';
+		let verifiedHtml = '';
 		for ( const candidate of [ 'server', 'rendered' ] as const ) {
 			const [ rep, member ] = await Promise.all( [ this.document( group.representative, candidate ), this.document( verifier, candidate ) ] );
 			if ( ! ( 'html' in rep ) || ! ( 'html' in member ) ) continue;
@@ -184,11 +185,25 @@ export class TemplateClusterDeferral {
 			if ( derivation.ok && compareDerivedWithCapture( { derivedHtml: derivation.html, realHtml, repServerHtml: rep.html, memberServerHtml: member.html, styleNormalization: this.input.styleNormalization, baseUrl: group.representative } ).equal ) {
 				source = candidate;
 				repServerHtml = rep.html;
+				verifiedHtml = derivation.html;
 				break;
 			}
 		}
 		if ( ! source ) {
 			process.stderr.write( `[template-clusters] deferral: ${ group.representative } did not verify; its members keep browser capture\n` );
+			return;
+		}
+		// Derivation transplants HTML. Export wires menus, dialogs and galleries
+		// from separate interaction reports, which a derived member only
+		// inherits for site chrome identical to the representative's
+		// (`chromeInteractionStates`). A member whose seeds recorded evidence
+		// outside that keeps browser capture. The verdict above still stands:
+		// post-capture derivation derives the members the browser budget omits.
+		const seeds = [ { html: repProcessedHtml, report: this.interactions.get( normalizedUrl( group.representative ) ) }, { html: realHtml, report: this.interactions.get( normalizedUrl( verifier ) ) } ];
+		const keepsInteractions = ( derivedHtml: string ) => seeds.every( seed => interactionEvidenceCarried( seed.html, derivedHtml, seed.report ) );
+		if ( ! keepsInteractions( verifiedHtml ) ) {
+			process.stderr.write( `[template-clusters] deferral: ${ group.representative } verified from ${ source } documents; its seeds record interaction states derivation cannot carry, so members keep browser capture\n` );
+			if ( source === 'rendered' || this.input.rewriteDerivedMedia ) this.prefetchRenders( group );
 			return;
 		}
 		const startedAt = Date.now();
@@ -201,7 +216,9 @@ export class TemplateClusterDeferral {
 			const member = await this.document( url, source );
 			const media = this.input.rewriteDerivedMedia ? await this.document( url, 'rendered' ) : undefined;
 			const mediaHtml = media && 'html' in media ? media.html : undefined;
-			if ( ! ( 'html' in member ) || ! derive( repServerHtml, member.html, mediaHtml ).ok ) return;
+			if ( ! ( 'html' in member ) ) return;
+			const derivation = derive( repServerHtml, member.html, mediaHtml );
+			if ( ! derivation.ok || ! keepsInteractions( derivation.html ) ) return;
 			for ( const profile of profiles ) {
 				if ( ! profile.server ) {
 					if ( ! derive( repServerHtml, member.html, mediaHtml, { repProcessedHtml: profile.repProcessedHtml } ).ok ) return;
@@ -221,6 +238,32 @@ export class TemplateClusterDeferral {
 		} );
 		const deferred = pending.filter( url => this.defers( url ) ).length;
 		process.stderr.write( `[template-clusters] deferral: ${ group.representative } verified from ${ source } documents; ${ deferred } of ${ pending.length } pending members deferred, ${ Date.now() - startedAt }ms\n` );
+	}
+
+	/**
+	 * Light renders of a verified cluster's members the browser pass has not
+	 * captured, started beside it without holding those members back. Light
+	 * renders stop at the capture deadline, which post-capture derivation
+	 * usually reaches after the browser pass: rendered now, the documents are
+	 * memoized for the members its budget omits. The browser takes members in
+	 * ranking order, so renders start from the other end. One queue serves
+	 * every cluster, within the light-render concurrency.
+	 */
+	private prefetchRenders( group: Group ): void {
+		this.prefetchQueue.push( ...group.members.filter( url => ! this.captured.has( normalizedUrl( url ) ) ).reverse() );
+		this.drainPrefetch();
+	}
+
+	private drainPrefetch(): void {
+		while ( this.prefetching < TEMPLATE_DEFERRAL_LIMITS.renderConcurrency && this.prefetchQueue.length ) {
+			const url = this.prefetchQueue.shift()!;
+			if ( this.closing || this.captured.has( normalizedUrl( url ) ) ) continue;
+			this.prefetching++;
+			this.checks.push( this.document( url, 'rendered' ).then( () => {}, () => {} ).finally( () => {
+				this.prefetching--;
+				this.drainPrefetch();
+			} ) );
+		}
 	}
 
 	/**
