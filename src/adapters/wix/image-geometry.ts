@@ -13,8 +13,11 @@ import { wixStaticMediaUrl } from './capture.js';
 const WIX_IMAGE_HOST = 'wow-image[data-image-info]';
 /** The host's `<img>`: a direct child, or inside the `<picture>` some Wix sites wrap it in. */
 const WIX_HOST_IMAGE = ':scope > img, :scope > picture > img';
-/** The low-quality placeholder Wix shows before the real image loads: a `blur_N` transform. */
-const WIX_BLUR_PLACEHOLDER = /^https:\/\/static\.wixstatic\.com\/media\/[^?#]+\/v1\/[^/]+\/[^/]*\bblur_\d+/;
+/**
+ * The low-quality placeholder Wix shows before the real image loads: a
+ * `blur_N` transform, after an optional `crop/…` step for a cropped image.
+ */
+const WIX_BLUR_PLACEHOLDER = /^https:\/\/static\.wixstatic\.com\/media\/[^?#]+\/v1\/(?:crop\/[^/]+\/)?[^/]+\/[^/]*\bblur_\d+/;
 export const isWixBlurPlaceholder = ( src: string ): boolean => WIX_BLUR_PLACEHOLDER.test( src );
 
 /** Display modes whose rendering is the image filling its container box. */
