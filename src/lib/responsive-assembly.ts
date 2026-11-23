@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { buildEquivalentClassRenames, renameClassTokensInDocument } from './build-equivalent-classes.js';
 import { mergeViewportEntranceStates, VIEWPORT_ENTRANCE_ATTRIBUTE } from './viewport-entrances.js';
 import * as cheerio from 'cheerio';
 import { ownDocument, readDocument } from './parsed-documents.js';
@@ -417,15 +418,39 @@ function discoverIdentityAttributes( desktop: cheerio.CheerioAPI, mobile: cheeri
  * it. Platform
  * neutral: adapters whose ids are unstable simply fall back.
  */
-/** Inline styles are equal when their declarations are, regardless of serialization whitespace. */
+/**
+ * Inline styles are equal when their declarations are, regardless of
+ * serialization whitespace and of number precision past what CSSOM keeps: a
+ * runtime writing a style through CSSOM (a client-rendered page) serializes
+ * `119.5260663507109%` as `119.526%`, the same declaration.
+ */
 function sameInlineStyle( a: string | undefined, b: string | undefined ): boolean {
 	if ( a === b ) return true;
 	if ( a === undefined || b === undefined ) return false;
 	const normalized = ( style: string ) => inlineDeclarations( style ).map( ( declaration ) => {
 		const colon = declaration.indexOf( ':' );
-		return colon < 0 ? declaration : `${ declaration.slice( 0, colon ).trim().toLowerCase() }:${ declaration.slice( colon + 1 ).trim() }`;
+		return colon < 0 ? declaration : `${ declaration.slice( 0, colon ).trim().toLowerCase() }:${ cssomPrecision( declaration.slice( colon + 1 ).trim() ) }`;
 	} ).join( ';' );
 	return normalized( a ) === normalized( b );
+}
+
+/** Numbers rounded to the six significant digits CSSOM serializes. */
+function cssomPrecision( value: string ): string {
+	return value.replace( /(?<![\w#.-])-?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?/gi, number => String( Number( Number( number ).toPrecision( 6 ) ) ) );
+}
+
+/**
+ * One declaration list serialized at two precisions is one style: both
+ * elements take the serialization that keeps the authored (unrounded)
+ * numbers, the one a server-rendered copy of the same element carries.
+ */
+function adoptAuthoredInlineStyle( d: cheerio.Cheerio< Element >, m: cheerio.Cheerio< Element > ): void {
+	const desktop = d.attr( 'style' ), mobile = m.attr( 'style' );
+	if ( desktop === undefined || mobile === undefined || desktop.trim() === mobile.trim() || ! sameInlineStyle( desktop, mobile ) ) return;
+	const digits = ( style: string ) => ( style.match( /\d/g ) ?? [] ).length;
+	const authored = digits( mobile ) > digits( desktop ) ? mobile : desktop;
+	d.attr( 'style', authored );
+	m.attr( 'style', authored );
 }
 
 export function identitySubsetMerge(
@@ -802,6 +827,7 @@ export function identitySubsetMerge(
 			else d.attr( VIEWPORT_ENTRANCE_ATTRIBUTE, state );
 		}
 		let projected = false;
+		if ( ! deviceKey ) adoptAuthoredInlineStyle( d, m );
 		const desktopStyle = d.attr( 'style' ) ?? '';
 		const mobileStyle = m.attr( 'style' ) ?? '';
 		if ( desktopStyle.trim() !== mobileStyle.trim() ) {
@@ -1118,6 +1144,7 @@ function equivalentInlineProjection(
 		path: string
 	): void => {
 		let projected = false;
+		adoptAuthoredInlineStyle( d, m );
 		const desktopStyle = d.attr( 'style' ) ?? '';
 		const mobileStyle = m.attr( 'style' ) ?? '';
 		if ( desktopStyle.trim() !== mobileStyle.trim() ) {
@@ -1593,9 +1620,20 @@ export function assembleResponsiveCapture( input: ResponsiveAssemblyInput ): Res
 			portableNormalization: 'absent',
 		};
 	}
-	const portableMobileHtml = input.portableMobileHtml ?? input.rawMobileHtml;
+	// Class names a different build of the same stylesheet gave the phone
+	// document are the desktop's names: no rendering tells them apart.
+	const buildRenames = buildEquivalentClassRenames( input.rawDesktopHtml, input.rawMobileHtml );
+	if ( buildRenames.size ) {
+		input = {
+			...input,
+			rawMobileHtml: renameClassTokensInDocument( input.rawMobileHtml, buildRenames ),
+			...( input.portableMobileHtml !== undefined ? { portableMobileHtml: renameClassTokensInDocument( input.portableMobileHtml, buildRenames ) } : {} ),
+		};
+	}
+	const rawMobileHtml = input.rawMobileHtml!;
+	const portableMobileHtml = input.portableMobileHtml ?? rawMobileHtml;
 	const middles = input.portableMiddleHtml ?? [];
-	const source = resolveResponsivePair( input.rawDesktopHtml, input.rawMobileHtml, switchWidth, 'source' );
+	const source = resolveResponsivePair( input.rawDesktopHtml, rawMobileHtml, switchWidth, 'source' );
 	if ( source.gate ) {
 		const assembled = responsiveHtml(
 			input.portableDesktopHtml,
@@ -1621,7 +1659,7 @@ export function assembleResponsiveCapture( input: ResponsiveAssemblyInput ): Res
 		);
 	}
 	return emittedAssembly(
-		responsiveHtml( input.rawDesktopHtml, input.rawMobileHtml, switchWidth, source, undefined, input.onUnparseableStylesheet ),
+		responsiveHtml( input.rawDesktopHtml, rawMobileHtml, switchWidth, source, undefined, input.onUnparseableStylesheet ),
 		'pending'
 	);
 }
