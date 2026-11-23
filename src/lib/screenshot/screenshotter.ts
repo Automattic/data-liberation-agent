@@ -880,14 +880,24 @@ export function mergeInteractionReports(
 	return {
 		...( keepPrevious ? previous : latest ),
 		...( previous.coverage === 'partial' || latest.coverage === 'partial' ? { coverage: 'partial' as const } : {} ),
-		components: [ ...new Map( byIdentity( previous.components ?? [], latest.components ?? [], componentKey ).map( component => {
+		components: [ ...byIdentity( previous.components ?? [], latest.components ?? [], componentKey ).reduce( ( merged, component ) => {
+			const key = componentKey( component );
 			const prior = previous.components?.find(node => node.selector === component.selector);
-			if (!component.slideshow || !prior?.slideshow || prior === component) return [componentKey( component ), component] as const;
-			return [componentKey( component ), { ...component, slideshow: { ...component.slideshow,
+			let next = component;
+			if (component.slideshow && prior?.slideshow && prior !== component) next = { ...component, slideshow: { ...component.slideshow,
 				views: [...prior.slideshow.views, ...component.slideshow.views].filter((view, index, all) => all.findIndex(other => other.width === view.width) === index),
 				navigation: [...prior.slideshow.navigation, ...component.slideshow.navigation].filter((mode, index, all) => all.findIndex(other => other.mode === mode.mode) === index),
-			} }] as const;
-		} ) ).values() ],
+			} };
+			// As with states, a later pass refreshes captured evidence but never
+			// drops it: a state only the earlier pass reached keeps its transition.
+			const earlier = merged.get( key );
+			const kept = earlier?.states.filter( state => state.evidence && ! next.states.some( known => known.id === state.id ) ) ?? [];
+			if ( earlier && kept.length ) next = { ...next,
+				states: [ ...next.states, ...kept ],
+				transitions: [ ...next.transitions, ...earlier.transitions.filter( edge => kept.some( state => state.id === edge.to ) ) ],
+			};
+			return merged.set( key, next );
+		}, new Map< string, CapturedComponent >() ).values() ],
 		states,
 		routeNavigation: [ ...new Map( byIdentity( previous.routeNavigation ?? [], latest.routeNavigation ?? [], route => route.selector )
 			.map( route => [ route.selector, route ] ) ).values() ],
