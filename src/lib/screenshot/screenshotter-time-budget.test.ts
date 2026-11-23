@@ -107,7 +107,7 @@ it.skipIf( skipBrowser ).each( [
 	const outputDir = mkdtempSync( join( process.cwd(), '.tmp-test', 'time-budget-entry-first-' ) );
 	try {
 		const now = Date.now();
-		let entryFinishedAt = Infinity;
+		let entryObservedAt = Infinity;
 		const prioritized: string[][] = [];
 		const requestedBeforePriority = new Set< string >();
 		const result = await captureScreenshots( {
@@ -119,12 +119,13 @@ it.skipIf( skipBrowser ).each( [
 				prioritized.push( pending );
 				return [ ...pending ].reverse();
 			},
-			onProgress: ( _current, _total, url ) => { if ( url === `${ origin }/` ) entryFinishedAt = Date.now(); },
+			// Successors wait for the entrypoint's rendered link evidence (#2240).
+			observeSource: async ( _page, url ) => { if ( url === `${ origin }/` ) entryObservedAt = Math.min( entryObservedAt, Date.now() ); },
 		} );
 		expect( result ).toMatchObject( { captured: 3, failed: 0 } );
 		const successorStartedAt = Math.min( requests.get( '/a' ) ?? Infinity, requests.get( '/b' ) ?? Infinity );
-		expect( successorStartedAt < entryFinishedAt ).toBe( ! entryFirst );
-		// Only routes still pending once the entrypoint finishes are reordered.
+		expect( successorStartedAt < entryObservedAt ).toBe( ! entryFirst );
+		// Only routes still pending once the entrypoint is released are reordered.
 		expect( prioritized.length ).toBeLessThanOrEqual( 1 );
 		expect( prioritized.flat().filter( url => requestedBeforePriority.has( url ) ) ).toEqual( [] );
 		if ( entryFirst ) expect( prioritized ).toEqual( [ [ `${ origin }/a`, `${ origin }/b` ] ] );

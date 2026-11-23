@@ -101,6 +101,11 @@ export interface CapturePerViewportArgs {
 		ctx: import( '../../adapters/page-actions.js' ).LiberationContext
 	) => Promise<void>;
 	observeSource?: ScreenshotOpts['observeSource'];
+	/**
+	 * Receives the rendered initial document once source observation is done,
+	 * so the pool can expand the entrypoint's links before its later phases (#2240).
+	 */
+	publishRenderedLinks?: ( document: { html: string; url: string; baseUrl: string } ) => void;
 	browserProfile: Readonly<{ isMobile: boolean; hasTouch: boolean }>;
 	canonicalizeHtml?: ( html: string, document?: string ) => string;
 	probeExclusions?: ScreenshotOpts['probeExclusions'];
@@ -633,6 +638,11 @@ export function baselineSteps(
 		{
 			id: 'observe-source', onFailure: 'throw', run: async () => {
 				await args.observeSource?.( page, url, viewport.id, sourceErrors(), args.browserProfile, viewport );
+				if ( args.publishRenderedLinks && state.initialDocument ) {
+					// Evidence only: an unreadable location leaves admission to route completion.
+					const location = await withEvaluateTimeout( page.evaluate( () => ( { url: document.URL, baseUrl: document.baseURI } ) ), evaluateTimeoutMs ).catch( orElse( undefined ) );
+					if ( location && ! sourceLoad.externalNavigation && ! isRouteDrift( location.url, navigationUrl ) ) args.publishRenderedLinks( { html: state.initialDocument, ...location } );
+				}
 			}
 		},
 		{
