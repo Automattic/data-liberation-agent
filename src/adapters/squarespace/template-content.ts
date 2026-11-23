@@ -14,8 +14,26 @@ const FONTS = 'style[data-sqsp-font-ids]';
 // identity keeps collection/run state out of the shared adapter singleton.
 interface ItemDetails { id?: string; image?: string; categories: string[]; date: string; shortDate: string; dateOnly: string; newer?: StructuredContentEntry; older?: StructuredContentEntry }
 const details = new WeakMap<StructuredContentEntry, ItemDetails>();
-/** Each enumerated permalink's collection path, so term archives follow the collection. */
-const permalinkCollections = new Map<string, string>();
+/**
+ * Each enumerated permalink's archive base (the collection path Squarespace
+ * serves `/tag/*` and `/category/*` under) and its taxonomy names, so term
+ * archives follow the collection and keep their taxonomy kind.
+ */
+const permalinkArchives = new Map<string, { base: string; categories: Set<string>; tags: Set<string> }>();
+
+/**
+ * Where a collection's term archives live: the collection path, or — for a
+ * collection mounted as the homepage (`fullUrl` `/`) — its `urlId`, else the
+ * permalink's first path segment. Not the permalink's parent path, which can
+ * carry a date (`/blog/2015/3/2/post`). Never empty or the site root.
+ */
+export function squarespaceArchiveBase(permalink: URL, collectionPath: string, urlId?: string): string | undefined {
+	const collection = collectionPath.replace(/\/+$/, '');
+	if (collection) return collection;
+	if (typeof urlId === 'string' && urlId.trim()) return `/${encodeURIComponent(urlId.trim())}`;
+	const segments = permalink.pathname.split('/').filter(Boolean);
+	return segments.length > 1 ? `/${segments[0]}` : undefined;
+}
 
 const itemDate = (epoch: number, options: Intl.DateTimeFormatOptions, timeZone?: string, locale = 'en-US'): string => {
 	try { return new Intl.DateTimeFormat(locale, { ...options, ...(timeZone ? { timeZone } : {}) }).format(epoch); } catch { return new Intl.DateTimeFormat(locale, options).format(epoch); }
@@ -120,8 +138,9 @@ export function squarespaceTermName(url: string): string | undefined {
  */
 export function squarespaceTermArchiveUrl(term: string, sourceUrl: string): string {
 	const url = new URL(sourceUrl);
-	const kind = /\/category\//.test(url.pathname) ? 'category' : 'tag';
-	const collection = permalinkCollections.get(url.href) ?? (url.pathname.replace(/\/(?:tag|category)\/.*$/, '').replace(/\/$/, '') || '/blog');
+	const archive = permalinkArchives.get(url.href);
+	const kind = /\/category\//.test(url.pathname) || (archive?.categories.has(term) && !archive.tags.has(term)) ? 'category' : 'tag';
+	const collection = archive?.base || url.pathname.replace(/\/(?:tag|category)\/.*$/, '').replace(/\/$/, '') || '/blog';
 	return new URL(`${collection}/${kind}/${encodeURIComponent(term).replace(/%20/g, '+')}`, url.origin).href;
 }
 
@@ -166,6 +185,7 @@ export const squarespaceStructuredContent: StructuredContentSource = {
 			// A post's JSON can name its collection but contain only `item`.
 			if (new URL(candidate).pathname !== collection.pathname) json = await fetchSqsJson(collection.href, governors);
 			const collectionEntries: StructuredContentEntry[] = [];
+			const urlId = json?.collection?.urlId;
 			const offsets = new Set<string>();
 			for (let page = 0; page < 200; page++) {
 				if (!json || !Array.isArray(json.items)) {
@@ -184,7 +204,8 @@ export const squarespaceStructuredContent: StructuredContentSource = {
 					permalink.hash = '';
 					if (seenEntries.has(permalink.href)) continue;
 					seenEntries.add(permalink.href);
-					permalinkCollections.set(permalink.href, collection.pathname.replace(/\/$/, ''));
+					const base = squarespaceArchiveBase(permalink, collection.pathname, urlId);
+					if (base) permalinkArchives.set(permalink.href, { base, categories: new Set(item.categories ?? []), tags: new Set(item.tags ?? []) });
 					let slug = permalink.pathname.split('/').filter(Boolean).at(-1) ?? '';
 					try { slug = decodeURIComponent(slug); } catch { /* Preserve source escapes. */ }
 					const entry: StructuredContentEntry = { permalink: permalink.href, slug, kind: 'post', title: item.title, contentHtml: item.body, published, updated, author: item.author?.displayName ?? '', terms: [...new Set([...(item.categories ?? []), ...(item.tags ?? [])].filter(term => typeof term === 'string' && term.trim()))], ...(typeof item.assetUrl === 'string' ? { image: item.assetUrl } : {}) };
