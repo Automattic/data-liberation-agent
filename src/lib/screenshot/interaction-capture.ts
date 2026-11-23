@@ -332,7 +332,8 @@ export async function captureTriggeredDialogs(
 ): Promise< InteractionStatesReport > {
 	const viewport = page.viewportSize() ?? { width: 0, height: 0 };
 	// The page's resting root classes, before any probe clicks a control.
-	let restingRoots = await rootClasses( page ).catch( orElse( undefined ) );
+	const pageRoots = await rootClasses( page ).catch( orElse( undefined ) );
+	let restingRoots = pageRoots;
 	// Route transitions and popup transitions share controls. Observe routes
 	// first, restore them, then exclude proven destinations from popup clicks.
 	const routeNavigation = await captureRouteNavigation( page, sourceUrl, { skip: options.navigationSkip ?? options.skip } ).catch( orElse( [] ) );
@@ -657,10 +658,23 @@ export async function captureTriggeredDialogs(
 			const dropdown = dialog.presentation === 'dropdown';
 			const observedAncestors = await observeDropdownAncestors( page, dialog.selector, dropdown );
 			const ancestorState = dropdown || observedAncestors.ancestors.length > 0 || observedAncestors.trigger?.length ? observedAncestors : undefined;
-			const rootClassState = rootClassDelta( closedRoots, await rootClasses( page ) );
+			const openRoots = await rootClasses( page );
+			let rootClassState = rootClassDelta( closedRoots, openRoots );
+			// Classes the page took before this opening (a surface that never
+			// mounted still holds its lock) and still holds while it is open.
+			const held = pageRoots ? rootClassDelta( pageRoots, closedRoots ).flatMap( row => {
+				const added = row.added.filter( token => openRoots[row.root].includes( token ) );
+				return added.length ? [ { root: row.root, removed: [], added } ] : [];
+			} ) : [];
 			const closeControl = await clickAuthoredCloseControl( page, dialog.selector );
 			await closeCapturedDialog( page, dialog.selector, trigger.probeSelector );
 			const rootsRestored = await rootClassesRestored( page, rootClassState, DIALOG_WAIT_MS );
+			// A held class that this dialog's closing releases is its own open
+			// state too: the page held it only because a lock was already taken.
+			if ( rootsRestored && held.length && await rootClassesRestored( page, held, DIALOG_WAIT_MS ) ) {
+				rootClassState = mergeRootClassStates( rootClassState, held );
+				restingRoots = await rootClasses( page ).catch( orElse( restingRoots ) );
+			}
 			const restoredAncestorState = ancestorState ? await verifyDropdownRestoration( page, ancestorState, dialog.selector ) : undefined;
 			const restingCandidate = await rememberRestingPanel( page, trigger.probeSelector, dialog.selector );
 			const capturedDialog = ( restingInline: boolean ): NonNullable< CapturedDialogInteraction[ 'dialog' ] > => ( {
@@ -1094,6 +1108,14 @@ async function restoreRestingRoots( page: Page, resting: RootClasses ): Promise<
 }
 
 type RootClasses = Awaited< ReturnType< typeof rootClasses > >;
+
+function mergeRootClassStates( state: readonly CapturedRootClassState[], more: readonly CapturedRootClassState[] ): CapturedRootClassState[] {
+	return ( [ 'html', 'body' ] as const ).flatMap( root => {
+		const rows = [ ...state, ...more ].filter( row => row.root === root );
+		if ( ! rows.length ) return [];
+		return [ { root, removed: [ ...new Set( rows.flatMap( row => row.removed ) ) ], added: [ ...new Set( rows.flatMap( row => row.added ) ) ] } ];
+	} );
+}
 
 /** Whether the document roots prevent page scrolling (a modal surface's lock). */
 async function pageScrollBlocked( page: Page ): Promise< boolean > {

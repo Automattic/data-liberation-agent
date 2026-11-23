@@ -1345,4 +1345,26 @@ describe( 'root class evidence', () => {
 		expect( cart?.status ).toBe( 'captured' );
 		expect( cart?.dialog?.rootClassState ).toEqual( [ { root: 'body', removed: [], added: [ 'locked' ] } ] );
 	}, 30_000 );
+
+	// A runtime that counts nothing: one shared lock class, which any surface's
+	// close releases. A sign-in control takes it and never mounts its surface
+	// (its bootstrap request refused), so Escape has nothing to dismiss.
+	it.skipIf( skipBrowserTests )( 'attributes a held lock to the dialog whose close releases it', async ( { newPage } ) => {
+		const page = await newPage( { viewport: { width: 1280, height: 800 } } );
+		await page.route( 'https://orphan-lock.test/**', route => route.fulfill( { contentType: 'text/html', body: `<!doctype html><style>.locked{overflow:hidden}</style><body class="site">
+			<header><a id="cart" href="#" role="button" aria-haspopup="dialog" aria-label="Cart">Cart</a><button id="sign-in" type="button">Sign in</button></header><main>Body</main>
+			<script>
+			document.getElementById( 'sign-in' ).addEventListener( 'click', () => document.body.classList.add( 'locked' ) );
+			document.getElementById( 'cart' ).addEventListener( 'click', event => { event.preventDefault(); setTimeout( () => {
+				const panel = document.createElement( 'div' ); panel.id = 'cart-panel'; panel.setAttribute( 'role', 'dialog' ); panel.setAttribute( 'aria-modal', 'true' );
+				panel.style.cssText = 'position:fixed;inset:0;background:white'; panel.innerHTML = '<p>Cart panel</p>'; document.body.append( panel ); document.body.classList.add( 'locked' );
+			}, 50 ); } );
+			document.addEventListener( 'keydown', event => { if ( event.key !== 'Escape' ) return; const panel = document.getElementById( 'cart-panel' ); if ( ! panel ) return; panel.remove(); setTimeout( () => document.body.classList.remove( 'locked' ), 100 ); } );
+			</script></body>` } ) );
+		await page.goto( 'https://orphan-lock.test/' );
+		const report = await captureTriggeredDialogs( page, 'https://orphan-lock.test/' );
+		const cart = report.states.find( state => state.trigger.label === 'Cart' );
+		expect( cart?.status ).toBe( 'captured' );
+		expect( cart?.dialog?.rootClassState ).toEqual( [ { root: 'body', removed: [], added: [ 'locked' ] } ] );
+	}, 40_000 );
 } );
