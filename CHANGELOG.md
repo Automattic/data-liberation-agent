@@ -15,6 +15,17 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.40.26] - 2026-11-23
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- collapse a route's two builds of one stylesheet and two precisions of one style
+- carry a reused panel's page-held rules to routes that lack them
+- measure dialog root classes from the resting page
+- match shared chrome before a route's own probes can exhaust the budget
+
 ## [0.40.25] - 2026-11-23
 
 ### Changed
