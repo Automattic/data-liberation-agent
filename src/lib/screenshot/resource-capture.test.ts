@@ -262,6 +262,60 @@ describe( 'CapturedResourceStore', () => {
 		expect( document ).not.toContain( 'fonts.example' );
 	} );
 
+	it( 'keeps a phone document face set selected by width once its import gate is dropped', async () => {
+		// Same family and descriptors, other binaries: a consumer hoisting every face
+		// to one global set (a WordPress theme) must still pick by width, not order.
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-profile-faces-' ) );
+		dirs.push( outputDir );
+		const sourceUrl = 'https://source.example/';
+		const url = 'https://fonts.example/css2?family=Serif&display=swap';
+		const face = ( file: string ) => `@font-face {\n  font-family: 'Serif';\n  font-weight: 400;\n  src: url(https://fonts.example/${ file }.woff2) format("woff2");\n}\n`;
+		const bodies = { desktop: face( 'desktop' ), mobile: face( 'phone' ) };
+		const store = new CapturedResourceStore( outputDir, sourceUrl, vi.fn() );
+		const html = `<html><head><link rel="stylesheet" href="${ url.replace( /&/g, '&amp;' ) }"></head><body><h1>Home</h1></body></html>`;
+		const respond = ( page: EventEmitter, responseUrl: string, type: string, contentType: string, body: string ) => page.emit( 'response', {
+			url: () => responseUrl, status: () => 200,
+			headers: () => ( { 'content-type': contentType } ),
+			body: async () => Buffer.from( body ),
+			request: () => ( { resourceType: () => type, method: () => 'GET', redirectedFrom: () => null } ),
+		} );
+		const serialized: Record< string, string > = {};
+		for ( const profile of [ 'mobile', 'desktop' ] as const ) {
+			const page = new EventEmitter();
+			store.observe( page as never, { profile } );
+			respond( page, url, 'stylesheet', 'text/css', bodies[ profile ] );
+			respond( page, `https://fonts.example/${ profile === 'mobile' ? 'phone' : 'desktop' }.woff2`, 'font', 'font/woff2', `wOF2${ profile }` );
+			serialized[ profile ] = await store.withProfileStylesheets( page as never, html, sourceUrl );
+			await store.settle( page as never );
+			await store.captureDomDependencies( serialized[ profile ], sourceUrl );
+		}
+		await store.flush();
+		for ( const folder of [ 'html', 'html-mobile', 'screenshots' ] ) mkdirSync( join( outputDir, folder ) );
+		writeFileSync( join( outputDir, 'html/home.html' ), serialized.desktop );
+		writeFileSync( join( outputDir, 'html-mobile/home.html' ), serialized.mobile );
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: { [ sourceUrl ]: { slug: 'home', html: 'html/home.html' } } } ) );
+		exportWebsiteCapture( { outputDir, sourceUrl, platform: 'generic', summary: { routesFailed: 0 }, failures: [] } );
+		const website = join( outputDir, 'website' );
+		const document = readFileSync( join( website, 'index.html' ), 'utf8' );
+		const read = ( path: string ) => readFileSync( join( website, decodeURIComponent( path ) ), 'utf8' );
+		const fontsOf = ( css: string ) => [ ...css.matchAll( /src: url\(([^)]+)\)/g ) ].map( ( [ , src ] ) => src );
+		// The default document's face stays the unconditional, unstretched one.
+		const linked = cheerio.load( document )( 'link[rel="stylesheet"]' ).attr( 'href' )!;
+		expect( read( linked ) ).not.toContain( 'font-stretch' );
+		const [ desktopFont ] = fontsOf( read( linked ) );
+		// The phone face is the exact match only for the stretch its own media requests.
+		const [ , path, media ] = /@import url\("([^"]+)"\) ([^;]+);/.exec( document )!;
+		expect( document ).toContain( `@media ${ media }{:root{font-stretch:101%}}` );
+		const phone = read( path );
+		expect( phone ).toMatch( /font-stretch:\s*101%/ );
+		const [ phoneFont ] = fontsOf( phone );
+		// Its file is qualified, so a consumer registering faces by file keeps it gated.
+		expect( phoneFont ).toMatch( /\?blocks-engine-capture-width-gated$/ );
+		const phoneFile = phoneFont.replace( /\?.*$/, '' );
+		expect( phoneFile ).not.toBe( desktopFont );
+		expect( readFileSync( join( website, phoneFile ), 'utf8' ) ).toBe( 'wOF2mobile' );
+	} );
+
 	it( 'prefers a successful browser response to the mixed-content fallback rule', async () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-mixed-observed-' ) );
 		dirs.push( outputDir );
