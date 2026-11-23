@@ -23,6 +23,7 @@ const report = ( postId: string, faqId: string, labels = [ 'More actions' ] ): I
 
 it.each( [
 	{ name: 'per-post ids project and runtime ids compare by reference', captured: report( 'more-button-member', 'faq-i0vrs54202' ), mismatch: undefined },
+	{ name: 'panel byte counts that include capture numbering do not count', captured: { ...report( 'more-button-member', 'faq-i0vrs54202' ), states: report( 'more-button-member', 'faq-i0vrs54202' ).states.map( state => ( { ...state, dialog: { ...state.dialog!, htmlBytes: 157 } } ) ) }, mismatch: undefined },
 	{ name: 'a menu only the member captured fails', captured: report( 'more-button-member', 'faq-i0vrs54202', [ 'More actions', 'More' ] ), mismatch: 'states: 1 projected, 2 captured (captured-only "More")' },
 ] )( '$name', ( { captured, mismatch } ) => {
 	const projected = projectInteractionReport( doc( 'more-button-rep' ), doc( 'more-button-member' ), report( 'more-button-rep', 'faq-clu20111699' ) );
