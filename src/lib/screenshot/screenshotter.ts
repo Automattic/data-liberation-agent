@@ -1832,6 +1832,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							} ),
 							routeDeadlineMs,
 							routeRemainingMs: () => routeDeadlineMs ? Math.max( 1, routeDeadlineMs - ( Date.now() - routeStartedAt ) ) : 600_000,
+							// This profile and the ones still to load share what the route has left.
+							routeProfilesLeft: () => Math.max( 1, routeProfiles.filter( profile => ! mergedProfiles.has( profile.id ) && profilePlan( profile ).needsLoad ).length ),
 							probeOverrun: ms => probeOverruns.set( url, ( probeOverruns.get( url ) ?? 0 ) + ms ),
 							serverLinks: serverLinks.get( url ) ?? ( serverLinks.set( url, new Set() ), serverLinks.get( url )! ),
 							phases,

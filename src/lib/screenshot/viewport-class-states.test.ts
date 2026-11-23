@@ -7,7 +7,7 @@ import { exportWebsiteCapture } from '../capture-export.js';
 import { expect, it } from 'vitest';
 import { observeRuntimeStyleWrites } from './runtime-style-writes.js';
 import { markInitialDocument, projectInitialDocument } from './initial-document.js';
-import { captureViewportClassStates, projectViewportClassRules, type ViewportClassMemo } from './viewport-class-states.js';
+import { captureViewportClassStates, projectViewportClassRules, viewportClassSweepBudgetMs, type ViewportClassMemo } from './viewport-class-states.js';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 import { observeViewportEntrances } from '../viewport-entrances.js';
 import { triggerLazyLoad } from './page-helpers.js';
@@ -368,12 +368,13 @@ it( 'memoizes a shared header toggle rejected by the repeat pass (#2222)', async
 
 // One browser pass per page (~3s). Fifty repeated list items each toggle the
 // same stylesheet-named token at a width derived from their layout position
-// (#2264); before grouping each item was bisected on its own.
+// (#2264); before grouping each item was bisected on its own. Like real list
+// items, each also carries its own index and tag classes.
 it( 'rejects a token repeated siblings flip at different widths without bisecting each (#2264)', async () => {
 	const browser = await chromium.launch();
 	const fixture = ( headers: number ) => `<!doctype html><style>body{margin:0}li{height:20px}.item.is-folded{opacity:.5}.header.is-compact{color:red}</style>
 		${ Array.from( { length: headers }, ( _, i ) => `<div><header class="header" id="h${ i }">Header</header></div>` ).join( '' ) }
-		<ul>${ Array.from( { length: 50 }, ( _, i ) => `<li class="item">Item ${ i }</li>` ).join( '' ) }</ul><script>
+		<ul>${ Array.from( { length: 50 }, ( _, i ) => `<li class="item item-index-${ i } tag-${ i }">Item ${ i }</li>` ).join( '' ) }</ul><script>
 		const sync=()=>{
 			document.querySelectorAll('.header').forEach((header,i)=>header.classList.toggle('is-compact',innerWidth<1000+i*150));
 			document.querySelectorAll('.item').forEach(item=>item.classList.toggle('is-folded',innerWidth<400+item.offsetTop*1.4));
@@ -404,3 +405,11 @@ it( 'rejects a token repeated siblings flip at different widths without bisectin
 		await browser.close();
 	}
 }, 60_000 );
+
+it( 'leaves the profiles still to come their share of the route (#2264)', () => {
+	// A dual route at its start: desktop sweeps on half the route, quartered.
+	expect( viewportClassSweepBudgetMs( 600_000, 2 ) ).toBe( 75_000 );
+	expect( viewportClassSweepBudgetMs( 600_000, 1 ) ).toBe( 150_000 );
+	expect( viewportClassSweepBudgetMs( 600_000, 0 ) ).toBe( 150_000 );
+	expect( viewportClassSweepBudgetMs( -5, 3 ) ).toBe( 0 );
+} );

@@ -50,6 +50,14 @@ export interface ViewportClassStatesResult {
 /** Breakpoint-search probes per sweep: about ten bisection steps for six flips. */
 const MAX_SEARCH_PROBES = 64;
 
+/**
+ * The sweep's time budget: a quarter of one profile's share of what the
+ * route has left, so the profiles still to come keep their time.
+ */
+export function viewportClassSweepBudgetMs( routeRemainingMs: number, profilesLeft: number ): number {
+	return Math.max( 0, routeRemainingMs ) / Math.max( 1, Math.floor( profilesLeft ) ) / 4;
+}
+
 interface Toggle { index: number; token: string; base: boolean }
 
 /** Presence runs (inclusive, null = unbounded) as one media query list. */
@@ -513,16 +521,17 @@ export async function captureViewportClassStates( page: Page, options: { widths?
 				return parts.join( '<' );
 			} );
 		}, STATE_KEY );
-		// Repeated siblings (same parent and tag, same classes but the token)
-		// toggling one token form a single contract.
+		// Repeated siblings (same parent and tag) toggling one token form a
+		// single contract. Their other classes are not compared: list items
+		// carry their own (index, category, tag) classes.
 		const siblings = await page.evaluate( key => {
-			const { elements, base } = ( window as unknown as Record< symbol, { elements: Element[]; base: Set<string>[] } > )[ Symbol.for( key ) ]!;
+			const { elements } = ( window as unknown as Record< symbol, { elements: Element[] } > )[ Symbol.for( key ) ]!;
 			const indexes = new Map( elements.map( ( element, index ) => [ element, index ] ) );
-			return elements.map( ( element, index ) => ( { parent: indexes.get( element.parentElement! ) ?? -1, tag: element.tagName, classes: [ ...base[ index ]! ] } ) );
+			return elements.map( element => ( { parent: indexes.get( element.parentElement! ) ?? -1, tag: element.tagName } ) );
 		}, STATE_KEY );
 		const siblingGroup = ( { index, token }: Toggle ) => {
-			const { parent, tag, classes } = siblings[ index ]!;
-			return JSON.stringify( [ token, parent, tag, classes.filter( name => name !== token ).sort() ] );
+			const { parent, tag } = siblings[ index ]!;
+			return JSON.stringify( [ token, parent, tag ] );
 		};
 		// The extremes reveal a viewport-driven runtime; only then is the ladder swept.
 		const extremes = [ ladder[ 0 ]!, ladder[ ladder.length - 1 ]! ];

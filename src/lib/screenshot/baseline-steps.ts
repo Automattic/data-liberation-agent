@@ -39,7 +39,7 @@ import { removeRuntimeWidgets } from './runtime-widgets.js';
 import { alignSourceMotion, motionChanges, type PaintReading, readPaintedTokens, recordSourceMotion, type RouteMotionEvidence } from './motion-hold.js';
 import { analyzePage } from './site-analysis.js';
 import { preserveStreamedVideoPosters } from './streamed-video.js';
-import { captureViewportClassStates, type ViewportClassMemo } from './viewport-class-states.js';
+import { captureViewportClassStates, viewportClassSweepBudgetMs, type ViewportClassMemo } from './viewport-class-states.js';
 
 import type { Page } from 'playwright';
 import { type SharedChromeProbe } from './chrome-reuse.js';
@@ -65,6 +65,8 @@ export interface CapturePerViewportArgs {
 	routeMotion?: RouteMotionEvidence;
 	routeDeadlineMs: number;
 	routeRemainingMs: () => number;
+	/** Profiles of this route still to capture, this one included. */
+	routeProfilesLeft?: () => number;
 	serverLinks: Set<string>;
 	probeOverrun: ( ms: number ) => void;
 	/** Wall-clock accounting for this profile; see phase-ledger.ts. */
@@ -690,8 +692,9 @@ export function baselineSteps(
 					settleMs: Math.max( args.settleMs, 800 ),
 					...( args.classBreakpoints ? { breakpoints: args.classBreakpoints } : {} ),
 					...( args.classMemo ? { memo: args.classMemo } : {} ),
-					// An optional optimization: never more than a quarter of the route.
-					budgetMs: Math.min( args.routeDeadlineMs || 600_000, args.routeRemainingMs() ) / 4,
+					// An optional optimization: never more than a quarter of this
+					// profile's share of the route, so later profiles still fit.
+					budgetMs: viewportClassSweepBudgetMs( Math.min( args.routeDeadlineMs || 600_000, args.routeRemainingMs() ), args.routeProfilesLeft?.() ?? 1 ),
 				} ).catch ( orElse( undefined ) ) : undefined;
 				if ( classes?.budgetExhausted ) args.diagnostics?.push( { code: 'viewport_class_sweep_budget_exhausted', reason: `viewport class sweep stopped at its probe or time budget after ${ classes.sampledWidths.length } widths; unproven class toggles stay at the capture width` } );
 				const documentId = isDesktop ? 'desktop' : viewport.id === MIDDLE_PROFILE_ID ? 'middle' : 'mobile';
