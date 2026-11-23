@@ -133,16 +133,24 @@ export type SemanticEvidencePage = {
 	viewports: Record< string, Record< string, unknown >[] >;
 };
 
+/** Receipt code for a route whose semantic evidence alone exceeds one sidecar file. */
+export const SEMANTIC_EVIDENCE_OMITTED = 'semantic_evidence_omitted';
+
 /**
  * Write indexed semantic evidence as pages arrive. Shards are packed exactly as
  * one `JSON.stringify` of their pages would be, but only the open shard's page
  * serializations are held, so memory is bounded by one shard, not the site.
+ *
+ * A page that cannot fit one shard is left out of the sidecar rather than
+ * failing the export: its route still ships, the index lists it under
+ * `omitted_pages`, and the returned diagnostic records the loss in the receipt.
  */
-export function writeSemanticEvidence( stageDir: string, pages: Iterable< SemanticEvidencePage > ): void {
+export function writeSemanticEvidence( stageDir: string, pages: Iterable< SemanticEvidencePage > ): RouteDiagnostic[] {
 	const prefix = `{"schema":${ JSON.stringify( INDEXED_SEMANTIC_EVIDENCE_SCHEMA ) },"pages":[`;
 	const suffix = ']}\n';
 	const envelopeBytes = Buffer.byteLength( prefix ) + Buffer.byteLength( suffix );
 	const shards: Array< { path: string; page_count: number } > = [];
+	const omitted: Array< { path: string; url: string; bytes: number } > = [];
 	let shardPages: string[] = [];
 	let shardBytes = 0;
 	let pageCount = 0;
@@ -157,26 +165,36 @@ export function writeSemanticEvidence( stageDir: string, pages: Iterable< Semant
 	for ( const page of pages ) {
 		const serialized = JSON.stringify( page );
 		const bytes = Buffer.byteLength( serialized );
-		if ( envelopeBytes + bytes > MAX_SEMANTIC_EVIDENCE_FILE_BYTES )
-			throw new Error(
-				`Semantic evidence page "${ page.path }" exceeds sidecar file limit: ${ envelopeBytes + bytes } bytes.`
-			);
+		if ( envelopeBytes + bytes > MAX_SEMANTIC_EVIDENCE_FILE_BYTES ) {
+			omitted.push( { path: page.path, url: page.url, bytes: envelopeBytes + bytes } );
+			continue;
+		}
 		// Joined pages are separated by one comma each.
 		if ( shardPages.length > 0 && envelopeBytes + shardBytes + shardPages.length + bytes > MAX_SEMANTIC_EVIDENCE_FILE_BYTES ) flush();
 		shardPages.push( serialized );
 		shardBytes += bytes;
 		pageCount++;
 	}
-	if ( pageCount === 0 ) return;
-	flush();
+	const diagnostics = omitted.map( ( page ): RouteDiagnostic => ( {
+		code: SEMANTIC_EVIDENCE_OMITTED,
+		url: page.url,
+		path: page.path,
+		severity: 'warning',
+		reason: `Semantic evidence for ${ page.path } was omitted: ${ page.bytes } bytes exceeds the ${ MAX_SEMANTIC_EVIDENCE_FILE_BYTES }-byte sidecar file limit. The route itself is exported.`,
+		metrics: { bytes: page.bytes, limitBytes: MAX_SEMANTIC_EVIDENCE_FILE_BYTES },
+	} ) );
+	if ( pageCount === 0 && omitted.length === 0 ) return diagnostics;
+	if ( shardPages.length > 0 ) flush();
 	const index = `${ JSON.stringify( {
 		schema: INDEXED_SEMANTIC_EVIDENCE_SCHEMA,
 		page_count: pageCount,
 		shards,
+		...( omitted.length ? { omitted_pages: omitted.map( page => ( { path: page.path, url: page.url, bytes: page.bytes, reason: 'exceeds_file_limit' } ) ) } : {} ),
 	} ) }\n`;
 	if ( Buffer.byteLength( index ) > MAX_SEMANTIC_EVIDENCE_FILE_BYTES )
 		throw new Error( `Semantic evidence index exceeds sidecar file limit: ${ Buffer.byteLength( index ) } bytes.` );
 	writeFileSync( join( stageDir, 'semantic-evidence.index.json' ), index );
+	return diagnostics;
 }
 
 interface AssetEvidenceReference {

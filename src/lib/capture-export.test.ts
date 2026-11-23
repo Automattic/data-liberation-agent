@@ -496,6 +496,34 @@ describe( 'exportWebsiteCapture', () => {
 		expect( shard ).toContain( '🍜' );
 	} );
 
+	it( 'omits one route\'s oversized semantic evidence and still exports every route (#2244)', () => {
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( 'https://example.com/', '<main><h1>Home</h1></main>', { entry: { html: 'html/homepage.html', slug: 'homepage' } } );
+		capture.page( 'https://example.com/product/planter/', '<main><h1>Planter</h1></main>', { entry: { html: 'html/planter.html', slug: 'planter' } } );
+		SectionSpecsStore.load( outputDir ).set( 'https://example.com/', [ { selector: 'main', headings: [ 'Home' ] } as never ], [] );
+		SectionSpecsStore.load( outputDir ).set( 'https://example.com/product/planter/', [ {
+			selector: 'main',
+			headings: [ 'Planter' ],
+			samples: 'x'.repeat( 11 * 1024 * 1024 ),
+		} as never ], [] );
+		const receiptPath = exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
+		expect( existsSync( join( outputDir, 'website', 'index.html' ) ) ).toBe( true );
+		expect( readFileSync( join( outputDir, 'website', 'product', 'planter', 'index.html' ), 'utf8' ) ).toContain( 'Planter' );
+		const index = JSON.parse( readFileSync( join( outputDir, 'semantic-evidence.index.json' ), 'utf8' ) );
+		expect( index ).toMatchObject( {
+			page_count: 1,
+			omitted_pages: [ { path: 'website/product/planter/index.html', url: 'https://example.com/product/planter/', reason: 'exceeds_file_limit' } ],
+		} );
+		const pages = index.shards.flatMap( ( shard: { path: string } ) => JSON.parse( readFileSync( join( outputDir, shard.path ), 'utf8' ) ).pages );
+		expect( pages.map( ( page: { path: string } ) => page.path ) ).toEqual( [ 'website/index.html' ] );
+		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
+		expect( receipt.discoveryDiagnostics ).toContainEqual( expect.objectContaining( {
+			code: 'semantic_evidence_omitted', url: 'https://example.com/product/planter/', path: 'website/product/planter/index.html', severity: 'warning',
+		} ) );
+		expect( receipt.routes.map( ( route: { path: string } ) => route.path ) ).toEqual( expect.arrayContaining( [ 'website/index.html', 'website/product/planter/index.html' ] ) );
+	} );
+
 	it( 'exports hash-bound geometry proof without runtime capture markers', () => {
 		const capture = exportFixture( { directories: [ 'html', 'layout-geometry' ] } );
 		const outputDir = capture.build();

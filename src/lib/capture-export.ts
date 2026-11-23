@@ -380,7 +380,7 @@ function buildExportCapture(
 		writeFileSync( claimed.htmlPath, appendSourceData( readFileSync( claimed.htmlPath, 'utf8' ), sourceData ) );
 	}
 	routeCaptureDiagnostics.push( ...missingRedirectTargets );
-	if ( ! httpInput ) writeSemanticEvidence( stageDir, semanticEvidencePages( outputDir, retainedEntries, routePathOf ) );
+	if ( ! httpInput ) routeCaptureDiagnostics.push( ...writeSemanticEvidence( stageDir, semanticEvidencePages( outputDir, retainedEntries, routePathOf ) ) );
 	const mediaStubs = MediaStubStore.load( outputDir );
 	const assetReferenceLocations = collectAssetEvidenceReferences(
 		retainedEntries,
