@@ -43,6 +43,19 @@ export interface ViewportClassStatesResult {
 	rules: number;
 	/** Widths the sweep resized to, in order. */
 	sampledWidths: number[];
+	/** Set when the search budget ran out: unproven toggles were dropped. */
+	budgetExhausted?: true;
+}
+
+/** Breakpoint-search probes per sweep: about ten bisection steps for six flips. */
+const MAX_SEARCH_PROBES = 64;
+
+/**
+ * The sweep's time budget: a quarter of one profile's share of what the
+ * route has left, so the profiles still to come keep their time.
+ */
+export function viewportClassSweepBudgetMs( routeRemainingMs: number, profilesLeft: number ): number {
+	return Math.max( 0, routeRemainingMs ) / Math.max( 1, Math.floor( profilesLeft ) ) / 4;
 }
 
 interface Toggle { index: number; token: string; base: boolean }
@@ -379,7 +392,7 @@ export function projectViewportClassRules( html: string, linkedSheet: ( href: st
 /** Shared toggle evidence: a presence series, or a proven rejection. */
 export type ViewportClassMemo = Map< string, ReadonlyArray< { width: number; present: boolean } > | 'rejected' >;
 
-export async function captureViewportClassStates( page: Page, options: { widths?: readonly number[]; settleMs?: number; breakpoints?: Set< number >; memo?: ViewportClassMemo } = {} ): Promise< ViewportClassStatesResult > {
+export async function captureViewportClassStates( page: Page, options: { widths?: readonly number[]; settleMs?: number; breakpoints?: Set< number >; memo?: ViewportClassMemo; budgetMs?: number; maxProbes?: number } = {} ): Promise< ViewportClassStatesResult > {
 	const original = page.viewportSize();
 	const none = { aliased: 0, rules: 0, sampledWidths: [] };
 	if ( ! original ) return none;
@@ -452,6 +465,21 @@ export async function captureViewportClassStates( page: Page, options: { widths?
 		const change = diff[ toggle.index ];
 		return toggle.base ? ! change?.removed.includes( toggle.token ) : !! change?.added.includes( toggle.token );
 	};
+	// Breakpoint search is an optimization and must not consume the route:
+	// past its probe or time budget an unsampled width is unknown (undefined).
+	const stopAt = Date.now() + ( options.budgetMs ?? Infinity );
+	const maxProbes = options.maxProbes ?? MAX_SEARCH_PROBES;
+	let searched = 0;
+	let exhausted = false;
+	const presentAt = async ( width: number, toggle: Toggle ) => {
+		if ( ! memo.has( width ) ) {
+			if ( ! exhausted && ( searched >= maxProbes || Date.now() >= stopAt ) ) exhausted = true;
+			if ( exhausted ) return undefined;
+			searched++;
+		}
+		return present( await probe( width ), toggle );
+	};
+	const done = ( result: ViewportClassStatesResult ): ViewportClassStatesResult => exhausted ? { ...result, budgetExhausted: true } : result;
 
 	try {
 		memo.set( original.width, {} );
@@ -493,6 +521,18 @@ export async function captureViewportClassStates( page: Page, options: { widths?
 				return parts.join( '<' );
 			} );
 		}, STATE_KEY );
+		// Repeated siblings (same parent and tag) toggling one token form a
+		// single contract. Their other classes are not compared: list items
+		// carry their own (index, category, tag) classes.
+		const siblings = await page.evaluate( key => {
+			const { elements } = ( window as unknown as Record< symbol, { elements: Element[] } > )[ Symbol.for( key ) ]!;
+			const indexes = new Map( elements.map( ( element, index ) => [ element, index ] ) );
+			return elements.map( element => ( { parent: indexes.get( element.parentElement! ) ?? -1, tag: element.tagName } ) );
+		}, STATE_KEY );
+		const siblingGroup = ( { index, token }: Toggle ) => {
+			const { parent, tag } = siblings[ index ]!;
+			return JSON.stringify( [ token, parent, tag ] );
+		};
 		// The extremes reveal a viewport-driven runtime; only then is the ladder swept.
 		const extremes = [ ladder[ 0 ]!, ladder[ ladder.length - 1 ]! ];
 		const extremesDiff: Array<Record<number, { added: string[]; removed: string[] }>> = [];
@@ -531,13 +571,13 @@ export async function captureViewportClassStates( page: Page, options: { widths?
 				for ( let i = 1; agrees && i < ordered.length; i++ ) {
 					if ( ordered[ i - 1 ]!.present === ordered[ i ]!.present ) continue;
 					const flip = ordered[ i ]!.width;
-					agrees = present( await probe( flip ), toggle ) === ordered[ i ]!.present &&
-						present( await probe( flip - 1 ), toggle ) === ordered[ i - 1 ]!.present;
+					agrees = await presentAt( flip, toggle ) === ordered[ i ]!.present &&
+						await presentAt( flip - 1, toggle ) === ordered[ i - 1 ]!.present;
 				}
 				if ( agrees ) { toggles.set( key, toggle ); presence.set( key, [ ...saved ] ); reused.add( memoKey ); }
 			}
 		}
-		if ( candidates.size === 0 ) return { ...none, sampledWidths };
+		if ( candidates.size === 0 ) return done( { ...none, sampledWidths } );
 		if ( ! [ ...candidates.keys() ].every( key => toggles.has( key ) ) ) {
 			for ( const width of ladder ) {
 				for ( const [ index, change ] of Object.entries( await probe( width ) ) ) {
@@ -550,7 +590,23 @@ export async function captureViewportClassStates( page: Page, options: { widths?
 				}
 			}
 		}
-		if ( toggles.size === 0 ) return { ...none, sampledWidths };
+		if ( ladder.every( width => memo.has( width ) ) ) {
+			// Members whose ladder states disagree follow position or time, not
+			// the viewport: reject the group without bisecting each member.
+			const groups = new Map< string, string[] >();
+			for ( const [ key, toggle ] of toggles ) groups.set( siblingGroup( toggle ), [ ...( groups.get( siblingGroup( toggle ) ) ?? [] ), key ] );
+			for ( const keys of groups.values() ) {
+				const series = new Set( keys.map( key => ladder.map( width => present( memo.get( width )!, toggles.get( key )! ) ).join() ) );
+				if ( series.size < 2 ) continue;
+				for ( const key of keys ) {
+					const toggle = toggles.get( key )!;
+					options.memo?.set( `${ signatures[toggle.index] }|${ toggle.token }`, 'rejected' );
+					toggles.delete( key );
+					presence.delete( key );
+				}
+			}
+		}
+		if ( toggles.size === 0 ) return done( { ...none, sampledWidths } );
 
 		// Locate each flip between adjacent ladder widths: the first width
 		// that shows the wider side's state.
@@ -558,24 +614,33 @@ export async function captureViewportClassStates( page: Page, options: { widths?
 		for ( const [ key, toggle ] of toggles ) {
 			const series = presence.get( key )!;
 			if ( reused.has( `${ signatures[toggle.index] }|${ toggle.token }` ) ) continue;
-			for ( let i = 1; i < ladder.length; i++ ) {
+			let proven = true;
+			for ( let i = 1; proven && i < ladder.length; i++ ) {
 				let low = ladder[ i - 1 ]!;
 				let high = ladder[ i ]!;
 				const wide = present( memo.get( high )!, toggle );
 				if ( present( memo.get( low )!, toggle ) === wide ) continue;
 				// A breakpoint another route already located is the likeliest one.
 				for ( const known of [ ...( options.breakpoints ?? [] ) ].filter( width => width > low + 1 && width <= high ).sort( ( a, b ) => a - b ) ) {
-					if ( present( await probe( known ), toggle ) !== wide ) continue;
-					if ( present( await probe( known - 1 ), toggle ) !== wide ) [ low, high ] = [ known - 1, known ];
+					const atKnown = await presentAt( known, toggle );
+					if ( atKnown === undefined ) { proven = false; break; }
+					if ( atKnown !== wide ) continue;
+					const below = await presentAt( known - 1, toggle );
+					if ( below === undefined ) proven = false;
+					else if ( below !== wide ) [ low, high ] = [ known - 1, known ];
 					break;
 				}
-				while ( high - low > 1 ) {
+				while ( proven && high - low > 1 ) {
 					const middle = Math.floor( ( low + high ) / 2 );
-					if ( present( await probe( middle ), toggle ) === wide ) high = middle;
+					const state = await presentAt( middle, toggle );
+					if ( state === undefined ) proven = false;
+					else if ( state === wide ) high = middle;
 					else low = middle;
 				}
 				series.push( { width: high, present: wide } );
 			}
+			// Out of budget: keep the contracts already proven, leave this one unknown.
+			if ( ! proven ) { toggles.delete( key ); presence.delete( key ); }
 		}
 
 		// Restore the serialized width and keep only tokens the source restores
@@ -628,7 +693,7 @@ export async function captureViewportClassStates( page: Page, options: { widths?
 			const alias = `${ VIEWPORT_CLASS_PREFIX }${ createHash( 'sha256' ).update( `${ toggle.token }\n${ chromeKeys[ toggle.index ] ?? media }` ).digest( 'hex' ).slice( 0, 12 ) }`;
 			aliases.push( { ...toggle, alias, media } );
 		}
-		if ( aliases.length === 0 ) return { ...none, sampledWidths };
+		if ( aliases.length === 0 ) return done( { ...none, sampledWidths } );
 
 		const copies = aliasRules( css, aliases );
 		await page.evaluate( ( { key, aliases, marker, contractsAttribute } ) => {
@@ -643,7 +708,7 @@ export async function captureViewportClassStates( page: Page, options: { widths?
 			document.body.setAttribute( contractsAttribute, JSON.stringify( aliases ) );
 		}, { key: STATE_KEY, aliases, marker: WIDTH_CLASSES_ATTRIBUTE, contractsAttribute: CONTRACTS_ATTRIBUTE } );
 		const rules = copies.length;
-		return { aliased: aliases.length, rules, sampledWidths };
+		return done( { aliased: aliases.length, rules, sampledWidths } );
 	} finally {
 		if ( page.viewportSize()?.width !== original.width ) {
 			await resize( original );
