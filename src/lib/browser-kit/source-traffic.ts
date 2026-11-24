@@ -168,6 +168,7 @@ export async function continueSourceRoute(route: Route, context: BrowserContext,
   finally {
     context.off('close', close);
     recordPacedLoad(request, Date.now() - pacingStartedAt);
+    if (process.env.DLA_DEBUG_PACE && /MenuItem/.test(request.url())) console.error(`[debug-pace] ${Date.now()} paced=${Date.now() - pacingStartedAt} ${request.frame().url()}`);
   }
   nativeRequests.set(request, { governor, attribution: requestAttribution, category: request.resourceType() === 'document' ? traffic.get(context)?.category ?? 'document' : 'subresource', routeUrl: owningDocumentUrl(request), refusalAdmission: governor.refusalAdmission() });
   try { await route.continue(options); }
