@@ -194,8 +194,9 @@ describe('Blogger feed template content', () => {
 				},
 			});
 			expect(result.summary).toMatchObject({ derived, escalated: acquired, httpAcquired: acquired });
-			// Two derivation rounds fetch the representative; only an escalation fetches its own page.
-			expect(fetch).toHaveBeenCalledTimes(2 + acquired);
+			// Two derivation rounds fetch the representative; an escalation fetches its own page,
+			// and the HTTP fallback fetches the two browser-captured pages to learn hydration classes.
+			expect(fetch).toHaveBeenCalledTimes(2 + acquired * 3);
 			expect(fetch.mock.calls.filter(([url]) => String(url) === feed[3]!.permalink)).toHaveLength(acquired);
 			const escalation = result.receipt.clusters[0]!.escalated;
 			expect(escalation.map(row => [row.url, row.gate, row.fallback?.acquired])).toEqual(acquired ? [[feed[3]!.permalink, 'runtime_slot_content', true]] : []);

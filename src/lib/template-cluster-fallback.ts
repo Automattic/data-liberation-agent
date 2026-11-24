@@ -7,6 +7,8 @@ import type { RouteDiagnostic } from './capture-export-routes.js';
 import type { SourceRequestGovernors } from './source-request-governor.js';
 import type { ManifestQueue, ManifestEntry } from './screenshot/manifest-queue.js';
 import { normalizedUrl } from './url/route-key.js';
+import * as cheerio from 'cheerio';
+import { applyHydrationClassRules, hiddenMainContent, hidingSelectors, learnHydrationClassRules, type HydrationClassRule } from './hydration-classes.js';
 
 /** Where the fallback's acquisition receipt and source documents live, next to `website/`. */
 export const TEMPLATE_FALLBACK_DIR = 'template-fallback';
@@ -71,6 +73,8 @@ export async function acquireEscalatedMembers( input: {
 	const desktop = input.profile.exportVariants?.desktop ?? ( input.profile.variants.length === 1 ? input.profile.variants[ 0 ]!.id : undefined );
 	const variants = input.profile.variants.filter( variant => variant.id === desktop );
 	if ( ! variants.length ) return failAll( `acquisition profile ${ input.profile.id } declares no desktop variant` );
+	// Learning only narrows to no rules; it never fails the fallback.
+	const learning = learnSiteHydrationRules( input, variants[ 0 ]!.headers ).catch( (): HydrationClassRule[] => [] );
 	let documents: Awaited< ReturnType< typeof acquireHttpDocuments > >[ 'documents' ];
 	const fallbackDir = join( input.outputDir, TEMPLATE_FALLBACK_DIR );
 	try {
@@ -93,6 +97,18 @@ export async function acquireEscalatedMembers( input: {
 		return document?.status === 'acquired' && document.documentPath ? resolve( fallbackDir, document.documentPath ) : undefined;
 	};
 	const rendered = await renderRuntimeMembers( input, sourcePath, result.runtime );
+	const hydrationRules = await learning;
+	const sheetSelectors = new Map< string, string[] >();
+	const linkedHidingSelectors = ( html: string, baseUrl: string ) => cheerio.load( html )( 'link[rel~="stylesheet"][href]' ).toArray().flatMap( link => {
+		let url: string;
+		try {
+			url = new URL( link.attribs.href!, baseUrl ).href;
+		} catch {
+			return [];
+		}
+		if ( ! sheetSelectors.has( url ) ) sheetSelectors.set( url, hidingSelectors( store.storedText( url ) ?? '' ) );
+		return sheetSelectors.get( url )!;
+	} );
 	try {
 		for ( const member of input.members ) {
 			// Keep documents already acquired before the deadline, even when later
@@ -107,8 +123,13 @@ export async function acquireEscalatedMembers( input: {
 				continue;
 			}
 			try {
-				const html = rendered.get( member.url ) ?? readFileSync( sourcePath( member.url )!, 'utf8' );
-				await store.captureDomDependencies( html, document.finalUrl ?? member.url );
+				const { html } = applyHydrationClassRules( rendered.get( member.url ) ?? readFileSync( sourcePath( member.url )!, 'utf8' ), hydrationRules );
+				const baseUrl = document.finalUrl ?? member.url;
+				await store.captureDomDependencies( html, baseUrl );
+				const hidden = hiddenMainContent( html, linkedHidingSelectors( html, baseUrl ) );
+				if ( hidden ) {
+					result.diagnostics.push( { code: HTTP_ROUTE_CONTENT_HIDDEN, url: member.url, reason: `main content matches the source's hiding rule \`${ hidden }\`; no class removal learned from a browser-captured route reveals it`, unit: 'route', severity: 'warning' } );
+				}
 				const slug = await input.queue.claimSlug( member.slug ?? slugify( member.url ) );
 				const htmlPath = `screenshots/http/${ slug }.html`;
 				const target = resolve( input.outputDir, htmlPath );
@@ -127,6 +148,48 @@ export async function acquireEscalatedMembers( input: {
 		await store.flush();
 	}
 	return result;
+}
+
+/** An HTTP-acquired route whose main content the source's CSS still hides. */
+export const HTTP_ROUTE_CONTENT_HIDDEN = 'http_route_content_hidden';
+/** Browser-captured routes whose server HTML is fetched to learn hydration classes. */
+export const HYDRATION_SAMPLE_ROUTES = 3;
+
+/**
+ * Learn site-wide hydration class rules from browser-captured routes (the
+ * entrypoint first): each route's server HTML against its captured DOM. A
+ * failed fetch only narrows the sample.
+ */
+async function learnSiteHydrationRules( input: Parameters< typeof acquireEscalatedMembers >[ 0 ], headers: Record< string, string > | undefined ): Promise< HydrationClassRule[] > {
+	const entrypoint = normalizedUrl( input.sourceUrl );
+	const captured = input.queue.urls()
+		.flatMap( url => {
+			const path = input.queue.getEntry( url )?.html;
+			// HTTP-acquired and template-derived documents never ran in a browser of their own.
+			return path && ! /^screenshots\/(?:http|derived)\//.test( path ) ? [ { url, path } ] : [];
+		} )
+		.sort( ( a, b ) => Number( normalizedUrl( b.url ) === entrypoint ) - Number( normalizedUrl( a.url ) === entrypoint ) )
+		.slice( 0, HYDRATION_SAMPLE_ROUTES );
+	if ( ! captured.length ) return [];
+	const { safeFetch } = await import( './media-fetch/safe-fetch.js' );
+	const { decodeHtml } = await import( './decode-html.js' );
+	const { SOURCE_DOCUMENT_MAX_BYTES } = await import( './source-document-policy.js' );
+	const origin = new URL( input.sourceUrl ).origin;
+	const signal = AbortSignal.timeout( Math.max( 1, ( input.deadline ?? Date.now() + HTTP_FALLBACK_BUDGET_MS ) - Date.now() ) );
+	const pairs = await Promise.all( captured.map( async ( { url, path } ) => {
+		try {
+			const response = await safeFetch( url, {
+				governors: input.governors, signal, timeoutMs: 30_000, maxBytes: SOURCE_DOCUMENT_MAX_BYTES,
+				headersForOrigin: requestOrigin => requestOrigin === origin ? headers : undefined,
+			} );
+			const contentType = response.headers.get( 'content-type' ) ?? '';
+			if ( response.status < 200 || response.status >= 300 || ! /^text\/html(?:;|$)/i.test( contentType ) ) return [];
+			return [ { server: decodeHtml( response.body, contentType ), captured: readFileSync( resolve( input.outputDir, path ), 'utf8' ) } ];
+		} catch {
+			return [];
+		}
+	} ) );
+	return learnHydrationClassRules( pairs.flat() );
 }
 
 /** Runtime renders: their own budget, bounded concurrency, one browser. */
