@@ -50,4 +50,35 @@ describe.skipIf( !! process.env.SKIP_BROWSER_TESTS || ! existsSync( chromium.exe
 			await context.close();
 		}
 	}, 45_000 );
+
+	// About 2 seconds. A normal, short pacing gap must not add a second DOM
+	// quiet window: that changes the serialized state of unrelated timed UI.
+	it( 'does not re-settle a page when its held load fits the original readiness budget', async ( { browser, serve } ) => {
+		const { origin } = await serve( ( request, response ) => {
+			if ( request.url === '/data' ) {
+				response.end( 'ready' );
+				return;
+			}
+			response.setHeader( 'content-type', 'text/html' );
+			response.end( `<!doctype html><title>Short hold</title><p id="state">Loading</p>
+				<script>setTimeout( () => fetch( '/data' ).then( r => r.text() ).then( text => {
+					document.getElementById( 'state' ).textContent = text;
+				} ), 300 );</script>` );
+		} );
+		const governors = new SourceRequestGovernors();
+		const context = await createSourceContext( browser, await desktopContextOptions( browser ), { governors, sourceUrl: origin } );
+		try {
+			const page = await context.newPage();
+			const waits: Array< { wait: string } & SettleOutcome > = [];
+			reportReadiness( page, ( wait, outcome ) => waits.push( { wait, ...outcome } ) );
+			await page.goto( origin, { waitUntil: 'load' } );
+			governors.forOrigin( origin ).observeBrowserOutcome( 429, '1' );
+			await waitForStable( page );
+			expect( await page.locator( '#state' ).textContent() ).toBe( 'ready' );
+			expect( waits.find( w => w.wait === 'network-quiet' )?.reason ).toBe( 'quiet' );
+			expect( waits.map( w => w.wait ) ).not.toContain( 'stable-held' );
+		} finally {
+			await context.close();
+		}
+	}, 15_000 );
 } );

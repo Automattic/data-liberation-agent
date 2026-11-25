@@ -681,8 +681,10 @@ export async function waitForRenderIdle(
  * ([[reportReadiness]], [[observePageTraffic]]) take it; any other page — and
  * any page without request events — falls back to the raw bounded
  * `networkidle` wait, whose in-flight tracking covers the whole navigation.
- * Resolves with the milliseconds the bound was extended while the capture
- * held one of the page's render-affecting loads (see [[awaitQuiet]]).
+ * Resolves with the milliseconds actually spent beyond the original bound
+ * while the capture held a render-affecting load (see [[awaitQuiet]]). A brief
+ * hold that fits inside the normal wait must not trigger another DOM settle:
+ * doing so changes snapshot timing even on otherwise unaffected pages.
  */
 export async function waitForNetworkQuiet(
   page: Page,
@@ -704,8 +706,9 @@ export async function waitForNetworkQuiet(
   } else {
     ( { reason, heldMs } = await awaitQuiet( () => networkQuiet( ledger, quietMs ), timeoutMs, holdsRenderLoad( page, ledger ) ) );
   }
-  readinessSinks.get( page )?.( wait, { reason, ms: Date.now() - started } );
-  return heldMs;
+  const ms = Date.now() - started;
+  readinessSinks.get( page )?.( wait, { reason, ms } );
+  return Math.min( heldMs, Math.max( 0, ms - timeoutMs ) );
 }
 
 /** Page global counting sweeps and restores; only the latest may move the document. */
