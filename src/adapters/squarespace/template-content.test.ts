@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { squarespaceAdapter } from './index.js';
-import { squarespaceStructuredContent as source, squarespaceTermArchiveUrl, squarespaceTermName } from './template-content.js';
+import { squarespaceStructuredContent as source, squarespaceArchiveBase, squarespaceTermArchiveUrl, squarespaceTermName } from './template-content.js';
 import { SourceRequestGovernors } from '../../lib/source-request-governor.js';
 import * as fetching from '../../lib/media-fetch/safe-fetch.js';
 import * as cheerio from 'cheerio';
 import { deriveMemberDocument, compareDerivedWithCapture } from '../../lib/template-clusters.js';
 import type { StructuredContentEntry } from '../../platform/types.js';
+import { structuredContentIndex, structuredTermArchiveUrls } from '../../lib/content-index.js';
 
 const origin = 'https://fixture.squarespace.com';
 const post = (id: string) => ({ id: `id-${id}`, fullUrl: `/journal/${id}`, title: `Post ${id}`, body: `<p>Body ${id} <a href="/about">About</a><img src="/photo.jpg" srcset="/photo.jpg 1x"></p>`, publishOn: 1704067200000, updatedOn: 1704153600000, author: { displayName: 'Writer' }, categories: ['Real Estate'], tags: ['Local', 'Real Estate'], assetUrl: `${origin}/featured.jpg` });
@@ -37,6 +38,41 @@ describe('Squarespace structured blog content', () => {
 		expect(result.entries).toEqual([entry('one'), entry('two')]);
 		expect(result.diagnostics).toEqual([expect.objectContaining({ code: 'collection_item_rejected', url: 'https://elsewhere.com/post' })]);
 		expect(fetch).toHaveBeenCalledTimes(6);
+	});
+
+	it('derives term archives from the collection entries belong to, not a /blog default', async () => {
+		vi.spyOn(fetching, 'safeFetch').mockImplementation(async url => ({
+			body: Buffer.from(String(url).includes('format=json') ? JSON.stringify({ collection: { typeName: 'blog', fullUrl: '/journal' }, items: [{ ...post('one'), categories: [], tags: ['Foo'] }] }) : '<html></html>'),
+			status: 200, finalUrl: String(url), headers: new Headers(),
+		}));
+		const { entries } = await source.enumerate(`${origin}/journal`, { governors: new SourceRequestGovernors() });
+		const inventory = structuredTermArchiveUrls(entries, source);
+		const index = structuredContentIndex(entries, [], source, `${origin}/`);
+		expect(inventory).toEqual([`${origin}/journal/tag/Foo`]);
+		expect(index.terms.map(term => term.sourceUrl)).toEqual([`${origin}/journal/tag/Foo`]);
+		expect(JSON.stringify([inventory, index.terms, index.redirects])).not.toContain('/blog/tag');
+	});
+
+	it('archives terms under the urlId of a blog collection mounted as the homepage, keeping categories apart from tags', async () => {
+		vi.spyOn(fetching, 'safeFetch').mockImplementation(async url => ({
+			body: Buffer.from(String(url).includes('format=json') ? JSON.stringify({ collection: { typeName: 'blog', fullUrl: '/', urlId: 'journal' }, items: [{ ...post('post'), categories: ['Diary', 'Both'], tags: ['Foo', 'Both'] }] }) : '<html></html>'),
+			status: 200, finalUrl: String(url), headers: new Headers(),
+		}));
+		const { entries } = await source.enumerate(`${origin}/`, { governors: new SourceRequestGovernors() });
+		expect(entries.map(entry => entry.permalink)).toEqual([`${origin}/journal/post`]);
+		const inventory = structuredTermArchiveUrls(entries, source);
+		expect(inventory.sort()).toEqual([`${origin}/journal/category/Diary`, `${origin}/journal/tag/Both`, `${origin}/journal/tag/Foo`]);
+		const index = structuredContentIndex(entries, [], source, `${origin}/`);
+		expect(index.terms.find(term => term.name === 'Foo')?.sourceUrl).toBe(`${origin}/journal/tag/Foo`);
+		expect(JSON.stringify([inventory, index.terms])).not.toMatch(/fixture\.squarespace\.com\/(?:tag|category)\//);
+	});
+
+	it('derives the archive base from the collection, its urlId, then the permalink, never the root', () => {
+		const at = (path: string) => new URL(path, origin);
+		expect(squarespaceArchiveBase(at('/blog/2015/3/2/post'), '/blog/')).toBe('/blog');
+		expect(squarespaceArchiveBase(at('/home/post'), '/', 'home')).toBe('/home');
+		expect(squarespaceArchiveBase(at('/home/post'), '/')).toBe('/home');
+		expect(squarespaceArchiveBase(at('/post'), '/', '')).toBeUndefined();
 	});
 
 	it('starts from an entry collection JSON and stops a repeated offset visibly', async () => {

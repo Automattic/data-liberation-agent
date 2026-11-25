@@ -184,8 +184,9 @@ export interface StructuredContentSource {
 	 * shape; members of a singleton shape use ordinary acquisition.
 	 */
 	memberShape?( entry: StructuredContentEntry ): string | undefined;
-	/** The source URL of a term's archive. */
-	termArchiveUrl( term: string, sourceUrl: string ): string;
+	/** The source URL of a term's archive. `url` is the permalink of an entry
+	 * carrying the term, so the archive follows that entry's collection. */
+	termArchiveUrl( term: string, url: string ): string;
 	/** The term named by a term-archive URL, or undefined for other routes. */
 	termName( url: string ): string | undefined;
 }

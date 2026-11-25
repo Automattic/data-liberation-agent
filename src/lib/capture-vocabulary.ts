@@ -89,7 +89,7 @@ export const CAPTURE_EVIDENCE_NAMES = {
 	platform: {
 		'access-gate': 'a', 'member-login': 'a', 'engagement-stats': 'a', 'source-evidence': 'a', 'reclaimed-space': 'a', 'cleanup-hidden': 'a', 'constructed-stylesheet': 'a',
 		'ported-embed': 'a', 'unported-embed': 'a', 'squarespace-header-style': 'a', 'squarespace-fill-style': 'a', 'squarespace-fill': 'a', 'squarespace-header-visible': 'i', 'check-route-tab': 'a',
-		'google-map-marker': 'a', 'google-map-embed': 'c',
+		'google-map-marker': 'a', 'google-map-embed': 'c', 'google-map-rules': 'a',
 		'runtime-owner': 'a', 'runtime-owner-script': 'a', 'runtime-owner-data': 'a',
 	},
 } as const;

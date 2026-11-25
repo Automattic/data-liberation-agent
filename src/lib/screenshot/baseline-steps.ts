@@ -10,6 +10,7 @@ import { accessGateRemoval, readSourceCleanup, sweepSourceCleanup, type CleanupP
 import { slugify } from '../url/index.js';
 import { SiteAnalysisAggregator } from './aggregator.js';
 import { captureChromeFidelity } from './capture-chrome-fidelity.js';
+import { CHROME_HYDRATION_LANDMARKS, CHROME_HYDRATION_TIMEOUT_MS, waitForChromePlaceholderLinks } from './chrome-hydration.js';
 import { normalizeCaptureState, normalizeGeneratedIds, SCRIPT_MOTION_BUDGET_MS, settleScriptMotion } from './capture-state.js';
 import { snapshotComponents, type ComponentBaseline } from './component-states.js';
 import {
@@ -19,7 +20,7 @@ import {
 	matchClientErrorShell
 } from './document-integrity.js';
 import { withDocumentTitle } from './document-title.js';
-import { fluidSweepLogLine, learnAndApplyFluidGeometry, type FluidSeriesMemo, type FluidSweepStats } from './fluid-capture.js';
+import { fluidSweepLogLine, learnAndApplyFluidGeometry, type FluidSeriesMemo, type FluidSweepStats, type FluidWidthRange } from './fluid-capture.js';
 import { sanitizeFrozenHtml } from './freeze.js';
 import { markGalleryRoots } from './gallery-capture.js';
 import { GlyphColorCache, recordGlyphColors } from './glyph-color.js';
@@ -38,7 +39,7 @@ import { removeRuntimeWidgets } from './runtime-widgets.js';
 import { alignSourceMotion, motionChanges, type PaintReading, readPaintedTokens, recordSourceMotion, type RouteMotionEvidence } from './motion-hold.js';
 import { analyzePage } from './site-analysis.js';
 import { preserveStreamedVideoPosters } from './streamed-video.js';
-import { captureViewportClassStates, type ViewportClassMemo } from './viewport-class-states.js';
+import { captureViewportClassStates, viewportClassSweepBudgetMs, type ViewportClassMemo } from './viewport-class-states.js';
 
 import type { Page } from 'playwright';
 import { type SharedChromeProbe } from './chrome-reuse.js';
@@ -64,6 +65,8 @@ export interface CapturePerViewportArgs {
 	routeMotion?: RouteMotionEvidence;
 	routeDeadlineMs: number;
 	routeRemainingMs: () => number;
+	/** Profiles of this route still to capture, this one included. */
+	routeProfilesLeft?: () => number;
 	serverLinks: Set<string>;
 	probeOverrun: ( ms: number ) => void;
 	/** Wall-clock accounting for this profile; see phase-ledger.ts. */
@@ -77,6 +80,8 @@ export interface CapturePerViewportArgs {
 	classBreakpoints?: Set<number>;
 	classMemo?: ViewportClassMemo;
 	fluidWidths?: number[];
+	/** Widths where export serves this profile's document; bounds its fluid sweep. */
+	fluidWidthRange?: FluidWidthRange;
 	collectResponsiveImages?: (
 		page: import( 'playwright' ).Page,
 		ctx: import( '../../adapters/page-actions.js' ).LiberationContext
@@ -98,6 +103,11 @@ export interface CapturePerViewportArgs {
 		ctx: import( '../../adapters/page-actions.js' ).LiberationContext
 	) => Promise<void>;
 	observeSource?: ScreenshotOpts['observeSource'];
+	/**
+	 * Receives the rendered initial document once source observation is done,
+	 * so the pool can expand the entrypoint's links before its later phases (#2240).
+	 */
+	publishRenderedLinks?: ( document: { html: string; url: string; baseUrl: string } ) => void;
 	browserProfile: Readonly<{ isMobile: boolean; hasTouch: boolean }>;
 	canonicalizeHtml?: ( html: string, document?: string ) => string;
 	probeExclusions?: ScreenshotOpts['probeExclusions'];
@@ -478,7 +488,7 @@ export function baselineSteps(
 			const resource = resourceStore.getReplayableResponse( absolute, 'stylesheet' );
 			return resource ? { css: readFileSync( resource.path, 'utf8' ), url: absolute } : undefined;
 		};
-		const projected = projectRootClassContracts( projectInitialDocument( state.initialDocument, learned, linkedSheet ), state.rootClassWidths, linkedSheet );
+		const projected = await resourceStore.withProfileStylesheets( page, projectRootClassContracts( projectInitialDocument( state.initialDocument, learned, linkedSheet ), state.rootClassWidths, linkedSheet ), baseUrl );
 		const captured = typeof state.initialTitle === 'string' ? withDocumentTitle( projected, state.initialTitle ) : projected;
 		state.rawDocument = frozen ? sanitizeFrozenHtml( captured ) : captured;
 		const html = canonicalize( state.rawDocument );
@@ -562,6 +572,20 @@ export function baselineSteps(
 			}
 		},
 		{
+			// Chrome controls a runtime fills in after load (a header cart widget)
+			// must be hydrated in every document of every route, or identical chrome
+			// serializes differently per route (see chrome-hydration.ts).
+			id: 'chrome-hydration', bound: { evaluateMs: CHROME_HYDRATION_TIMEOUT_MS + evaluateTimeoutMs }, onFailure: 'best-effort', run: async () => {
+				const outcome = await page.evaluate( waitForChromePlaceholderLinks, { timeoutMs: CHROME_HYDRATION_TIMEOUT_MS, landmarks: CHROME_HYDRATION_LANDMARKS } );
+				if ( ! outcome?.placeholders ) return;
+				process.stderr.write( `[timing] chrome-hydration ${ JSON.stringify( { url, viewport: viewport.id, ...outcome } ) }\n` );
+				if ( outcome.pending > 0 ) args.diagnostics?.push( {
+					code: 'chrome_hydration_pending',
+					reason: `${ url } (${ viewport.id }): ${ outcome.pending } chrome placeholder link(s) still had no destination or name after ${ outcome.waitedMs }ms: ${ outcome.pendingLinks.join( ', ' ) }`,
+				} );
+			}
+		},
+		{
 			id: 'baseline-snapshot', onFailure: 'throw', run: async () => {
 				// Initial component states are immutable evidence, read before exploration.
 				await sampleMotion();
@@ -599,7 +623,9 @@ export function baselineSteps(
 				}
 				const observed: BoxTreeObservation | undefined = boxNodes;
 				if (observed && 'mismatch' in observed) state.boxTreeMismatch = observed.mismatch;
-				else if (observed) state.boxTree = await captureBoxTree(page, state.initialDocument, boxViewports(), { name: viewport.id, nodes: observed.nodes }, mismatch => { state.boxTreeMismatch = mismatch; });
+				else if (observed) state.boxTree = await captureBoxTree(page, state.initialDocument, boxViewports(), { name: viewport.id, nodes: observed.nodes }, mismatch => { state.boxTreeMismatch = mismatch; }, (name, mismatch) => {
+					args.diagnostics?.push({ code: 'box_tree_viewport_dropped', reason: `${name}: ${describeBoxTreeMismatch(mismatch)}` });
+				});
 				if ( await args.absentDocument?.( state.initialDocument ) ) {
 					fail( 'goto', 'HTTP 404 (render matches absent nonce sibling)' );
 					state.stopped = true;
@@ -614,6 +640,11 @@ export function baselineSteps(
 		{
 			id: 'observe-source', onFailure: 'throw', run: async () => {
 				await args.observeSource?.( page, url, viewport.id, sourceErrors(), args.browserProfile, viewport );
+				if ( args.publishRenderedLinks && state.initialDocument ) {
+					// Evidence only: an unreadable location leaves admission to route completion.
+					const location = await withEvaluateTimeout( page.evaluate( () => ( { url: document.URL, baseUrl: document.baseURI } ) ), evaluateTimeoutMs ).catch( orElse( undefined ) );
+					if ( location && ! sourceLoad.externalNavigation && ! isRouteDrift( location.url, navigationUrl ) ) args.publishRenderedLinks( { html: state.initialDocument, ...location } );
+				}
 			}
 		},
 		{
@@ -661,7 +692,11 @@ export function baselineSteps(
 					settleMs: Math.max( args.settleMs, 800 ),
 					...( args.classBreakpoints ? { breakpoints: args.classBreakpoints } : {} ),
 					...( args.classMemo ? { memo: args.classMemo } : {} ),
+					// An optional optimization: never more than a quarter of this
+					// profile's share of the route, so later profiles still fit.
+					budgetMs: viewportClassSweepBudgetMs( Math.min( args.routeDeadlineMs || 600_000, args.routeRemainingMs() ), args.routeProfilesLeft?.() ?? 1 ),
 				} ).catch ( orElse( undefined ) ) : undefined;
+				if ( classes?.budgetExhausted ) args.diagnostics?.push( { code: 'viewport_class_sweep_budget_exhausted', reason: `viewport class sweep stopped at its probe or time budget after ${ classes.sampledWidths.length } widths; unproven class toggles stay at the capture width` } );
 				const documentId = isDesktop ? 'desktop' : viewport.id === MIDDLE_PROFILE_ID ? 'middle' : 'mobile';
 				let sweep: FluidSweepStats | undefined;
 				try {
@@ -670,6 +705,7 @@ export function baselineSteps(
 						// The middle layout's learned rules name its own geometry ids, never the phone document's.
 						document: documentId,
 						...( args.fluidWidths ? { widths: args.fluidWidths } : {} ),
+						...( args.fluidWidthRange ? { widthRange: args.fluidWidthRange } : {} ),
 						settleMs: Math.max( args.settleMs, 800 ),
 						...( args.fluidMemo ? { memo: args.fluidMemo } : {} ),
 						onSweep: stats => { sweep = stats; },

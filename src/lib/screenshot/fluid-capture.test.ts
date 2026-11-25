@@ -3,7 +3,7 @@ import { it } from '../../../test/browser.js';
 import { mkdirSync, writeFileSync } from 'node:fs';
 
 import { markInitialDocument, projectInitialDocument } from './initial-document.js';
-import { DEFAULT_SWEEP_WIDTHS, type FluidSeriesMemo, type FluidSweepStats, fluidSweepLogLine, learnAndApplyFluidGeometry, refinementSeries, refinementWidths } from './fluid-capture.js';
+import { bandedWidths, DEFAULT_SWEEP_WIDTHS, sweepBand, type FluidSeriesMemo, type FluidSweepStats, fluidSweepLogLine, learnAndApplyFluidGeometry, refinementSeries, refinementWidths } from './fluid-capture.js';
 
 describe( 'learnAndApplyFluidGeometry', () => {
 
@@ -1037,6 +1037,52 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await page.close();
 	}, 20_000 );
 
+	// #2210: two default sweeps of one fixture (~6s). A document served only at or
+	// below 479px samples only those widths and fits them as the full ladder does.
+	it( 'sweeps only the width band a document is served in, with the same in-band fit', async ({ newPage }) => {
+		const fixture = `
+			<style>
+				#scaled-container { width: 88vw; }
+				@media (min-width: 768px) { #scaled-container { width: 96vw; } }
+			</style>
+			<div id="scaled-container"><h1 id="portfolio" style="font-size: 10px">PORTFOLIO</h1></div>
+			<script>
+				const update = () => {
+					document.getElementById('portfolio').style.fontSize = (document.getElementById('scaled-container').clientWidth * 0.2434) + 'px';
+				};
+				addEventListener('resize', update);
+				update();
+			</script>`;
+		const band = { max: 479 };
+		const inBand = [ 320, 390, 479 ];
+		const learn = async ( widthRange?: { max: number } ) => {
+			const page = await newPage( { viewport: { width: 390, height: 900 } } );
+			try {
+				await page.setContent( fixture );
+				const result = await learnAndApplyFluidGeometry( page, { document: 'mobile', settleMs: 50, ...( widthRange ? { widthRange } : {} ) } );
+				// The learned CSS, not the live runtime, must size the copy.
+				await page.evaluate( () => { document.getElementById( 'portfolio' )!.style.removeProperty( 'font-size' ); } );
+				const sizes: number[] = [];
+				for ( const width of inBand ) {
+					await page.setViewportSize( { width, height: 900 } );
+					sizes.push( await page.locator( '#portfolio' ).evaluate( element => parseFloat( getComputedStyle( element ).fontSize ) ) );
+				}
+				return { sampled: result.sampledWidths, sizes };
+			} finally { await page.close(); }
+		};
+		const full = await learn();
+		const banded = await learn( band );
+		expect( full.sampled.some( width => width > band.max ) ).toBe( true );
+		expect( banded.sampled.length ).toBeGreaterThan( 0 );
+		expect( banded.sampled.every( width => width <= band.max ) ).toBe( true );
+		expect( banded.sampled ).toContain( band.max );
+		inBand.forEach( ( width, index ) => {
+			expect( Math.abs( banded.sizes[ index ]! - full.sizes[ index ]! ) ).toBeLessThanOrEqual( 1 );
+			// The source's own phone rule: 24.34% of an 88vw container.
+			expect( Math.abs( banded.sizes[ index ]! - width * 0.88 * 0.2434 ) ).toBeLessThanOrEqual( 2 );
+		} );
+	}, 30_000 );
+
 	it( 'keeps segmented rules authoritative when the source runtime writes pixels after learning', async ({ newPage }) => {
 		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		await page.setContent( `
@@ -1481,6 +1527,22 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			await page.close();
 		}
 	} );
+	describe( 'width band', () => {
+		it( 'clamps the ladder to a band that holds the capture width, adding its edges', () => {
+			expect( bandedWidths( DEFAULT_SWEEP_WIDTHS, sweepBand( { max: 479 }, 390 ) ) ).toEqual( [ 320, 360, 390, 414, 479 ] );
+			expect( bandedWidths( DEFAULT_SWEEP_WIDTHS, sweepBand( { min: 480, max: 529 }, 504 ) ) ).toEqual( [ 480, 529 ] );
+			expect( bandedWidths( DEFAULT_SWEEP_WIDTHS, sweepBand( { min: 1280 }, 1440 ) ) ).toEqual( [ 1280, 1366, 1440, 1536, 1840, 1920 ] );
+		} );
+		it( 'keeps the full ladder without a usable band', () => {
+			expect( sweepBand( undefined, 390 ) ).toBeUndefined();
+			expect( sweepBand( {}, 390 ) ).toBeUndefined();
+			expect( sweepBand( { min: 600, max: 500 }, 550 ) ).toBeUndefined();
+			// Learned rules must reproduce the capture width.
+			expect( sweepBand( { max: 360 }, 390 ) ).toBeUndefined();
+			expect( bandedWidths( DEFAULT_SWEEP_WIDTHS, undefined ) ).toEqual( DEFAULT_SWEEP_WIDTHS );
+		} );
+	} );
+
 	describe( 'adaptive refinement', () => {
 		const series = ( values: Record< number, number > ) => Object.entries( values ).map( ( [ viewport, value ] ) => ( { viewport: Number( viewport ), value } ) );
 		const coarse = [ 390, 600, 768, 1024, 1440, 1920 ];

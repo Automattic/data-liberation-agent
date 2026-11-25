@@ -32,8 +32,7 @@
 		},
 		"src/lib/capture-export-evidence.ts": {
 			"throw new Error( 'schema_invalid' )": 1,
-			"throw new Error( `Semantic evidence index exceeds sidecar file limit: ${ Buffer.byteLength( index ) } bytes.` )": 1,
-			"throw new Error( `Semantic evidence page \"${ page.path }\" exceeds sidecar file limit: ${ envelopeBytes + bytes } bytes.` )": 1
+			"throw new Error( `Semantic evidence index exceeds sidecar file limit: ${ Buffer.byteLength( index ) } bytes.` )": 1
 		},
 		"src/lib/capture-export-routes.ts": {
 			"throw new Error( absence ?? `Capture does not identify one rendered homepage for the source URL: ${ sourceUrl }` )": 1

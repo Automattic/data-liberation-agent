@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { allocateCaptureRoutes, type RouteEntry } from './capture-export-routes.js';
+import { routeTimeoutDiagnostic } from './capture-time-budget.js';
 import { squarespaceAdapter } from '../adapters/squarespace/index.js';
 
 const dirs: string[] = [];
@@ -344,6 +345,19 @@ describe( 'entrypoint failure reporting', () => {
 		expect( () => allocateCaptureRoutes( [ about ], 'https://example.com/', [], [
 			{ code: 'route_not_found', url: 'https://example.com', reason: 'HTTP 404' },
 		] ) ).toThrow( 'Source homepage https://example.com/ was not captured: HTTP 404' );
+	} );
+
+	it( 'names the route-scoped cause, not an origin-wide row that shares the homepage identity', () => {
+		const dir = stage( 'data-blocks-engine-capture-entrypoint-origin-row-' );
+		const about = entry( dir, 'about.html', 'https://example.com/about/', '<h1>About</h1>' );
+		const pacing = 'Source requests paced at 2 req/s during one throttle episode, then recovered';
+		expect( () => allocateCaptureRoutes( [ about ], 'https://example.com/', [], [
+			{ code: 'source_rate_ceiling_learned', url: 'https://example.com', scope: 'origin', reason: pacing },
+			routeTimeoutDiagnostic( 'https://example.com/', 60000, { phase: 'settle' } ),
+		] ) ).toThrow( `Source homepage https://example.com/ was not captured: route capture deadline 60000ms: abandoned during the "settle" phase (source origin: ${ pacing })` );
+		expect( () => allocateCaptureRoutes( [ about ], 'https://example.com/', [], [
+			{ code: 'source_rate_ceiling_learned', url: 'https://example.com', scope: 'origin', reason: pacing },
+		] ) ).toThrow( 'Capture does not identify one rendered homepage for the source URL: https://example.com/' );
 	} );
 
 	it( 'names the redirect target when the source URL redirected to a route that was not captured', () => {

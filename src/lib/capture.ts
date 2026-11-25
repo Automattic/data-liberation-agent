@@ -35,6 +35,7 @@ import { captureTimeBudgetWindow, validateTimeBudgetMs, validateRouteReserveMs, 
 import { validateMaxFileBytes } from './export-file-limit.js';
 import { captureExportLimits, recordFinalWebsiteSize, validateMaxFiles, validateMaxTotalBytes } from './export-total-budget.js';
 import { assertEntrypointHasContent } from './source-content.js';
+import { structuredTermArchiveUrls } from './content-index.js';
 
 export { isUsableCapture, USABLE_PARTIAL_CAPTURE_POLICY, type MissingRoute } from './capture-usability.js';
 export { DEFAULT_CAPTURE_TIME_BUDGET_MS, DEFAULT_ROUTE_SELECTION, ROUTE_SELECTIONS, type RouteLimit, type RouteSelection } from './route-budget.js';
@@ -538,7 +539,7 @@ async function runCaptureWebsite(
 	const inventoryUrls = await normalizeDiscoveredRoutes( [
 		sourceUrl,
 		...contentEntries.map( entry => entry.permalink ),
-		...( contentSource ? [ ...new Set( contentEntries.flatMap( entry => entry.terms ) ) ].map( term => contentSource.termArchiveUrl( term, sourceUrl ) ) : [] ),
+		...( contentSource ? structuredTermArchiveUrls( contentEntries, contentSource ) : [] ),
 		...( inventory.urls ?? [] )
 			.map( ( entry ) => entry.url )
 			.filter( ( url ) => {
@@ -648,16 +649,27 @@ async function runCaptureWebsite(
 	let frontierRemaining = frontierGroupingLimits?.maxRoutes === 'all' ? 1000 : frontierGroupingLimits?.maxRoutes ?? 0;
 	let frontierDeadline: number | undefined;
 	const assetQueue = new AssetAcquisitionQueue( outputDir, timeBudget?.abandonAt, adapter.resolveImageOriginal?.bind( adapter ), undefined, timeBudget?.admitUntil );
+	// Deferral and post-capture derivation derive members under one contract:
+	// a member the deferral check accepts must derive after capture too.
+	const derivationContract = {
+		templateIdentity: adapter.templateIdentity,
+		styleNormalization: adapter.templateStyleNormalization,
+		rewriteDerivedMedia: adapter.liberation?.rewriteDerivedMedia?.bind( adapter.liberation ),
+		runtimeWidgetSelectors: adapter.liberation?.runtimeWidgetSelectors,
+		canonicalizeHtml: adapter.liberation?.canonicalizeHtml?.bind( adapter.liberation ),
+		runtimeStateClasses: adapter.runtimeStateClasses,
+	};
 	// Verified clusters' members leave the browser pass for derivation (#784).
 	const deferral = templateClusters && templateGrouping?.report
 		? new ( await import( './template-cluster-deferral.js' ) ).TemplateClusterDeferral( {
 				sourceUrl, outputDir, routeScope, governors: sourceGovernors,
-				templateIdentity: adapter.templateIdentity, styleNormalization: adapter.templateStyleNormalization,
-				rewriteDerivedMedia: adapter.liberation?.rewriteDerivedMedia?.bind( adapter.liberation ),
+				...derivationContract,
 				// Light renders stop with the capture window, or the default one without a time budget.
 				deadline: timeBudget?.abandonAt ?? startedAt + DEFAULT_CAPTURE_TIME_BUDGET_MS,
 			}, () => clusterRankingGroups )
 		: undefined;
+	const aliasInventory = new Set( inventoryUrls );
+	const aliasOffered = new Set< string >();
 	const screenshotResult = await captureScreenshots( {
 		governors: sourceGovernors,
 		maxTotalBytes: options.maxTotalBytes,
@@ -667,6 +679,20 @@ async function runCaptureWebsite(
 		sourceTelemetry: adapter.sourceTelemetry,
 		outputDir,
 		linkedPages: options.linkedPages ?? {},
+		probeLinkedRouteAliases: async ( candidates: string[] ) => {
+			for ( const url of candidates ) aliasInventory.add( url );
+			const candidateUrls = candidates.filter( url => ! aliasOffered.has( url ) && ! actionUrlExclusion( url ) && ! platformRuntimeExclusion( url, sourceUrl, adapter.runtimePaths ) );
+			for ( const url of candidateUrls ) aliasOffered.add( url );
+			const { aliases } = await probeCanonicalRouteAliases( {
+				sourceUrl, urls: [ ...aliasInventory ], candidateUrls, routeScope,
+			}, { fetch: ( url, opts ) => safeFetch( url, { ...opts, governors: sourceGovernors } ) } );
+			aliasProbe.aliases.push( ...aliases );
+			for ( const { url, canonicalUrl } of aliases ) discoveryDiagnostics.push( {
+				code: ROUTE_ALIAS_CANONICAL, url: documentRequestUrl( url ),
+				reason: `Route skipped before capture: its server-HTML rel=canonical resolves to ${ documentRequestUrl( canonicalUrl ) }, another inventory route`,
+			} );
+			return aliases;
+		},
 		...( aliasProbe.aliases.length ? { linkedCanonicalAliases: aliasProbe.aliases } : {} ),
 		// The same budget bounds linked-page admissions, so the frontier cannot
 		// push the total past it.
@@ -703,7 +729,7 @@ async function runCaptureWebsite(
 			groupLinkedRoutes: async ( candidates: string[] ) => {
 				const report = templateGrouping.report!;
 				const grouped = new Set( report.groups.flatMap( group => group.members ) );
-				const urls = candidates.filter( url => ! grouped.has( url ) && ! frontierOffered.has( url ) && ! actionUrlExclusion( url ) && ! platformRuntimeExclusion( url, sourceUrl, adapter.runtimePaths ) ).slice( 0, frontierRemaining );
+				const urls = candidates.filter( url => ! aliasProbe.aliases.some( alias => alias.url === url ) && ! grouped.has( url ) && ! frontierOffered.has( url ) && ! actionUrlExclusion( url ) && ! platformRuntimeExclusion( url, sourceUrl, adapter.runtimePaths ) ).slice( 0, frontierRemaining );
 				frontierDeadline ??= Date.now() + frontierGroupingLimits.timeBudgetMs;
 				if ( ! urls.length || frontierRounds >= 3 || Date.now() >= frontierDeadline ) return;
 				frontierRounds++;
@@ -754,11 +780,15 @@ async function runCaptureWebsite(
 		...( timeBudget ? { timeBudget: { ...timeBudget, assetBacklog: () => assetQueue.backlog() } } : {} ),
 		...( options.routeDeadlineMs !== undefined ? { routeDeadlineMs: options.routeDeadlineMs } : {} ),
 		onProgress: ( current, total, url ) => progress( { phase: 'capturing', current, total, url } ),
-		onRouteCaptured: ( url, documents, stored ) => {
+		onRouteCaptured: ( url, documents, stored, interactions, profiles ) => {
 			assetQueue.enqueueRoute( url, documents, stored );
-			deferral?.routeCaptured( url, documents[ 0 ] );
+			deferral?.routeCaptured( url, documents[ 0 ], interactions, profiles );
 		},
-		...( deferral ? { deferRoute: ( url: string ) => deferral.defers( url ) } : {} ),
+		...( deferral ? {
+			deferRoute: ( url: string ) => deferral.defers( url ),
+			pendingRoute: ( url: string ) => deferral.pending( url ),
+			waitForPendingRoute: () => deferral.waitForCheck(),
+		} : {} ),
 	} );
 	await assetQueue.drain();
 	process.stderr.write(
@@ -818,14 +848,12 @@ async function runCaptureWebsite(
 				sourceUrl,
 				outputDir,
 				report: templateGrouping.report,
-				rewriteDerivedMedia: adapter.liberation?.rewriteDerivedMedia?.bind( adapter.liberation ),
+				...derivationContract,
 				routeScope,
 				timeBudgetMs: options.timeBudgetMs,
 				frontierUrls: screenshotResult.linkedPageCoverage?.requiredUrls ?? [],
+				aliasUrls: new Set( aliasProbe.aliases.map( alias => normalizedUrl( alias.url ) ) ),
 				governors: sourceGovernors,
-				styleNormalization: adapter.templateStyleNormalization,
-				templateIdentity: adapter.templateIdentity,
-				runtimeStateClasses: adapter.runtimeStateClasses,
 				maxTotalBytes: options.maxTotalBytes,
 				resolveImageOriginal: adapter.resolveImageOriginal?.bind( adapter ),
 				acquisition: adapter.acquisition,
@@ -870,6 +898,8 @@ async function runCaptureWebsite(
 	// derivation's own loss row (`route_template_derived`).
 	const derivedUrls = new Set( [ ...derivedTemplateClusters?.summary.derivedUrls ?? [], ...derivedTemplateClusters?.summary.httpAcquiredUrls ?? [], ...budgetHttp.acquired ] );
 	const derivedIdentities = new Set( [ ...derivedUrls ].map( normalizedUrl ) );
+	// A confirmed canonical alias is held by its canonical route, never omitted.
+	const aliasIdentities = new Set( aliasProbe.aliases.map( alias => normalizedUrl( alias.url ) ) );
 	const blockedClient = sourceGovernors.forOrigin( sourceUrl ).blockedClient;
 	// Frontier timeouts and late-pass refusals are capture-budget omissions too.
 	// Keep the first explanation per document, regardless of which stage found
@@ -887,7 +917,7 @@ async function runCaptureWebsite(
 		.filter( row => {
 			if ( row.code !== ROUTE_OMITTED_BY_BUDGET ) return true;
 			const identity = normalizedUrl( row.url );
-			if ( derivedIdentities.has( identity ) || budgetRows.has( identity ) ) return false;
+			if ( derivedIdentities.has( identity ) || aliasIdentities.has( identity ) || budgetRows.has( identity ) ) return false;
 			budgetRows.add( identity );
 			return true;
 		} );
@@ -1244,7 +1274,10 @@ export interface TemplateClusterDerivation {
  * A member derives every document the representative ships: desktop, phone
  * and any middle width range, each from its representative counterpart, so
  * export assembles members exactly as it assembles the representative. A
- * failed derivation of any of them escalates the member.
+ * failed derivation of any of them escalates the member. Where the source
+ * serves a profile's identity (phone, tablet) a different server document, that
+ * profile's document derives from its own server pair, with runtime media from
+ * a light render as that profile; the desktop pair decides cluster identity.
  */
 export async function deriveTemplateClusterMembers( input: {
 	contentEntries?: import('../platform/types.js').StructuredContentEntry[];
@@ -1254,9 +1287,13 @@ export async function deriveTemplateClusterMembers( input: {
 	report: import('./template-groups.js').TemplateGroupsReport;
 	routeScope?: import('../platform/types.js').SiteRouteScope;
 	timeBudgetMs?: number;
+	runtimeWidgetSelectors?: readonly string[];
+	canonicalizeHtml?: ( html: string ) => string;
 	/** Runtime-render stage budget; defaults to `runtimeRenderBudgetMs( timeBudgetMs )`. */
 	runtimeRenderBudgetMs?: number;
 	frontierUrls: string[];
+	/** Normalized identities of confirmed canonical aliases; their canonical route holds the document. */
+	aliasUrls?: ReadonlySet< string >;
 	governors: SourceRequestGovernors;
 	styleNormalization?: import('./template-groups.js').TemplateStyleNormalization;
 	templateIdentity?: import('./template-groups.js').TemplateIdentity;
@@ -1273,17 +1310,21 @@ export async function deriveTemplateClusterMembers( input: {
 	/** The browser pass's deferral: its light renders verify and supply clusters whose runtime rewrites server content. */
 	deferral?: import('./template-cluster-deferral.js').TemplateClusterDeferral;
 } ): Promise< TemplateClusterDerivation > {
-	const { deriveMemberDocument, compareDerivedWithCapture, TEMPLATE_CLUSTER_LIMITS, writeTemplateClusters, TEMPLATE_CLUSTERS_FILE } =
+	const { deriveMemberDocument: derive, compareDerivedWithCapture, TEMPLATE_CLUSTER_LIMITS, writeTemplateClusters, TEMPLATE_CLUSTERS_FILE } =
 		await import( './template-clusters.js' );
+	const deriveMemberDocument: typeof derive = options => derive( { ...options, runtimeWidgetSelectors: input.runtimeWidgetSelectors, canonicalizeHtml: input.canonicalizeHtml } );
 	const { templateClusterUnits } = await import( './template-groups.js' );
 	const { chromeInteractionStates } = await import( './static-dialogs.js' );
+	const { interactionReportMismatch, projectInteractionReport } = await import( './interaction-projection.js' );
+	const { compareServerHtml } = await import( './screenshot/device-mode.js' );
+	const { TEMPLATE_DEFERRAL_LIMITS } = await import( './template-cluster-deferral.js' );
 	const memberShape = structuredMemberShape( input.contentSource, input.contentEntries );
 	// Derivation documents go through the run's source governors, as grouping
 	// does: throttles wait out Retry-After and retry (#1685). A failed or non-2xx
 	// answer is the source's unavailability, never template evidence.
-	const sourceDocument = async ( url: string ): Promise< { html: string } | { unavailable: string } > => {
+	const sourceDocument = async ( url: string, userAgent?: string ): Promise< { html: string } | { unavailable: string } > => {
 		try {
-			const response = await safeFetch( url, { governors: input.governors, timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs, attribution: { phase: 'template-clusters', url } } );
+			const response = await safeFetch( url, { governors: input.governors, timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs, attribution: { phase: 'template-clusters', url }, ...( userAgent ? { headers: { 'User-Agent': userAgent } } : {} ) } );
 			if ( response.status < 200 || response.status >= 300 ) return { unavailable: `HTTP ${ response.status }` };
 			return { html: response.body.toString( 'utf8' ) };
 		} catch ( error ) {
@@ -1356,10 +1397,10 @@ export async function deriveTemplateClusterMembers( input: {
 				}
 			}
 		}
-		const candidates = [ ...targets ].filter( url => ! isCaptured( url ) && ! grouped.has( url ) && ! offered.has( url ) ).slice( 0, remainingRoutes );
+		const candidates = [ ...targets ].filter( url => ! isCaptured( url ) && ! input.aliasUrls?.has( normalizedUrl( url ) ) && ! grouped.has( url ) && ! offered.has( url ) ).slice( 0, remainingRoutes );
 		for ( const url of targets ) {
 			const identity = normalizedUrl( url );
-			if ( ! isCaptured( url ) && ! diagnosed.has( identity ) ) {
+			if ( ! isCaptured( url ) && ! input.aliasUrls?.has( identity ) && ! diagnosed.has( identity ) ) {
 				diagnostics.push( { code: ROUTE_OMITTED_BY_BUDGET, url: documentRequestUrl( url ), reason: 'post-capture linked route exceeds the browser capture budget' } );
 				diagnosed.add( identity );
 			}
@@ -1458,6 +1499,26 @@ export async function deriveTemplateClusterMembers( input: {
 					const path = resolve( input.outputDir, profile.html );
 					return pathWithin( input.outputDir, path ) && existsSync( path ) ? [ { key, profile, html: readFileSync( path, 'utf8' ) } ] : [];
 				} );
+				// A source that serves a profile's identity its own server document
+				// (Wix's mobile and tablet sites) builds that capture from it, so
+				// anchors of the desktop pair do not exist there. Such a profile
+				// derives from its own server pair, fetched with the capture's user
+				// agent; the desktop pair still decides cluster identity.
+				const profileServers = new Map< string, { userAgent: string; html: string; render: import('./template-cluster-deferral.js').RenderProfile } >();
+				const byUserAgent = new Map< string, string | undefined >();
+				for ( const key of repProcessedMobileHtml === undefined ? [] : [ 'mobile', ...repWidthDocuments.map( document => document.key ) ] ) {
+					const userAgent = repEntry.profiles?.[ key ]?.userAgent;
+					if ( ! userAgent ) continue;
+					if ( ! byUserAgent.has( userAgent ) ) {
+						const fetched = await sourceDocument( group.representative, userAgent );
+						byUserAgent.set( userAgent, 'html' in fetched && compareServerHtml( repServerHtml, fetched.html ) === 'different' ? fetched.html : undefined );
+					}
+					const html = byUserAgent.get( userAgent );
+					const profile = repEntry.profiles![ key ]!;
+					// Runtime media of such a document come from a light render as that profile.
+					if ( html !== undefined ) profileServers.set( key, { userAgent, html, render: { id: key, identity: profile.identity, viewport: profile.viewport } } );
+				}
+				const profileRenders = ( url: string ) => input.rewriteDerivedMedia && ! rendered ? [ ...profileServers.values() ].map( server => server.render ) : [];
 				const store = new CapturedResourceStore( input.outputDir, input.sourceUrl, undefined, input.maxTotalBytes );
 				let derivedInCluster = record.derived.length;
 				let clusterFailure = { code: 'cluster_verification_missing', reason: 'cluster has no captured verification member' };
@@ -1473,12 +1534,16 @@ export async function deriveTemplateClusterMembers( input: {
 				const verificationCaptured = verificationUrl !== undefined &&
 					isCaptured( verificationUrl );
 				let verified = false;
+				// Whether the representative's interaction report, projected onto the
+				// verification member's derived document, reproduces its capture.
+				let interactionsVerified = false;
 				let failureReason: string | undefined;
 				let verificationRecord: import('./template-clusters.js').TemplateClusterRecord['verification'] =
 					{ url: verificationUrl ?? group.representative, captured: verificationCaptured };
 
 				if ( verificationCaptured ) {
 					const realEntry = capturedEntry( verificationUrl )!;
+					let verifiedHtml = '';
 					const realHtml = readFileSync( resolve( input.outputDir, realEntry.html! ), 'utf8' );
 					const verificationFeed = feedEntries.get( normalizedUrl( verificationUrl ) );
 					feedVerified = feedVerified && Boolean( verificationFeed && feedBodyEquivalent( realHtml, verificationFeed ) );
@@ -1507,6 +1572,7 @@ export async function deriveTemplateClusterMembers( input: {
 						const comparison = compareDerivedWithCapture( { derivedHtml: derivation.html, realHtml, repServerHtml, memberServerHtml: memberHtml, styleNormalization: input.styleNormalization, runtimeStateClasses: input.runtimeStateClasses, baseUrl: group.representative } );
 						verificationRecord = { url: verificationUrl, captured: true, checks: { ...comparison.checks, ...( repFeed ? { feedBody: feedVerified } : {} ) }, equal: comparison.equal };
 						verified = comparison.equal;
+						verifiedHtml = derivation.html;
 						if ( ! comparison.equal ) {
 							const failing = Object.entries( comparison.checks ).filter( ( [ , ok ] ) => ! ok ).map( ( [ name ] ) => name ).join( ', ' );
 							clusterFailure = { code: 'cluster_verification_mismatch', reason: `derived-vs-real comparison failed (${ failing })` };
@@ -1527,14 +1593,20 @@ export async function deriveTemplateClusterMembers( input: {
 						if ( repRender && memberRender && 'html' in repRender && 'html' in memberRender ) {
 							const renderedDerivation = deriveMemberDocument( { ...mediaContext, repServerHtml: repRender.html, repProcessedHtml, memberServerHtml: memberRender.html, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization } );
 							const comparison = renderedDerivation.ok ? compareDerivedWithCapture( { derivedHtml: renderedDerivation.html, realHtml, repServerHtml: repRender.html, memberServerHtml: memberRender.html, styleNormalization: input.styleNormalization, baseUrl: group.representative } ) : undefined;
-							if ( comparison?.equal ) {
+							if ( comparison?.equal && renderedDerivation.ok ) {
 								verified = rendered = true;
+								verifiedHtml = renderedDerivation.html;
 								repServerHtml = repRender.html;
 								verificationRecord = { url: verificationUrl, captured: true, documents: 'rendered', checks: comparison.checks, equal: true };
 							}
 						}
 					}
 					if ( ! verified && failureReason ) diagnostics.push( { code: ROUTE_TEMPLATE_ESCALATED, url: verificationUrl, reason: failureReason, metrics: { clusterSize: group.size } } );
+					if ( verified ) {
+						const mismatch = interactionReportMismatch( projectInteractionReport( repProcessedHtml, verifiedHtml, repEntry.interactions ), realEntry.interactions );
+						interactionsVerified = mismatch === undefined;
+						if ( mismatch ) process.stderr.write( `[template-clusters] ${ group.representative } interaction states did not verify (${ mismatch }); derived members keep site-chrome states only\n` );
+					}
 				}
 				// The verdict is final here: record it so a failed cluster is visible
 				// in the receipt, not only in the diagnostics.
@@ -1559,8 +1631,11 @@ export async function deriveTemplateClusterMembers( input: {
 					for ( let ahead = index; ahead < Math.min( members.length, index + input.governors.forOrigin( input.sourceUrl ).concurrency ); ahead++ ) {
 						const next = members[ ahead ]!;
 						const nextFeed = feedEntries.get( normalizedUrl( next ) );
+						const synthesized = feedVerified && repFeed && nextFeed;
 						if ( rendered ) void input.deferral!.document( next, 'rendered' );
-						else if ( ! memberDocuments.has( next ) ) memberDocuments.set( next, feedVerified && repFeed && nextFeed ? Promise.resolve( feedMemberDocument( repServerHtml, repFeed, nextFeed ) ).catch( () => undefined ) : Promise.resolve( undefined ) );
+						else if ( ! memberDocuments.has( next ) ) memberDocuments.set( next, synthesized ? Promise.resolve( feedMemberDocument( repServerHtml, repFeed, nextFeed ) ).catch( () => undefined ) : Promise.resolve( undefined ) );
+						// Profile light renders are browser work: a narrower, memoized window.
+						if ( ! synthesized && ahead < index + TEMPLATE_DEFERRAL_LIMITS.renderConcurrency ) for ( const render of profileRenders( next ) ) void input.deferral?.document( next, 'rendered', render );
 					}
 					return memberDocuments.get( members[ index ]! );
 				};
@@ -1590,11 +1665,39 @@ export async function deriveTemplateClusterMembers( input: {
 					// construction: its key is compared outside the content slot.
 					const slotSelector = feedHtml ? { contentSlotSelector, memberHeadSlotSelector: contentSource?.memberHeadSlotSelector } : {};
 					const desktopDerivation = deriveMemberDocument( { ...mediaContext, repServerHtml, repProcessedHtml, memberServerHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, featuredImages: { representative: repFeed?.image, member: memberFeed?.image }, ...slotSelector } );
+					// Profile server pairs apply to server-sourced members only:
+					// synthesized and light-rendered documents are desktop documents.
+					const memberProfileServers = new Map< string, { repServerHtml: string; memberServerHtml: string; clusterKeyDocuments: { repServerHtml: string; memberServerHtml: string } } >();
+					let profileUnavailable: string | undefined;
+					const profileMedia = new Map< string, string | undefined >();
+					if ( desktopDerivation.ok && ! feedHtml && ! rendered ) {
+						const fetched = new Map< string, Promise< { html: string } | { unavailable: string } > >();
+						for ( const [ key, server ] of profileServers ) {
+							if ( ! fetched.has( server.userAgent ) ) fetched.set( server.userAgent, sourceDocument( url, server.userAgent ) );
+							const document = await fetched.get( server.userAgent )!;
+							if ( 'unavailable' in document ) { profileUnavailable = `${ key } server document ${ document.unavailable }`; break; }
+							memberProfileServers.set( key, { repServerHtml: server.html, memberServerHtml: document.html, clusterKeyDocuments: { repServerHtml, memberServerHtml } } );
+							if ( input.rewriteDerivedMedia ) {
+								const media = await input.deferral?.document( url, 'rendered', server.render );
+								profileMedia.set( key, media && 'html' in media ? media.html : undefined );
+							}
+						}
+					}
+					for ( const render of profileRenders( url ) ) input.deferral?.release( url, 'rendered', render );
+					if ( profileUnavailable ) {
+						record.unavailable.push( { url, reason: profileUnavailable } );
+						unavailableCount++;
+						continue;
+					}
+					const serverPair = ( key: string ) => {
+						const pair = memberProfileServers.get( key );
+						return pair ? { ...pair, ...( profileMedia.has( key ) ? { memberRenderedHtml: profileMedia.get( key ) } : {} ) } : { repServerHtml, memberServerHtml };
+					};
 					const mobileDerivation = desktopDerivation.ok && repProcessedMobileHtml !== undefined
-						? deriveMemberDocument( { ...mediaContext, repServerHtml, repProcessedHtml: repProcessedMobileHtml, memberServerHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, featuredImages: { representative: repFeed?.image, member: memberFeed?.image }, ...slotSelector } )
+						? deriveMemberDocument( { ...mediaContext, ...serverPair( 'mobile' ), repProcessedHtml: repProcessedMobileHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, featuredImages: { representative: repFeed?.image, member: memberFeed?.image }, ...slotSelector } )
 						: undefined;
 					const widthDerivations = mobileDerivation?.ok
-						? repWidthDocuments.map( document => ( { ...document, derivation: deriveMemberDocument( { ...mediaContext, repServerHtml, repProcessedHtml: document.html, memberServerHtml, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, featuredImages: { representative: repFeed?.image, member: memberFeed?.image }, ...slotSelector } ) } ) )
+						? repWidthDocuments.map( document => ( { ...document, derivation: deriveMemberDocument( { ...mediaContext, ...serverPair( document.key ), repProcessedHtml: document.html, baseUrl: group.representative, templateIdentity: input.templateIdentity, styleNormalization: input.styleNormalization, featuredImages: { representative: repFeed?.image, member: memberFeed?.image }, ...slotSelector } ) } ) )
 						: [];
 					const derivation = [ mobileDerivation, ...widthDerivations.map( width => width.derivation ) ].find( candidate => candidate && ! candidate.ok ) ?? desktopDerivation;
 					lap( 'derive' );
@@ -1636,9 +1739,12 @@ export async function deriveTemplateClusterMembers( input: {
 					const slug = await queue.claimSlug( memberFeed?.slug ?? slugify( url ) );
 					const capturedAtNow = new Date().toISOString();
 					const repProfile = repEntry.profiles?.desktop;
-					// Site chrome identical to the representative's keeps its
-					// observed dropdowns and menus, as on captured routes.
-					const chromeStates = chromeInteractionStates( repProcessedHtml, derivation.html, repEntry.interactions );
+					// A verified projection carries every observed menu and dialog
+					// over to the member; otherwise only site chrome identical to the
+					// representative's keeps its dropdowns and menus.
+					const memberInteractions = interactionsVerified
+						? projectInteractionReport( repProcessedHtml, derivation.html, repEntry.interactions )
+						: chromeInteractionStates( repProcessedHtml, derivation.html, repEntry.interactions );
 					const repMobileProfile = memberMobilePath ? repEntry.profiles?.mobile : undefined;
 					await queue.updateEntry( url, {
 						slug,
@@ -1649,7 +1755,7 @@ export async function deriveTemplateClusterMembers( input: {
 						...( memberMobilePath && repEntry.deviceMode ? { deviceMode: repEntry.deviceMode } : {} ),
 						...( memberMobilePath && repEntry.fluidMobile ? { fluidMobile: repEntry.fluidMobile } : {} ),
 						...( repEntry.fluid ? { fluid: repEntry.fluid } : {} ),
-						...( chromeStates ? { interactions: chromeStates } : {} ),
+						...( memberInteractions ? { interactions: memberInteractions } : {} ),
 					} as import('./screenshot/manifest-queue.js').ManifestEntry );
 					lap( 'manifest' );
 					diagnostics.push( {

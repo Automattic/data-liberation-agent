@@ -1,10 +1,11 @@
-import type { Page } from 'playwright';
+import type { Page, Request } from 'playwright';
 import { randomUUID } from 'node:crypto';
 import { PORTABLE_WIDGET_OWNERSHIP_SOURCE } from './portable-widget-ownership.js';
 import type { CapturedGallery } from './gallery-capture.js';
 import { settleDocument } from './page-helpers.js';
+import { DIALOG_CONTENT_MOUNT_MS, waitForDialogContent } from './chrome-hydration.js';
 import { sweepSourceCleanup } from '../source-cleanup.js';
-import { rootClasses, rootClassDelta, type CapturedRootClassState } from './root-class-state.js';
+import { rootClasses, rootClassDelta, rootClassesRestored, type CapturedRootClassState } from './root-class-state.js';
 import { rememberDropdownAncestors, observeDropdownAncestors, verifyDropdownRestoration, type CapturedDropdownAncestorState } from './dropdown-ancestor-state.js';
 import { orElse } from '../failure-class.js';
 
@@ -133,6 +134,13 @@ export interface CapturedDialogInteraction {
 		 * serialized styles predate the panel, so without these it renders unstyled.
 		 */
 		css?: string;
+		/**
+		 * Rules the page already held before the panel opened that style the open
+		 * panel. They are not part of `css` - they are already in this page's
+		 * styles - but another route the panel is reused on may lack them (see
+		 * `chrome-reuse.ts`).
+		 */
+		baselineRules?: string[];
 		/** Observed local ancestor transitions and panel placement, verified by source restoration. */
 		ancestorState?: CapturedDropdownAncestorState;
 		rootClassState?: CapturedRootClassState[];
@@ -297,6 +305,7 @@ export async function captureControlledDisclosure( page: Page, selector: string 
 	const ancestors = await observeDropdownAncestors( page, revealed.selector, true );
 	const rootClassState = rootClassDelta( closedRoots, await rootClasses( page ) );
 	const css = await rulesAddedSinceActivation( page );
+	const baselineRules = await baselineRulesStyling( page, revealed.selector );
 	const bounded = boundHtml( snapshot.html );
 	// The controlled form can be an in-flow wrapper around a fixed lightbox.
 	const presentation = await page.locator( revealed.selector ).evaluate( panel => {
@@ -312,15 +321,14 @@ export async function captureControlledDisclosure( page: Page, selector: string 
 	const dismissal = await closeCapturedDialog( page, revealed.selector, selector, closed );
 	const restored = await page.locator( selector ).getAttribute( 'aria-expanded' ) === 'false' && await closed();
 	const ancestorState = await verifyDropdownRestoration( page, ancestors, revealed.selector );
-	const restoredRoots = await rootClasses( page );
-	const rootsRestored = rootClassState.every( row => row.removed.every( token => restoredRoots[row.root].includes( token ) ) && row.added.every( token => !restoredRoots[row.root].includes( token ) ) );
+	const rootsRestored = await rootClassesRestored( page, rootClassState, DIALOG_WAIT_MS );
 	return { restored, dismissal, evidence: {
 		status: 'captured', kind: 'disclosure', trigger,
 		dialog: {
 			...snapshot, ...( revealed.role ? { role: revealed.role } : {} ),
 			selector: panelSelector ?? revealed.selector, presentation,
 			html: bounded.html, htmlBytes: bounded.bytes, htmlTruncated: bounded.truncated,
-			ancestorState, ...( rootsRestored ? { rootClassState } : {} ), ...( css ? { css } : {} ),
+			ancestorState, ...( rootsRestored ? { rootClassState } : {} ), ...( css ? { css } : {} ), ...( baselineRules.length ? { baselineRules } : {} ),
 		},
 	} };
 }
@@ -331,6 +339,9 @@ export async function captureTriggeredDialogs(
 	options: { skip?: string; navigationSkip?: string } = {}
 ): Promise< InteractionStatesReport > {
 	const viewport = page.viewportSize() ?? { width: 0, height: 0 };
+	// The page's resting root classes, before any probe clicks a control.
+	const pageRoots = await rootClasses( page ).catch( orElse( undefined ) );
+	let restingRoots = pageRoots;
 	// Route transitions and popup transitions share controls. Observe routes
 	// first, restore them, then exclude proven destinations from popup clicks.
 	const routeNavigation = await captureRouteNavigation( page, sourceUrl, { skip: options.navigationSkip ?? options.skip } ).catch( orElse( [] ) );
@@ -561,14 +572,22 @@ export async function captureTriggeredDialogs(
 			const pageBefore = await pageStateFingerprint( page );
 			let closedRoots = await rootClasses( page );
 			let before: string[] = [];
+			const codeLoads = watchCodeLoads( page );
 			try {
 				await activateTrigger( page, trigger.probeSelector, async () => {
 					before = await visibleDialogSelectors( page );
 					await markVisibleBeforeActivation( page );
 					await rememberDropdownAncestors( page, trigger.probeSelector );
+					// A control an earlier probe activated can open its surface late
+					// (a lazily loaded sign-in modal after a non-navigating route
+					// click) and lock the page roots. Opening this trigger is measured
+					// from the resting page, so that leaked state is dismissed first.
+					if ( restingRoots ) restingRoots = await restoreRestingRoots( page, restingRoots );
 					closedRoots = await rootClasses( page );
+					codeLoads.arm();
 				} );
 			} catch ( error ) {
+				codeLoads.dispose();
 				const intercepting = await describeInterceptingElement( page, trigger.probeSelector );
 				states.push( {
 					status: 'click-failed',
@@ -581,6 +600,11 @@ export async function captureTriggeredDialogs(
 
 			let dialog: DialogDescriptor | undefined;
 			const deadline = Date.now() + DIALOG_WAIT_MS;
+			// A runtime can fetch a panel's code on its first activation and mount
+			// it only once that code arrives. While code the activation requested
+			// is still loading, the panel is pending, not absent: the window
+			// extends, bounded by the content mount budget.
+			const loadingDeadline = Date.now() + DIALOG_CONTENT_MOUNT_MS;
 			do {
 				// Source cleanup removes provider dialogs as they open, but its
 				// observer has a budget a busy page can spend before the probes run.
@@ -589,7 +613,8 @@ export async function captureTriggeredDialogs(
 				dialog = await firstNewVisibleDialog( page, before, trigger.probeSelector );
 				if ( dialog ) break;
 				await page.waitForTimeout( 100 );
-			} while ( Date.now() < deadline );
+			} while ( Date.now() < deadline || Date.now() < loadingDeadline && codeLoads.loading() );
+			codeLoads.dispose();
 
 			if ( ! dialog ) {
 				states.push( { status: 'no-dialog', trigger: triggerRecord( trigger ) } );
@@ -644,23 +669,37 @@ export async function captureTriggeredDialogs(
 				continue;
 			}
 			const addedCss = await rulesAddedSinceActivation( page );
+			const baselineRules = await baselineRulesStyling( page, dialog.selector );
 			// A modal can be shown by a class its runtime adds to an ancestor, such
 			// as an open-menu class on the body. Record that only when opening it
 			// changed an ancestor; a dropdown always reports its evidence.
 			const dropdown = dialog.presentation === 'dropdown';
 			const observedAncestors = await observeDropdownAncestors( page, dialog.selector, dropdown );
 			const ancestorState = dropdown || observedAncestors.ancestors.length > 0 || observedAncestors.trigger?.length ? observedAncestors : undefined;
-			const rootClassState = rootClassDelta( closedRoots, await rootClasses( page ) );
+			const openRoots = await rootClasses( page );
+			let rootClassState = rootClassDelta( closedRoots, openRoots );
+			// Classes the page took before this opening (a surface that never
+			// mounted still holds its lock) and still holds while it is open.
+			const held = pageRoots ? rootClassDelta( pageRoots, closedRoots ).flatMap( row => {
+				const added = row.added.filter( token => openRoots[row.root].includes( token ) );
+				return added.length ? [ { root: row.root, removed: [], added } ] : [];
+			} ) : [];
 			const closeControl = await clickAuthoredCloseControl( page, dialog.selector );
 			await closeCapturedDialog( page, dialog.selector, trigger.probeSelector );
-			const restoredRoots = await rootClasses( page );
-			const rootsRestored = rootClassState.every( row => row.removed.every( token => restoredRoots[row.root].includes( token ) ) && row.added.every( token => !restoredRoots[row.root].includes( token ) ) );
+			const rootsRestored = await rootClassesRestored( page, rootClassState, DIALOG_WAIT_MS );
+			// A held class that this dialog's closing releases is its own open
+			// state too: the page held it only because a lock was already taken.
+			if ( rootsRestored && held.length && await rootClassesRestored( page, held, DIALOG_WAIT_MS ) ) {
+				rootClassState = mergeRootClassStates( rootClassState, held );
+				restingRoots = await rootClasses( page ).catch( orElse( restingRoots ) );
+			}
 			const restoredAncestorState = ancestorState ? await verifyDropdownRestoration( page, ancestorState, dialog.selector ) : undefined;
 			const restingCandidate = await rememberRestingPanel( page, trigger.probeSelector, dialog.selector );
 			const capturedDialog = ( restingInline: boolean ): NonNullable< CapturedDialogInteraction[ 'dialog' ] > => ( {
 				...surface,
 				...( restingInline ? { restingInline: true } : {} ),
 				...( addedCss ? { css: addedCss } : {} ),
+				...( baselineRules.length ? { baselineRules } : {} ),
 				...( closeControl ? { closeControl } : {} ),
 				...( restoredAncestorState ? { ancestorState: restoredAncestorState } : {} ),
 				...( rootsRestored && rootClassState.length ? { rootClassState } : {} ),
@@ -999,6 +1038,52 @@ async function rulesAddedSinceActivation( page: Page ): Promise< string > {
 	return Buffer.byteLength( css ) <= MAX_DIALOG_HTML_BYTES ? css : '';
 }
 
+/**
+ * The rules present before activation that style the open panel: a top-level
+ * rule is kept when it (or a rule nested in its group) selects the panel or a
+ * descendant, ignoring interaction pseudo-classes and pseudo-elements, and a
+ * keyframes rule when a kept rule names it.
+ */
+async function baselineRulesStyling( page: Page, panelSelector: string ): Promise< string[] > {
+	const rules = await page.evaluate( selector => {
+		const panel = document.querySelector( selector );
+		const before = new Set( ( globalThis as unknown as { __dlaRulesBefore?: string[] } ).__dlaRulesBefore ?? [] );
+		if ( ! panel || ! before.size ) return [];
+		const dynamic = /::?(?:hover|focus-visible|focus-within|focus|active|visited|before|after|placeholder|selection|marker|first-line|first-letter|backdrop|-webkit-[\w-]+|-moz-[\w-]+)\b/g;
+		const styles = ( rule: CSSRule ): boolean => {
+			if ( rule instanceof CSSStyleRule ) {
+				return rule.selectorText.split( ',' ).some( part => {
+					const plain = part.replace( dynamic, '' ).trim() || '*';
+					try {
+						return panel.matches( plain ) || panel.querySelector( plain ) !== null;
+					} catch {
+						return false;
+					}
+				} );
+			}
+			const nested = ( rule as CSSRule & { cssRules?: CSSRuleList } ).cssRules;
+			return rule instanceof CSSKeyframesRule || ! nested ? false : Array.from( nested ).some( styles );
+		};
+		const kept: string[] = [];
+		const keyframes: CSSKeyframesRule[] = [];
+		for ( const sheet of Array.from( document.styleSheets ) ) {
+			try {
+				for ( const rule of Array.from( sheet.cssRules ) ) {
+					if ( ! before.has( rule.cssText ) ) continue;
+					if ( rule instanceof CSSKeyframesRule ) keyframes.push( rule );
+					else if ( styles( rule ) ) kept.push( rule.cssText );
+				}
+			} catch {
+				// Cross-origin sheets are captured with the page.
+			}
+		}
+		const text = kept.join( '\n' );
+		for ( const rule of keyframes ) if ( new RegExp( `(?<![\\w-])${ rule.name.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' ) }(?![\\w-])` ).test( text ) ) kept.push( rule.cssText );
+		return [ ...new Set( kept ) ];
+	}, panelSelector ).catch( orElse( [] as string[] ) );
+	return Buffer.byteLength( rules.join( '\n' ) ) <= MAX_DIALOG_HTML_BYTES ? rules : [];
+}
+
 async function rememberBaselinePanels( page: Page ): Promise< void > {
 	await page.evaluate( () => {
 		// Record authored identities before activation can mount or reorder nodes.
@@ -1064,6 +1149,75 @@ async function markVisibleBeforeActivation( page: Page ): Promise< void > {
 			}
 		}
 	} ).catch( orElse( undefined ) );
+}
+
+/**
+ * Dismiss a surface still holding the page roots away from their resting
+ * classes, and return the resting classes to measure the next trigger from.
+ * A runtime can lock page scrolling before its surface mounts, when there is
+ * nothing yet to dismiss, so dismissal of a scroll-blocking leak repeats until
+ * the roots rest, bounded by the content mount budget. A leak that blocks
+ * nothing (a focus-style class) is page state, not a surface: it is adopted.
+ */
+async function restoreRestingRoots( page: Page, resting: RootClasses ): Promise< RootClasses > {
+	const current = await rootClasses( page ).catch( orElse( undefined ) );
+	if ( ! current ) return resting;
+	const leaked = rootClassDelta( resting, current );
+	if ( ! leaked.length ) return resting;
+	const deadline = Date.now() + DIALOG_CONTENT_MOUNT_MS;
+	do {
+		await page.keyboard.press( 'Escape' ).catch( orElse( undefined ) );
+		if ( await rootClassesRestored( page, leaked, Math.min( 500, deadline - Date.now() ) ) ) return resting;
+	} while ( Date.now() < deadline && await pageScrollBlocked( page ) );
+	return await rootClasses( page ).catch( orElse( current ) );
+}
+
+type RootClasses = Awaited< ReturnType< typeof rootClasses > >;
+
+function mergeRootClassStates( state: readonly CapturedRootClassState[], more: readonly CapturedRootClassState[] ): CapturedRootClassState[] {
+	return ( [ 'html', 'body' ] as const ).flatMap( root => {
+		const rows = [ ...state, ...more ].filter( row => row.root === root );
+		if ( ! rows.length ) return [];
+		return [ { root, removed: [ ...new Set( rows.flatMap( row => row.removed ) ) ], added: [ ...new Set( rows.flatMap( row => row.added ) ) ] } ];
+	} );
+}
+
+/** Whether the document roots prevent page scrolling (a modal surface's lock). */
+async function pageScrollBlocked( page: Page ): Promise< boolean > {
+	return page.evaluate( () => [ document.documentElement, document.body ].some( root => {
+		if ( ! root ) return false;
+		const style = getComputedStyle( root );
+		return [ 'hidden', 'clip' ].includes( style.overflowY ) || style.position === 'fixed';
+	} ) ).catch( orElse( false ) );
+}
+
+/** Code (scripts, stylesheets) requested after activation and not yet settled. */
+const CODE_SETTLE_MS = 500;
+function watchCodeLoads( page: Page ): { arm(): void; loading(): boolean; dispose(): void } {
+	const pending = new Set< Request >();
+	let armed = false;
+	let settledAt = 0;
+	const isCode = ( request: Request ) => [ 'script', 'stylesheet' ].includes( request.resourceType() ) ||
+		/\.(?:m?js|css)$/i.test( URL.canParse( request.url() ) ? new URL( request.url() ).pathname : '' );
+	const started = ( request: Request ) => {
+		if ( armed && isCode( request ) ) pending.add( request );
+	};
+	const ended = ( request: Request ) => {
+		if ( pending.delete( request ) ) settledAt = Date.now();
+	};
+	page.on( 'request', started );
+	page.on( 'requestfinished', ended );
+	page.on( 'requestfailed', ended );
+	return {
+		arm: () => { armed = true; },
+		// Arrived code still has to run (and may request more) before it mounts.
+		loading: () => pending.size > 0 || Date.now() - settledAt < CODE_SETTLE_MS,
+		dispose: () => {
+			page.off( 'request', started );
+			page.off( 'requestfinished', ended );
+			page.off( 'requestfailed', ended );
+		},
+	};
 }
 
 /** Keep idle evidence out of the DOM and bound the added wait to one probe window. */
@@ -1476,8 +1630,16 @@ async function observeInlineRestingPanels( page: Page, candidates: readonly numb
 
 async function waitForDialogContentStable( page: Page, selector: string ): Promise< void > {
 	// Content is stable once the dialog subtree has not changed for two
-	// 150 ms intervals, the window the previous sampled-size poll required.
-	await settleDocument( page, 'dialog-content', { selector, quietMs: 300, timeoutMs: DIALOG_WAIT_MS } );
+	// 150 ms intervals, the window the previous sampled-size poll required, and
+	// its entrance animations have finished: runtimes mark the open state
+	// (`data-animation-state="enterDone"`) only once they end.
+	await settleDocument( page, 'dialog-content', { selector, quietMs: 300, timeoutMs: DIALOG_WAIT_MS, animations: true } );
+	// A panel whose content mounts on first open is still an empty shell after a
+	// quiet window; capturing it then ships an empty panel on that route only
+	// (#1261). Wait, bounded, for content, then let it settle again.
+	const content = await page.evaluate( waitForDialogContent, { selector, timeoutMs: DIALOG_CONTENT_MOUNT_MS } ).catch( orElse( 'present' as const ) );
+	if ( content !== 'mounted' ) return;
+	await settleDocument( page, 'dialog-content', { selector, quietMs: 300, timeoutMs: DIALOG_WAIT_MS, animations: true } );
 }
 
 async function snapshotDialog(

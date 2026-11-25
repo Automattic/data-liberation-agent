@@ -25,6 +25,10 @@ const CAPTURED_RESOURCE_TYPES = new Set( [
 	'media',
 ] );
 const REPLAYABLE_RESOURCE_TYPES = new Set( [ 'script', 'stylesheet', 'font', 'image' ] );
+// The browser identity that owns a stored response nobody else claimed.
+const DEFAULT_RESOURCE_PROFILE = 'desktop';
+// Fragment that qualifies a stylesheet url with the profile whose bytes it holds.
+const PROFILE_STYLESHEET_FRAGMENT = 'blocks-engine-capture-profile=';
 
 // Chromium classifies link prefetches as `other`, not as the eventual asset
 // type. Do not admit arbitrary `other` responses (documents, telemetry, etc.).
@@ -470,6 +474,11 @@ export class CapturedResourceStore {
 	private readonly explicitDependencies = new Set< string >();
 	private readonly pageCaptures = new WeakMap< Page, Set< Promise< void > > >();
 	private readonly listeners = new WeakMap< Page, ( response: Response ) => void >();
+	// Browser identity of an observed page, and the stylesheet bytes that page loaded.
+	private readonly pageProfiles = new WeakMap< Page, string >();
+	private readonly pageStylesheets = new WeakMap< Page, Map< string, Promise< Buffer | undefined > > >();
+	// Profile whose browser response owns a stored url; absent means the default identity.
+	private readonly resourceOwners = new Map< string, string >();
 	private readonly uncacheableReplayUrls = new Set<string>();
 	private markUncacheableReplay(url: string): void {
 		if (this.uncacheableReplayUrls.size < 10000) this.uncacheableReplayUrls.add(url);
@@ -544,19 +553,92 @@ export class CapturedResourceStore {
 		this.fetchMedia = fetchMedia;
 	}
 
-	observe( page: Page, options: { replayOnly?: boolean } = {} ): void {
+	observe( page: Page, options: { replayOnly?: boolean; profile?: string } = {} ): void {
 		const pending = new Set< Promise< void > >();
 		this.pageCaptures.set( page, pending );
 		const images = new Set< Response >();
 		this.pageImages.set( page, images );
+		const profile = options.replayOnly ? undefined : options.profile;
+		const stylesheets = new Map< string, Promise< Buffer | undefined > >();
+		if ( profile ) {
+			this.pageProfiles.set( page, profile );
+			this.pageStylesheets.set( page, stylesheets );
+		}
 		const listener = ( response: Response ) => {
 			if ( ! options.replayOnly && response.request().resourceType() === 'image' ) images.add( response );
-			const capture = options.replayOnly ? this.captureForReplay( response ) : this.capture( response );
+			if ( profile ) this.recordPageStylesheet( stylesheets, response );
+			const capture = options.replayOnly ? this.captureForReplay( response ) : this.capture( response, true, profile );
 			pending.add( capture );
 			void capture.finally( () => pending.delete( capture ) );
 		};
 		this.listeners.set( page, listener );
 		page.on?.( 'response', listener );
+	}
+
+	private recordPageStylesheet( stylesheets: Map< string, Promise< Buffer | undefined > >, response: Response ): void {
+		try {
+			const request = response.request();
+			if ( request.resourceType() !== 'stylesheet' || ( request.method?.() ?? 'GET' ) !== 'GET' ) return;
+			if ( response.status() < 200 || response.status() >= 300 ) return;
+			const url = originRequestUrl( request, new URL( response.url() ) ).href;
+			if ( ! stylesheets.has( url ) ) stylesheets.set( url, response.body().catch( orElse( undefined ) ) );
+		} catch {
+			// A response without a usable url or request has no profile variant.
+		}
+	}
+
+	/**
+	 * Point a serialized document's stylesheet links at the bytes its own page
+	 * loaded. A source can serve one stylesheet url differently per browser
+	 * identity (a font service hands a phone identity other face binaries), and
+	 * the store keeps one response per url: without this, every profile's
+	 * document would render with whichever identity's response arrived first.
+	 * A differing response is stored under a profile-qualified key of the same
+	 * url, so export localizes it as that document's own stylesheet.
+	 */
+	async withProfileStylesheets( page: Page, html: string, baseUrl: string ): Promise< string > {
+		const profile = this.pageProfiles.get( page );
+		const stylesheets = this.pageStylesheets.get( page );
+		if ( ! profile || ! stylesheets?.size ) return html;
+		const replacements = new Map< string, string >();
+		for ( const [ tag ] of html.matchAll( /<link\b[^>]*>/gi ) ) {
+			if ( replacements.has( tag ) ) continue;
+			const link = cheerio.load( tag, undefined, false )( 'link' );
+			const href = link.attr( 'href' );
+			if ( ! href || ! ( link.attr( 'rel' ) ?? '' ).toLowerCase().split( /\s+/ ).includes( 'stylesheet' ) ) continue;
+			let url: URL;
+			try { url = new URL( href, baseUrl ); } catch { continue; }
+			url.hash = '';
+			const key = await this.profileStylesheet( url.href, profile, stylesheets );
+			if ( key ) replacements.set( tag, tag.replace( /(\shref\s*=\s*)(?:"[^"]*"|'[^']*'|[^\s>]+)/i, ( _, prefix: string ) => `${ prefix }"${ key.replace( /&/g, '&amp;' ).replace( /"/g, '&quot;' ) }"` ) );
+		}
+		return replacements.size ? html.replace( /<link\b[^>]*>/gi, tag => replacements.get( tag ) ?? tag ) : html;
+	}
+
+	/** The profile-qualified key holding this page's bytes for `url`, when they differ from the stored response. */
+	private async profileStylesheet( url: string, profile: string, stylesheets: Map< string, Promise< Buffer | undefined > > ): Promise< string | undefined > {
+		const loaded = stylesheets.get( url );
+		if ( ! loaded ) return undefined;
+		await this.captures.get( url );
+		const stored = this.manifest.resources[ url ];
+		if ( ! stored || ( this.resourceOwners.get( url ) ?? DEFAULT_RESOURCE_PROFILE ) === profile ) return undefined;
+		const body = await loaded;
+		if ( ! body ) return undefined;
+		try {
+			if ( readFileSync( resolve( this.resourceDir, stored.path.replace( /^resources\//, '' ) ) ).equals( body ) ) return undefined;
+			const key = `${ url }#${ PROFILE_STYLESHEET_FRAGMENT }${ encodeURIComponent( profile ) }`;
+			if ( ! this.manifest.resources[ key ] ) {
+				const relativePath = resourcePath( new URL( url ), stored.contentType, this.origin );
+				const destination = resolve( this.resourceDir, relativePath );
+				if ( ! pathWithin( this.resourceDir, destination ) ) return undefined;
+				this.storeBody( key, body, relativePath, destination, stored.contentType, true );
+				this.captures.set( key, Promise.resolve() );
+			}
+			return key;
+		} catch {
+			// An unreadable or over-budget variant leaves the document on the stored response.
+			return undefined;
+		}
 	}
 
 	/** True when bytes for `url` are already stored. */
@@ -693,6 +775,8 @@ export class CapturedResourceStore {
 	getReplayableResponse( url: string, resourceType: string, requestHeaders: Record< string, string > = {}, report?: ( outcome: import('../source-request-governor.js').SourceReplayOutcome ) => void ): CapturedResourceReplay | undefined {
 		const miss = (reason: 'type_not_replayable' | 'no_entry' | 'vary_mismatch' | 'stale' | 'uncacheable') => { report?.(`miss:${reason}`); return undefined; };
 		if ( ! REPLAYABLE_RESOURCE_TYPES.has( resourceType ) && ! isPrefetch( resourceType, requestHeaders ) ) return miss('type_not_replayable');
+		// Image requests can retain an SVG fragment that response.url() omits.
+		if ( resourceType === 'image' ) url = url.split( '#', 1 )[ 0 ];
 		const resource = this.replayResources.get( url );
 		const metadata = this.replayMetadata.get( url );
 		if (!resource || !metadata) return miss(this.uncacheableReplayUrls.has(url) || this.browserLoadedResources.has(url) || this.manifest.resources[url] ? 'uncacheable' : 'no_entry');
@@ -976,7 +1060,7 @@ export class CapturedResourceStore {
 		} ) );
 	}
 
-	private capture( response: Response, deferImage = true ): Promise< void > {
+	private capture( response: Response, deferImage = true, profile?: string ): Promise< void > {
 		const request = response.request();
 		const resourceType = request.resourceType();
 		// Prefetches need browser-cache replay, not portable artifact ownership.
@@ -1037,11 +1121,13 @@ export class CapturedResourceStore {
 				this.manifest.omissions = this.manifest.omissions.filter( omission => omission.url !== url );
 			}
 			this.deferredImages.set( url, response );
-			return Promise.resolve();
+			resourceUrl.hash = '';
+			return this.captureReplayOnly( response, resourceUrl );
 		}
 		const existing = this.captures.get( url );
 		if ( existing ) return existing;
 
+		if ( profile && profile !== DEFAULT_RESOURCE_PROFILE ) this.resourceOwners.set( url, profile );
 		const capture = this.captureResponse( response, requestedUrl, resourceType ).catch(
 			( error: unknown ) => {
 				this.manifest.failures.push( {

@@ -1,7 +1,7 @@
-import { afterAll, beforeAll, describe, expect } from 'vitest';
+import { afterAll, beforeAll, describe, expect, vi } from 'vitest';
 import { it } from '../../../test/browser.js';
 import { createServer, type Server } from 'node:http';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
 import * as cheerio from 'cheerio';
@@ -11,7 +11,7 @@ import { CAPTURED_INTERACTIONS_SCHEMA, resolveInteractionComponents, type Compon
 import { routeComponents, type CapturedComponent } from './component-states.js';
 import { startStaticServer } from '../replicate/local-site/static-server.js';
 import { anchorChromeStates, readChromeLandmarks, retargetCurrentRoute, reuseSharedChrome, rebaseChromeState, selectorFields, summarizeSharedChrome } from './chrome-reuse.js';
-import type { CapturedDialogInteraction } from './interaction-capture.js';
+import { captureTriggeredDialogs, type CapturedDialogInteraction } from './interaction-capture.js';
 import type { ManifestEntry } from './manifest-queue.js';
 import type { ScreenshotResult } from './types.js';
 
@@ -158,6 +158,39 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'chrome copies und
 			await view.locator( 'header div' ).evaluate( node => node.removeAttribute( 'id' ) );
 			expect( ( await reuseSharedChrome( view, { status: 'captured', durationMs: 0, evidence } ) ).decision ).toMatchObject( { chromeReused: false } );
 		}
+	} );
+
+	it( 'carries the panel rules the probed page already held to a route that lacks them', async ( { newPage } ) => {
+		const view = await newPage( { viewport: { width: 1280, height: 800 } } );
+		// The drawer's rules ship with the page on the route it is probed on
+		// (a page that embeds the drawer's component) and arrive only when it
+		// opens on every other route.
+		const drawerRules = '.drawer { position: fixed; inset: 0px 0px 0px auto; width: 320px; background: rgb(1, 2, 3); }';
+		const fixture = ( preloaded: boolean ) => `<style>header{display:flex}${ preloaded ? drawerRules : '' }.unrelated{color:red}</style>
+<header><button id="cart" aria-haspopup="dialog">Cart</button></header><main>Body</main>
+<script>document.getElementById( 'cart' ).addEventListener( 'click', () => {
+	if ( ! [ ...document.styleSheets ].some( sheet => [ ...sheet.cssRules ].some( rule => rule.selectorText === '.drawer' ) ) ) {
+		const style = document.createElement( 'style' ); style.textContent = ${ JSON.stringify( drawerRules ) }; document.head.append( style );
+	}
+	const panel = document.createElement( 'div' ); panel.className = 'drawer'; panel.setAttribute( 'role', 'dialog' ); panel.textContent = 'Your cart';
+	document.body.append( panel );
+} ); document.addEventListener( 'keydown', event => { if ( event.key === 'Escape' ) document.querySelector( '.drawer' )?.remove(); } );</script>`;
+		await view.route( 'https://fixture/**', route => route.fulfill( { contentType: 'text/html', body: fixture( new URL( route.request().url() ).pathname === '/cart' ) } ) );
+		await view.goto( 'https://fixture/cart' );
+		const landmarks = await readChromeLandmarks( view );
+		const report = await captureTriggeredDialogs( view, 'https://fixture/cart' );
+		expect( report.states ).toMatchObject( [ { status: 'captured', trigger: { label: 'Cart' } } ] );
+		const evidence = { url: 'https://fixture/cart', landmarks, ...await anchorChromeStates( view, landmarks, report.states ) };
+
+		await view.goto( 'https://fixture/shop' );
+		const reuse = await reuseSharedChrome( view, { status: 'captured', durationMs: 0, evidence } );
+		expect( reuse.decision ).toMatchObject( { chromeReused: true, reusedStates: 1 } );
+		expect( reuse.states[ 0 ]?.dialog?.css ?? '' ).toContain( '.drawer' );
+		expect( reuse.states[ 0 ]?.dialog?.css ).not.toContain( '.unrelated' );
+
+		// Where the route already holds them, nothing is repeated.
+		await view.goto( 'https://fixture/cart' );
+		expect( ( await reuseSharedChrome( view, { status: 'captured', durationMs: 0, evidence } ) ).states[ 0 ]?.dialog?.css ?? '' ).not.toContain( '.drawer' );
 	} );
 } );
 
@@ -353,7 +386,7 @@ body{margin:0;font:16px Arial}header{display:flex;gap:16px;align-items:center;he
 .mobile-nav a{display:block}main{min-height:1400px}@media (min-width:768px){.toggle,.mobile-nav{display:none}}
 </style></head><body><header class="site-header"><a href="/">Brand</a><nav aria-label="Main"><a href="/">Home</a><a href="/privacy">Privacy</a></nav>
 <div class="actions"><button type="button" class="toggle" aria-expanded="false" aria-controls="mobile-nav"><span>Open menu</span></button></div></header>
-<main><h1>${ path || 'home' }</h1><p>Body copy for ${ path || 'home' }.</p></main><footer>Footer</footer><script>
+<main><h1>${ path || 'home' }</h1><p>Body copy for ${ path || 'home' }.</p></main><footer><p>Footer: our shared site information, contact details, accessibility statement and copyright notice for every visitor. Contact our team for assistance with orders, account settings, delivery questions and general enquiries. We welcome feedback about this website and our services. Read our policies for information about privacy, security and accessibility. Our office is open during normal business hours and our support team will respond as soon as possible.</p></footer><script>
 const header = document.querySelector('header'), toggle = document.querySelector('.toggle');
 toggle.addEventListener('click', () => {
 	const open = toggle.getAttribute('aria-expanded') !== 'true';
@@ -374,13 +407,13 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'shared chrome wit
 	beforeAll( async () => {
 		server = createServer( ( request, response ) => {
 			const path = new URL( request.url ?? '/', 'http://fixture' ).pathname.slice( 1 );
-			if ( ! [ '', 'privacy' ].includes( path ) ) {
+			if ( ! [ '', 'privacy', 'solo' ].includes( path ) ) {
 				response.statusCode = 404;
 				response.end( 'not found' );
 				return;
 			}
 			response.setHeader( 'content-type', 'text/html; charset=utf-8' );
-			response.end( mountedMenuPage( path ) );
+			response.end( path === 'solo' ? mountedMenuPage( path ).replaceAll( 'href="/"', 'href="/solo"' ).replaceAll( 'href="/privacy"', 'href="/solo"' ) : mountedMenuPage( path ) );
 		} );
 		await new Promise< void >( resolve => server.listen( 0, '127.0.0.1', resolve ) );
 		origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
@@ -399,6 +432,53 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'shared chrome wit
 		await new Promise< void >( resolve => server.close( () => resolve() ) );
 		rmSync( outputDir, { recursive: true, force: true } );
 	} );
+
+	// Two real captures (~30 s), sharing the eager fixture above.
+	it( 'does not probe a single-route frontier', async () => {
+		const dir = mkdtempSync( join( parent, 'chrome-solo-' ) );
+		const messages: string[] = [];
+		const stderr = vi.spyOn( process.stderr, 'write' ).mockImplementation( chunk => { messages.push( String( chunk ) ); return true; } );
+		try {
+			const captured = await captureScreenshots( {
+				urls: [ url( 'solo' ) ], primaryUrl: url( 'solo' ), outputDir: dir, linkedPages: {},
+				settleMs: 0, learnFluid: false, force: true,
+				viewports: [ { id: 'desktop', width: 1440, height: 900 } ], sharedChrome: true,
+			} );
+			expect( captured.captured ).toBe( 1 );
+			expect( messages.filter( message => message.startsWith( '[shared-chrome]' ) ) ).toEqual( [] );
+			expect( captured.sharedChrome ).toBeUndefined();
+		} finally {
+			stderr.mockRestore();
+			rmSync( dir, { recursive: true, force: true } );
+		}
+	}, 90_000 );
+
+	it( 'probes once after frontier admission and emits the same shared parts as eager capture', async () => {
+		const dir = mkdtempSync( join( parent, 'chrome-frontier-' ) );
+		const messages: string[] = [];
+		const stderr = vi.spyOn( process.stderr, 'write' ).mockImplementation( chunk => { messages.push( String( chunk ) ); return true; } );
+		try {
+			const captured = await captureScreenshots( {
+				urls: [ url( '' ) ], primaryUrl: url( '' ), outputDir: dir, linkedPages: {},
+				settleMs: 50, learnFluid: false, force: true, deviceMode: 'auto',
+			} );
+			expect( captured.captured ).toBe( 2 );
+			expect( messages.filter( message => message.startsWith( '[shared-chrome]' ) ) ).toHaveLength( 1 );
+			const manifest = JSON.parse( readFileSync( join( dir, 'screenshots', 'manifest.json' ), 'utf8' ) ).entries as Record< string, ManifestEntry >;
+			// Unlike eager capture, the entrypoint probed its own controls.
+			expect( manifest[ url( '' ) ]!.sharedChrome ).toBeUndefined();
+			expect( manifest[ url( 'privacy' ) ]!.sharedChrome ).toMatchObject( { chromeReused: true } );
+			expect( manifest[ url( 'privacy' ) ]!.interactions!.states.some( state => state.reusedFrom === url( '' ) && state.trigger.label === 'Open menu' ) ).toBe( true );
+			exportWebsiteCapture( { outputDir: dir, sourceUrl: url( '' ), platform: 'neutral', summary: {}, failures: [] } );
+			const parts = ( root: string ) => readdirSync( join( root, 'website', 'parts' ) ).sort().map( name => [ name, readFileSync( join( root, 'website', 'parts', name ), 'utf8' ) ] );
+			expect( parts( dir ) ).toEqual( parts( outputDir ) );
+			expect( parts( dir ).some( ( [ name ] ) => name!.startsWith( 'header-' ) ) ).toBe( true );
+			expect( parts( dir ).some( ( [ name ] ) => name!.startsWith( 'footer-' ) ) ).toBe( true );
+		} finally {
+			stderr.mockRestore();
+			rmSync( dir, { recursive: true, force: true } );
+		}
+	}, 180_000 );
 
 	it( 'stores shared components once while preserving every route component in order', () => {
 		const report = JSON.parse( readFileSync( join( outputDir, 'interaction-states.json' ), 'utf8' ) ) as {

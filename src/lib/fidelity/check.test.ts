@@ -165,6 +165,23 @@ describe( 'observePage typography', () => {
 	} );
 } );
 
+describe( 'observePage scroll probe', () => {
+	it.skipIf( skipBrowserTests )( 'returns a debounced scroll-state header to rest before handing the page back', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+		await page.setContent( `<!doctype html><style>
+			header { position:fixed; inset:0 0 auto 0; height:96px; background-color:rgb(0, 0, 255); transition:background-color 700ms; }
+			header.scrolled { background-color:rgb(255, 0, 0); }
+			main { height:4000px; }
+		</style><header>Studio</header><main><p>Work</p></main><script>
+			let timer;
+			addEventListener( 'scroll', () => { clearTimeout( timer ); timer = setTimeout( () => document.querySelector( 'header' ).classList.toggle( 'scrolled', scrollY > 50 ), 120 ); } );
+		</script>` );
+		await observePage( page, page.url(), 1440, 0, null, undefined, undefined, true );
+		expect( await page.evaluate( () => ( { y: scrollY, color: getComputedStyle( document.querySelector( 'header' )! ).backgroundColor } ) ) )
+			.toEqual( { y: 0, color: 'rgb(0, 0, 255)' } );
+	} );
+} );
+
 describe( 'externalRequestHost', () => {
 	it( 'ignores browser-local and non-network request schemes', () => {
 		expect( externalRequestHost( 'about:blank', 'http://127.0.0.1:3000' ) ).toBeNull();

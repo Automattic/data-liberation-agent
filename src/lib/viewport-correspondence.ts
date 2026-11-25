@@ -241,6 +241,33 @@ export function referenceOf( element: Element ): string {
 	return values.map( canonicalReference ).filter( Boolean ).join( '|' );
 }
 
+/** Rendered text of a subtree, whitespace-collapsed; inert containers say nothing. */
+function textContent( node: AnyNode ): string {
+	if ( node.type === 'text' ) return ( node as { data?: string } ).data ?? '';
+	if ( isElementNode( node ) && RECONCILE_SKIP.has( node.tagName ) ) return '';
+	return childNodes( node ).map( textContent ).join( ' ' );
+}
+
+/**
+ * Which capture rendered a paired link as a placeholder, or undefined.
+ *
+ * An `a` without `href` is a placeholder for where a link would otherwise be
+ * (HTML). Paired by identity with the same control carrying a destination, it
+ * is that control before its runtime filled it in (a widget hydrating after one
+ * capture serialized it), not a second destination: the linked rendering is
+ * the control at both widths. A placeholder that says something the linked
+ * rendering does not is different content and keeps its own identity.
+ */
+export function placeholderLinkSide( desktop: Element, mobile: Element ): 'desktop' | 'mobile' | undefined {
+	if ( desktop.tagName !== 'a' || mobile.tagName !== 'a' ) return undefined;
+	const linked = ( element: Element ) => element.attribs?.href !== undefined;
+	if ( linked( desktop ) === linked( mobile ) ) return undefined;
+	const [ placeholder, link ] = linked( desktop ) ? [ mobile, desktop ] : [ desktop, mobile ];
+	const words = ( element: Element ) => textContent( element ).replace( /\s+/g, ' ' ).trim();
+	if ( ! words( link ).includes( words( placeholder ) ) ) return undefined;
+	return placeholder === desktop ? 'desktop' : 'mobile';
+}
+
 /**
  * The content-identity key of an element: what it says (its own text), which
  * media it carries, or — for a link — where it goes and what it says. An

@@ -1,9 +1,98 @@
 import { describe, expect, it } from 'vitest';
-import { compareDerivedWithCapture, deriveMemberDocument, TEMPLATE_CLUSTERS_SCHEMA, writeTemplateClusters } from './template-clusters.js';
+import { compareDerivedWithCapture, deriveMemberDocument, runtimeMountSelector, TEMPLATE_CLUSTERS_SCHEMA, writeTemplateClusters } from './template-clusters.js';
 import { TEMPLATE_FINGERPRINT_VERSION, templateFingerprint } from './template-groups.js';
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+
+describe( 'adapter-declared runtime widget islands', () => {
+	const page = ( title: string, widget = 'Like', extra = '' ) => `<body><main id="content"><h1>${ title }</h1><aside id="widget" data-runtime-widget>${ widget }</aside>${ extra }</main></body>`;
+	const input = {
+		repServerHtml: page( 'First' ),
+		repProcessedHtml: page( 'First', '<button>Post not marked as liked</button>1 like.' ),
+		memberServerHtml: page( 'Second', 'Like', '<p>Member content</p>' ),
+		baseUrl: 'https://fixture.test/',
+	};
+	it( 'retains a hydrated island inside a replaced subtree', () => {
+		const result = deriveMemberDocument( { ...input, runtimeWidgetSelectors: [ '[data-runtime-widget]' ] } );
+		expect( result.ok ).toBe( true );
+		if ( ! result.ok ) return;
+		expect( result.html ).toContain( '<h1>Second</h1>' );
+		expect( result.html ).toContain( '<p>Member content</p>' );
+		expect( result.html ).toContain( '<button>Post not marked as liked</button>1 like.' );
+		expect( result.html ).not.toContain( 'blocks-engine-runtime-island' );
+	} );
+	it( 'keeps undeclared text changes strict', () => {
+		expect( deriveMemberDocument( input ) ).toMatchObject( { ok: false, gate: { code: 'slot_anchor_unmapped' } } );
+		expect( deriveMemberDocument( { ...input, runtimeWidgetSelectors: [ '.other-widget' ] } ) ).toMatchObject( { ok: false, gate: { code: 'slot_anchor_unmapped' } } );
+	} );
+	it( 'does not hide runtime rewrites outside a declared island', () => {
+		expect( deriveMemberDocument( { ...input, repProcessedHtml: input.repProcessedHtml.replace( '<h1>First</h1>', '<h1>Runtime rewrite</h1>' ), runtimeWidgetSelectors: [ '[data-runtime-widget]' ] } ) ).toMatchObject( { ok: false, gate: { code: 'slot_anchor_unmapped' } } );
+	} );
+	it( 'fails closed when a declared island cannot be mapped', () => {
+		expect( deriveMemberDocument( { ...input, repProcessedHtml: '<body><main id="content"><h1>First</h1></main></body>', runtimeWidgetSelectors: [ '[data-runtime-widget]' ] } ) ).toMatchObject( { ok: false, gate: { code: 'slot_anchor_unmapped' } } );
+	} );
+	it( 'does not exempt differing runtime images or counts from verification', () => {
+		const derived = page( 'Second', '<img src="/representative.jpg">13 likes' );
+		const real = page( 'Second', '<img src="/member.jpg">2 likes' );
+		expect( compareDerivedWithCapture( { derivedHtml: derived, realHtml: real, baseUrl: input.baseUrl } ) ).toMatchObject( { equal: false, checks: { images: false, text: false } } );
+	} );
+	it( 'restores nested islands and multiple siblings without markers', () => {
+		const server = ( title: string ) => `<body><main><h1>${ title }</h1><aside data-runtime-widget><span data-runtime-widget>Server</span></aside><aside data-runtime-widget>Server</aside></main></body>`;
+		const result = deriveMemberDocument( { repServerHtml: server( 'First' ), memberServerHtml: server( 'Second' ), repProcessedHtml: server( 'First' ).replaceAll( 'Server', 'Hydrated' ), baseUrl: input.baseUrl, runtimeWidgetSelectors: [ '[data-runtime-widget]' ] } );
+		expect( result.ok ).toBe( true );
+		if ( result.ok ) {
+			expect( result.html.match( /Hydrated/g ) ).toHaveLength( 2 );
+			expect( result.html ).not.toContain( 'blocks-engine-runtime-island' );
+		}
+	} );
+	it( 'restores islands even when there are no member slots', () => {
+		const result = deriveMemberDocument( { ...input, memberServerHtml: input.repServerHtml, runtimeWidgetSelectors: [ '[data-runtime-widget]' ] } );
+		expect( result.ok ).toBe( true );
+		if ( result.ok ) {
+			expect( result.html ).toContain( '<button>Post not marked as liked</button>1 like.' );
+			expect( result.html ).not.toContain( 'blocks-engine-runtime-island' );
+		}
+	} );
+} );
+
+describe( 'per-device server documents (#2152)', () => {
+	// The phone identity is served its own document: a phone-only bar shifts
+	// the content wrapper's children and the phone layout has its own classes,
+	// so desktop-pair anchors resolve neither by position nor by descriptor.
+	const desktop = ( title: string, extra = '' ) => `<html><head><title>${ title }</title></head><body><div id="wrapper"><main class="desktop-layout"><h1>${ title }</h1><aside data-widget>Server</aside>${ extra }</main></div></body></html>`;
+	const phone = ( title: string, extra = '' ) => `<html><head><title>${ title }</title></head><body><div id="wrapper"><nav class="phone-bar"><span>Menu</span><div><div><div><p>Deep</p></div></div></div></nav><main class="phone-layout"><h1>${ title }</h1><aside data-widget>Server</aside>${ extra }</main></div></body></html>`;
+	const base = { baseUrl: 'https://fixture.test/first', runtimeWidgetSelectors: [ '[data-widget]' ] };
+	// Only the representative's phone document shows an update line: the phone
+	// pair alone would not share a template key.
+	const updated = '<p class="updated"><span>Updated</span></p>';
+	const phonePair = { repServerHtml: phone( 'First', updated ), memberServerHtml: phone( 'Second' ), repProcessedHtml: phone( 'First', updated ).replace( 'Server', 'Hydrated' ) };
+
+	it( 'cannot map a phone capture through the desktop server pair', () => {
+		expect( deriveMemberDocument( { ...base, ...phonePair, repServerHtml: desktop( 'First' ), memberServerHtml: desktop( 'Second' ) } ) ).toMatchObject( { ok: false, gate: { code: 'slot_anchor_unmapped' } } );
+	} );
+
+	it( 'derives the phone document from the phone pair while the desktop pair decides identity', () => {
+		const result = deriveMemberDocument( { ...base, ...phonePair, clusterKeyDocuments: { repServerHtml: desktop( 'First' ), memberServerHtml: desktop( 'Second' ) } } );
+		expect( result.ok ).toBe( true );
+		if ( ! result.ok ) return;
+		expect( result.html ).toContain( '<h1>Second</h1>' );
+		expect( result.html ).toContain( 'Hydrated' );
+		expect( result.html ).toContain( 'phone-bar' );
+		expect( result.html ).not.toContain( 'Updated' );
+		expect( deriveMemberDocument( { ...base, ...phonePair } ) ).toMatchObject( { ok: false, gate: { code: 'cluster_key_mismatch' } } );
+	} );
+
+	it( 'keeps the cluster key gate on the identity pair', () => {
+		const otherTemplate = desktop( 'Second' ).replace( '<main class="desktop-layout">', '<main class="desktop-layout"><section><div><form><input name="q"></form></div></section>' );
+		expect( deriveMemberDocument( { ...base, ...phonePair, clusterKeyDocuments: { repServerHtml: desktop( 'First' ), memberServerHtml: otherTemplate } } ) ).toMatchObject( { ok: false, gate: { code: 'cluster_key_mismatch' } } );
+	} );
+
+	it( 'keeps undeclared differences in the phone pair strict', () => {
+		const rewritten = { ...phonePair, repProcessedHtml: phonePair.repProcessedHtml.replace( '<h1>First</h1>', '<h1>Runtime rewrite</h1>' ) };
+		expect( deriveMemberDocument( { ...base, ...rewritten, clusterKeyDocuments: { repServerHtml: desktop( 'First' ), memberServerHtml: desktop( 'Second' ) } } ) ).toMatchObject( { ok: false, gate: { code: 'slot_anchor_unmapped' } } );
+	} );
+} );
 
 it('ignores only adapter-declared runtime state classes in the comparison skeleton', () => {
 	const page = (state: string) => `<body><header class="site-title ${state}">Title</header><main><div class="content ${state}">Same member</div></main></body>`;
@@ -498,6 +587,74 @@ describe( 'slots anchor on element identity, not position (#784)', () => {
 		expect( result ).toMatchObject( { ok: false, gate: { code: 'slot_anchor_unmapped' } } );
 		if ( result.ok ) return;
 		expect( result.gate.reason ).toContain( 'has no matching anchor' );
+	} );
+} );
+
+describe( 'slots resolve through app roots capture unwrapped', () => {
+	// Portable scaffolding removes an inert single-child app root from the
+	// captured document; the server documents still carry it.
+	const server = ( root: string, title: string, words: string, mount = '' ) => `<html><head><title>${ title }</title></head><body><div id="${ root }"><div class="page"><header class="bar"><a href="/">Home</a></header><main class="post"><h1>${ title }</h1><p>${ words }</p>${ mount }</main></div></div><script id="page-data">{}</script></body></html>`;
+	const unwrapped = ( html: string, root: string ) => html.replace( `<div id="${ root }">`, '' ).replace( '</div></div><script', '</div><script' );
+
+	it( 'unwraps an app root whose unique id sits beside a repeated test id', () => {
+		const tagged = ( html: string ) => html.replace( '<div id="__next">', '<div id="__next" data-testid="region">' ).replace( '<main class="post">', '<main class="post"><i data-testid="region"></i>' );
+		const result = deriveMemberDocument( {
+			repServerHtml: tagged( server( '__next', 'First post', 'Original words' ) ),
+			repProcessedHtml: unwrapped( server( '__next', 'First post', 'Original words' ), '__next' ).replace( '<main class="post">', '<main class="post"><i></i>' ),
+			memberServerHtml: tagged( server( '__next', 'Second post', 'Member words' ) ),
+			baseUrl: BASE,
+		} );
+		expect( result.ok, JSON.stringify( result ) ).toBe( true );
+	} );
+
+	it.each( [ '__next', 'shell' ] )( 'derives a member under an unwrapped #%s', root => {
+		const result = deriveMemberDocument( {
+			repServerHtml: server( root, 'First post', 'Original words' ),
+			repProcessedHtml: unwrapped( server( root, 'First post', 'Original words' ), root ),
+			memberServerHtml: server( root, 'Second post', 'Member words' ),
+			baseUrl: BASE,
+		} );
+		expect( result.ok, JSON.stringify( result ) ).toBe( true );
+		if ( ! result.ok ) return;
+		expect( result.html ).toContain( '<main class="post"><h1>Second post</h1><p>Member words</p></main>' );
+		expect( result.html ).not.toContain( `id="${ root }"` );
+	} );
+
+	it( 'keeps wrappers whose repeated identity capture stripped on the slot path', () => {
+		const cards = ( first: string ) => `<html><head><title>Cards</title></head><body><main class="post"><div data-testid="card"><a class="link" href="${ first }">A</a></div><div data-testid="card"><a class="link" href="/old">B</a></div></main></body></html>`;
+		const result = deriveMemberDocument( {
+			repServerHtml: cards( '/old' ),
+			repProcessedHtml: cards( '/old' ).replace( / data-testid="card"/g, '' ),
+			memberServerHtml: cards( '/new' ),
+			baseUrl: BASE,
+		} );
+		expect( result.ok, JSON.stringify( result ) ).toBe( true );
+		if ( ! result.ok ) return;
+		expect( result.html ).toContain( '<div><a class="link" href="/new">A</a></div><div><a class="link" href="/old">B</a></div>' );
+	} );
+
+	it( 'still rejects rewritten server text under an unwrapped app root', () => {
+		const result = deriveMemberDocument( {
+			repServerHtml: server( '__next', 'First post', 'Original words' ),
+			repProcessedHtml: unwrapped( server( '__next', 'First post', 'Rewritten words' ), '__next' ),
+			memberServerHtml: server( '__next', 'Second post', 'Member words' ),
+			baseUrl: BASE,
+		} );
+		expect( result ).toMatchObject( { ok: false, gate: { code: 'slot_anchor_unmapped' } } );
+	} );
+
+	it( 'gates a runtime mount under an unwrapped app root on its server anchor', () => {
+		const repServerHtml = server( '__next', 'First post', 'Original words', '<x-recs data-id="1"></x-recs>' );
+		const result = deriveMemberDocument( {
+			repServerHtml,
+			repProcessedHtml: unwrapped( server( '__next', 'First post', 'Original words', '<x-recs data-id="1"><p>Recommendations</p></x-recs>' ), '__next' ),
+			memberServerHtml: server( '__next', 'Second post', 'Member words', '<x-recs data-id="2"></x-recs>' ),
+			baseUrl: BASE,
+		} );
+		expect( result ).toMatchObject( { ok: false, gate: { code: 'runtime_mount_member_keyed', runtimeAnchor: { attribute: 'id', value: '__next' } } } );
+		if ( result.ok || ! result.gate.runtimeAnchor ) return;
+		// The runtime render resolves this anchor in HTTP and live documents, which keep the app root.
+		expect( runtimeMountSelector( repServerHtml, result.gate.runtimeAnchor ) ).toBe( 'body > :nth-child(1) > :nth-child(1) > :nth-child(2) > :nth-child(3)' );
 	} );
 } );
 

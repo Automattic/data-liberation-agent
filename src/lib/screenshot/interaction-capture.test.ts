@@ -18,7 +18,7 @@ it.skipIf( skipBrowserTests )( 'replays a dropdown in its observed flow slot wit
 		.closed{background:transparent}.opened{background:rgba(2,6,23,.85)}
 		nav{height:64px}.panel{height:200px;display:flex;flex-direction:column}
 		</style><header id="header" class="closed" style="padding: 0px;"><nav><button id="toggle" aria-label="Toggle menu">Menu</button></nav><span id="tail"></span></header><main>Body</main>
-		<script>document.getElementById('toggle').addEventListener('click',()=>{
+		<script>document.getElementById('toggle').addEventListener('click',e=>{e.preventDefault();
 		const header=document.getElementById('header'),existing=document.getElementById('menu');
 		if(existing){existing.remove();header.className='closed';header.style.padding='0px';return;}
 		const panel=document.createElement('div');panel.id='menu';panel.className='panel';
@@ -64,7 +64,7 @@ it.skipIf( skipBrowserTests )( 'turns observed mobile client-routed tabs into na
 		<button id="resources" type="button">Resources</button><button id="contact" type="button">Contact</button>
 		<button id="action" type="button">Refresh</button>
 	</nav><button id="outside" type="button">Other action</button><main><h1>Home</h1></main>
-	<script>document.querySelectorAll('#bottom button:not(#action),#outside').forEach(button=>button.addEventListener('click',()=>{
+	<script>document.querySelectorAll('#bottom button:not(#action),#outside').forEach(button=>button.addEventListener('click',e=>{e.preventDefault();
 		const path=button.id==='home'?'/':'/'+button.id;history.pushState({},'',path);
 		document.querySelector('h1').textContent=button.textContent;
 	}));document.querySelector('#action').onclick=()=>document.body.dataset.refreshed='yes';</script></body></html>`;
@@ -114,6 +114,19 @@ it.skipIf( skipBrowserTests )( 'turns observed mobile client-routed tabs into na
 }, 30_000 );
 
 describe( 'captureTriggeredDialogs', () => {
+	it.skipIf( skipBrowserTests )( 'captures an opening dialog once its entrance animation has finished', async ({ newPage }) => {
+		const page = await newPage( { viewport: { width: 1200, height: 800 } } );
+		await page.setContent( `<!doctype html><style>@keyframes reveal{from{transform:translateX(100%)}to{transform:none}}
+			#drawer{position:fixed;inset:0 0 0 50%;background:#fff}#drawer[data-animation-state=enterActive]{animation:reveal .8s linear}</style>
+			<body><button id="open" aria-haspopup="dialog">Menu</button>
+			<div id="drawer" role="dialog" aria-modal="true" aria-label="Site navigation" hidden><a href="/a">A</a></div>
+			<script>const drawer = document.getElementById('drawer');
+				document.getElementById('open').onclick = () => { drawer.dataset.animationState = 'enterActive'; drawer.hidden = false; };
+				drawer.addEventListener('animationend', () => { drawer.dataset.animationState = 'enterDone'; });
+				document.addEventListener('keydown', e => { if (e.key === 'Escape') { drawer.hidden = true; delete drawer.dataset.animationState; } });</script></body>` );
+		const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+		expect( report.states.find( state => state.trigger.id === 'open' )?.dialog?.html ).toContain( 'data-animation-state="enterDone"' );
+	}, 30_000 );
 	it.skipIf( skipBrowserTests )( 'does not attribute autoplay slides to an unrelated dialog trigger', async ({ newPage }) => {
 		const page = await newPage();
 		{
@@ -1081,7 +1094,7 @@ describe( 'captureTriggeredDialogs', () => {
 							panel.innerHTML='<p>'+label+'</p><button aria-label="Close">Close</button>';
 							panel.querySelector('button').addEventListener('click',()=>panel.remove()); document.body.append(panel);
 						}
-						document.querySelector('#first').addEventListener('click',()=>{
+						document.querySelector('#first').addEventListener('click',e=>{e.preventDefault();
 							document.querySelector('#removed').remove();
 							const original=document.querySelector('#replaced'), replacement=original.cloneNode(true);
 							replacement.addEventListener('click',()=>window.replacementClicks++); original.replaceWith(replacement);
@@ -1291,7 +1304,7 @@ it.skipIf( skipBrowserTests )( 'reports a load-more listing as unsupported witho
 		await page.setContent( `<!doctype html><main><div role="list"><div role="listitem">One</div><div role="listitem" class="more" hidden>Two <a href="/two">Read more</a></div></div>
 		<button id="more">View more</button></main>
 		<script>window.resizes=0;addEventListener('resize',()=>window.resizes++);
-		document.getElementById('more').addEventListener('click',()=>{document.querySelector('.more').hidden=false;});</script>` );
+		document.getElementById('more').addEventListener('click',e=>{e.preventDefault();document.querySelector('.more').hidden=false;});</script>` );
 		const report = await captureTriggeredDialogs( page, 'https://example.test/' );
 		expect( report.states.find( item => item.trigger.id === 'more' ) ).toMatchObject( { status: 'unsupported', dialog: { role: 'listitem' } } );
 		// The resting-panel sweep resizes the viewport: evidence only a replayed surface uses.
@@ -1299,4 +1312,99 @@ it.skipIf( skipBrowserTests )( 'reports a load-more listing as unsupported witho
 	} finally {
 		await page.close();
 	}
+} );
+
+describe( 'root class evidence', () => {
+	// A cart that locks page scrolling while open, releasing the lock a few
+	// frames after its panel closes; a sign-in control whose modal (with the
+	// same lock) loads late after a non-navigating click, optionally taking the
+	// lock before its modal mounts (Escape has nothing to close until then).
+	const source = ( { lateSignIn, releaseMs, lockFirst = false }: { lateSignIn: boolean; releaseMs: number; lockFirst?: boolean } ) => `<!doctype html><style>.locked{overflow:hidden}</style><body class="site">
+		<header><a id="cart" href="#" role="button" aria-haspopup="dialog" aria-label="Cart">Cart</a>${ lateSignIn ? '<button id="sign-in" type="button">Sign in</button>' : '' }</header><main>Body</main>
+		<script>
+		const open = id => { if ( document.getElementById( id ) ) return; const panel = document.createElement( 'div' ); panel.id = id; panel.setAttribute( 'role', 'dialog' ); panel.setAttribute( 'aria-modal', 'true' );
+			panel.style.cssText = 'position:fixed;inset:0;background:white'; panel.innerHTML = '<p>' + id + ' panel</p>'; document.body.append( panel ); document.body.classList.add( 'locked' ); };
+		const close = () => { const panels = document.querySelectorAll( '[role=dialog]' ); if ( ! panels.length ) return; panels.forEach( panel => panel.remove() ); setTimeout( () => document.body.classList.remove( 'locked' ), ${ releaseMs } ); };
+		document.getElementById( 'cart' ).addEventListener( 'click', event => { event.preventDefault(); setTimeout( () => open( 'cart-panel' ), 50 ); } );
+		document.getElementById( 'sign-in' )?.addEventListener( 'click', () => { ${ lockFirst ? "document.body.classList.add( 'locked' );" : '' } setTimeout( () => open( 'sign-in-panel' ), ${ lockFirst ? 3_000 : 700 } ); } );
+		document.addEventListener( 'keydown', event => { if ( event.key === 'Escape' ) close(); } );
+		</script></body>`;
+
+	it.skipIf( skipBrowserTests )( 'records the root classes a dialog adds when its runtime releases them after the panel closes', async ( { newPage } ) => {
+		const page = await newPage( { viewport: { width: 1280, height: 800 } } );
+		await page.setContent( source( { lateSignIn: false, releaseMs: 400 } ) );
+		const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+		const cart = report.states.find( state => state.trigger.label === 'Cart' );
+		expect( cart?.status ).toBe( 'captured' );
+		expect( cart?.dialog?.rootClassState ).toEqual( [ { root: 'body', removed: [], added: [ 'locked' ] } ] );
+	}, 30_000 );
+
+	it.skipIf( skipBrowserTests )( 'measures a dialog\'s root classes from the resting page when an earlier probe left a late modal open', async ( { newPage } ) => {
+		const page = await newPage( { viewport: { width: 1280, height: 800 } } );
+		await page.route( 'https://late-modal.test/**', route => route.fulfill( { contentType: 'text/html', body: source( { lateSignIn: true, releaseMs: 0 } ) } ) );
+		await page.goto( 'https://late-modal.test/' );
+		const report = await captureTriggeredDialogs( page, 'https://late-modal.test/' );
+		const cart = report.states.find( state => state.trigger.label === 'Cart' );
+		expect( cart?.status ).toBe( 'captured' );
+		expect( cart?.dialog?.rootClassState ).toEqual( [ { root: 'body', removed: [], added: [ 'locked' ] } ] );
+	}, 30_000 );
+
+	it.skipIf( skipBrowserTests )( 'measures from the resting page when a late modal locks the page before it mounts', async ( { newPage } ) => {
+		const page = await newPage( { viewport: { width: 1280, height: 800 } } );
+		await page.route( 'https://late-modal.test/**', route => route.fulfill( { contentType: 'text/html', body: source( { lateSignIn: true, releaseMs: 0, lockFirst: true } ) } ) );
+		await page.goto( 'https://late-modal.test/' );
+		const report = await captureTriggeredDialogs( page, 'https://late-modal.test/' );
+		const cart = report.states.find( state => state.trigger.label === 'Cart' );
+		expect( cart?.status ).toBe( 'captured' );
+		expect( cart?.dialog?.rootClassState ).toEqual( [ { root: 'body', removed: [], added: [ 'locked' ] } ] );
+	}, 30_000 );
+
+	// A runtime that counts nothing: one shared lock class, which any surface's
+	// close releases. A sign-in control takes it and never mounts its surface
+	// (its bootstrap request refused), so Escape has nothing to dismiss.
+	it.skipIf( skipBrowserTests )( 'attributes a held lock to the dialog whose close releases it', async ( { newPage } ) => {
+		const page = await newPage( { viewport: { width: 1280, height: 800 } } );
+		await page.route( 'https://orphan-lock.test/**', route => route.fulfill( { contentType: 'text/html', body: `<!doctype html><style>.locked{overflow:hidden}</style><body class="site">
+			<header><a id="cart" href="#" role="button" aria-haspopup="dialog" aria-label="Cart">Cart</a><button id="sign-in" type="button">Sign in</button></header><main>Body</main>
+			<script>
+			document.getElementById( 'sign-in' ).addEventListener( 'click', () => document.body.classList.add( 'locked' ) );
+			document.getElementById( 'cart' ).addEventListener( 'click', event => { event.preventDefault(); setTimeout( () => {
+				const panel = document.createElement( 'div' ); panel.id = 'cart-panel'; panel.setAttribute( 'role', 'dialog' ); panel.setAttribute( 'aria-modal', 'true' );
+				panel.style.cssText = 'position:fixed;inset:0;background:white'; panel.innerHTML = '<p>Cart panel</p>'; document.body.append( panel ); document.body.classList.add( 'locked' );
+			}, 50 ); } );
+			document.addEventListener( 'keydown', event => { if ( event.key !== 'Escape' ) return; const panel = document.getElementById( 'cart-panel' ); if ( ! panel ) return; panel.remove(); setTimeout( () => document.body.classList.remove( 'locked' ), 100 ); } );
+			</script></body>` } ) );
+		await page.goto( 'https://orphan-lock.test/' );
+		const report = await captureTriggeredDialogs( page, 'https://orphan-lock.test/' );
+		const cart = report.states.find( state => state.trigger.label === 'Cart' );
+		expect( cart?.status ).toBe( 'captured' );
+		expect( cart?.dialog?.rootClassState ).toEqual( [ { root: 'body', removed: [], added: [ 'locked' ] } ] );
+	}, 40_000 );
+} );
+
+describe( 'lazily loaded panels', () => {
+	// A panel whose code the runtime fetches on first activation mounts only
+	// once that code arrives; a slow chunk must not read as a trigger that
+	// opens nothing.
+	it.skipIf( skipBrowserTests )( 'waits for a panel whose code its first activation fetches', async ( { newPage } ) => {
+		const page = await newPage( { viewport: { width: 1280, height: 800 } } );
+		await page.route( 'https://lazy-panel.test/**', async route => {
+			const path = new URL( route.request().url() ).pathname;
+			if ( path === '/cart-controller.js' ) {
+				await new Promise( resolve => setTimeout( resolve, 1_500 ) );
+				return route.fulfill( { contentType: 'application/javascript', headers: { 'cache-control': 'no-store' }, body: `const s=document.createElement('script');s.src='/cart-view.js';document.head.append(s);` } );
+			}
+			if ( path === '/cart-view.js' ) {
+				await new Promise( resolve => setTimeout( resolve, 1_500 ) );
+				return route.fulfill( { contentType: 'application/javascript', headers: { 'cache-control': 'no-store' }, body: `const d=document.createElement('div');d.id='cart';d.setAttribute('role','dialog');d.setAttribute('aria-label','Cart');d.style.cssText='position:fixed;inset:0 0 0 auto;width:320px;background:#fff';d.innerHTML='<p>Your cart is empty</p><button id="close-cart" aria-label="Close">x</button>';d.querySelector('button').onclick=()=>d.remove();document.body.append(d);` } );
+			}
+			return route.fulfill( { contentType: 'text/html', body: `<!doctype html><body><header><a id="cart-button" role="button" href="/cart" aria-label="Cart">Cart</a></header><main>Body</main>
+			<script>document.getElementById('cart-button').addEventListener('click',e=>{e.preventDefault();const s=document.createElement('script');s.src='/cart-controller.js';document.head.append(s);});</script></body>` } );
+		} );
+		await page.goto( 'https://lazy-panel.test/' );
+		const report = await captureTriggeredDialogs( page, 'https://lazy-panel.test/' );
+		const state = report.states.find( item => item.trigger.id === 'cart-button' );
+		expect( state?.status ).toBe( 'captured' );
+		expect( state?.dialog ).toMatchObject( { role: 'dialog', ariaLabel: 'Cart' } );
+	}, 30_000 );
 } );

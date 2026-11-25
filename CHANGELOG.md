@@ -15,6 +15,293 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.41.4] - 2026-11-24
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- don't report origin-wide diagnostics as the cause of a missing homepage
+- bound the viewport class sweep and reject repeated-sibling toggles as one contract
+- paint async-decoded images in full-page evidence
+
+## [0.41.3] - 2026-11-23
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- keep inline image payloads out of semantic evidence and omit oversized pages instead of failing
+
+## [0.41.2] - 2026-11-23
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- admit plain routes by their measured working set without a reference route
+- visual parity: pixel_region:page
+
+## [0.41.1] - 2026-11-23
+
+### Changed
+- regenerate plugin bundles
+- keep fragment links on their route when the captured base document lacks the target
+
+### Fixed
+- learn width-driven transforms that scroll-linked parallax also rewrites
+
+## [0.41.0] - 2026-11-23
+
+### Added
+- add Ameba Ownd platform adapter
+
+### Changed
+- regenerate plugin bundles
+
+## [0.40.38] - 2026-11-23
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- keep pages a nonce sibling aliases
+
+## [0.40.37] - 2026-11-23
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- map slots past unwrapped app roots
+
+## [0.40.36] - 2026-11-23
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- release successor admission after entrypoint link observation
+
+## [0.40.35] - 2026-11-23
+
+### Changed
+- regenerate plugin bundles
+- Stamp viewport entrances in the serializing task, under the motion hold
+- Capture dialogs once their entrance animation has finished
+
+## [0.40.34] - 2026-11-23
+
+### Changed
+- regenerate plugin bundles
+- Keep component states only an earlier profile pass reached
+
+## [0.40.33] - 2026-11-23
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- name reused dialog markup after the page instance that holds it
+
+## [0.40.32] - 2026-11-23
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- wait for a panel whose code its first activation fetches
+
+## [0.40.31] - 2026-11-23
+
+### Changed
+- regenerate plugin bundles
+- index each document once instead of a selector scan per pair
+
+## [0.40.30] - 2026-11-23
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- recognize blurred placeholders of cropped images
+
+## [0.40.29] - 2026-11-23
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- deferral derives members under the post-capture contract
+- ignore panel byte counts when comparing interactions
+
+## [0.40.28] - 2026-11-23
+
+### Changed
+- regenerate plugin bundles
+- Project interaction states onto template-derived members
+
+### Fixed
+- activate open-disclosure and tab controls with the shared trigger budget
+
+## [0.40.27] - 2026-11-23
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- keep light-render verification for template clusters with interactive seeds
+
+## [0.40.26] - 2026-11-23
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- collapse a route's two builds of one stylesheet and two precisions of one style
+- carry a reused panel's page-held rules to routes that lack them
+- measure dialog root classes from the resting page
+- match shared chrome before a route's own probes can exhaust the budget
+
+## [0.40.25] - 2026-11-23
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- recover from a transient source throttle instead of pacing for the rest of the capture
+
+## [0.40.24] - 2026-11-22
+
+### Changed
+- regenerate plugin bundles
+- Ignore Wix image rendition size when verifying template members
+
+## [0.40.23] - 2026-11-22
+
+### Changed
+- regenerate plugin bundles
+- sweep dual phone and middle documents only across their served width band
+
+### Fixed
+- derive device-profile documents from their own server pair
+- refill grouped route slots without wave barriers
+- memoize rejected viewport class toggles across routes
+- warm replay cache for deferred browser images
+- detect canonical path aliases before frontier capture
+
+## [0.40.22] - 2026-11-22
+
+### Changed
+- regenerate plugin bundles
+- derive a page document's instance names once
+- send only box-tree topology into each resized observation
+
+## [0.40.21] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+- batch consecutive dangling CSS url rewrites into one pass
+
+### Fixed
+- canonicalize hyphen-prefixed instance references
+
+## [0.40.20] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+- settle one-sided cross-width motion candidates without the confirm window
+
+## [0.40.19] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+- index ids when routing phone document fragments
+- Capture shared site chrome consistently across routes
+
+## [0.40.18] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+- observe slot runtime in linear time
+
+## [0.40.17] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+- Keep the box-tree node id on rebuilt visual iframes
+
+## [0.40.16] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- pair a placeholder link with its linked rendering across viewports
+
+## [0.40.15] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- canonicalize instance ids before linking capture stylesheets
+
+## [0.40.14] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+- Capture probes shared chrome only once a second route will reuse it
+- Wix discovery reads navigation and site name from the entry document
+
+## [0.40.13] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+- Behavior discovery observes the time counterfactual concurrently
+- Site preview waits only for images inside its viewport
+- Wix discovery: do not retry a definitive sitemap client error
+- Compare freezes a pending deferred reference before comparing
+
+## [0.40.12] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- retain normalized box-tree topology across viewports
+
+## [0.40.11] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- list google-map-rules capture attribute
+
+## [0.40.10] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- restore settled top pose after observePage scroll probes
+- skip capture-owned script/style elements in box-tree walks
+
+## [0.40.9] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+- allow capture diagnostics alongside discovery findings
+
+## [0.40.8] - 2026-11-21
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- check deferral against the ranked verification member
+
 ## [0.40.7] - 2026-11-21
 
 ### Changed

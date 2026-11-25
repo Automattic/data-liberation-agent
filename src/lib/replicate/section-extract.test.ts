@@ -8,6 +8,7 @@ import {
   filterIconCandidate,
   isIconFontFamily,
   rewriteThroughMediaMap,
+  sectionImageSource,
   buildSectionForms,
   MAX_SVG_MARKUP_BYTES,
   MIN_ICON_PX,
@@ -401,6 +402,20 @@ describe('rewriteThroughMediaMap', () => {
   it('leaves genuinely-unmatched URLs untouched (so validate can still flag real leaks)', () => {
     const other = 'https://cdn.shopify.com/s/files/1/other-image.png?v=1';
     expect(rewriteThroughMediaMap(other, map)).toBe(other);
+  });
+});
+
+describe('sectionImageSource', () => {
+  it('records an inline data: image by media type instead of copying its payload (#2244)', () => {
+    const payload = `data:image/png;base64,${'A'.repeat(400_000)}`;
+    expect(sectionImageSource(payload, {})).toEqual({ url: '', sourceUrl: '', inlineMediaType: 'image/png' });
+    // The browser bounds cell sources to 400 characters; the header still parses.
+    expect(sectionImageSource(payload.slice(0, 400), {})).toEqual({ url: '', sourceUrl: '', inlineMediaType: 'image/png' });
+  });
+
+  it('keeps network sources and their media-map rewrite', () => {
+    const src = 'https://cdn.example.com/a.jpg';
+    expect(sectionImageSource(src, { [src]: '/media/a.jpg' })).toEqual({ url: '/media/a.jpg', sourceUrl: src });
   });
 });
 

@@ -5,6 +5,7 @@ import { MAX_SOURCE_EVIDENCE_SCRIPTS, renderSourceData, sourceEvidenceScript, ty
 import { isSourcePromotion } from './source-cleanup.js';
 import { portableFormAction } from './url/form-action.js';
 import { portableVisualIframeWidth } from './visual-iframe-geometry.js';
+import { NODE_ID_ATTRIBUTE } from './screenshot/box-tree.js';
 
 /** Captured page HTML preparation shared by route collection and export rendering. */
 const MAX_DECLARATIVE_FORM_EMBEDS = 32;
@@ -21,7 +22,9 @@ const VISUAL_IFRAME_EVIDENCE_ATTRIBUTES = {
 	height: 'data-blocks-engine-capture-visual-iframe-height',
 };
 
+// The node id binds the frame's captured box, the evidence its geometry is rebuilt from.
 const VISUAL_IFRAME_ATTRIBUTES = new Set( [
+	NODE_ID_ATTRIBUTE,
 	'allow',
 	'allowfullscreen',
 	'class',
@@ -126,8 +129,10 @@ export function renderedHtml( html: string ): string {
 		const node = $( element );
 		const rendered = node.clone();
 		rendered.find( 'script,style,noscript' ).remove();
+		// Inline SVG is drawn content: icon rows (payment marks, badges) carry
+		// no text yet render in the source.
 		if (
-			rendered.find( 'img,video,audio,iframe,form,input,button,a[href]' ).length > 0 ||
+			rendered.find( 'img,svg,video,audio,iframe,form,input,button,a[href]' ).length > 0 ||
 			rendered.text().trim() !== ''
 		)
 			return;

@@ -61,6 +61,34 @@ describe( 'runtime-written stylesheet offsets', () => {
 		} finally { await context.close(); }
 	}, 30_000 );
 
+	it( 'learns a width-driven scale that a scroll-linked parallax also rewrites', async ({ newContext }) => {
+		// blocks-engine#7374: the hero scene's resting scale depends on the width,
+		// and the scroll handler parallaxes it. Capture's own lazy-load sweep
+		// scrolls the page, which must not read as time-driven motion.
+		const context = await newContext( { viewport: { width: 1440, height: 900 } } );
+		await context.addInitScript( observeRuntimeStyleWrites );
+		const page = await context.newPage();
+		try {
+			await page.goto( 'data:text/html,' + encodeURIComponent( `<style>body{margin:0}#scene{height:600px}#tail{height:4000px}</style>
+				<div id="scene" style="transform-origin:66% 48%;transform:translate3d(0px,0px,0px) scale(1.025)"></div><div id="tail"></div><script>
+				const scene = document.getElementById('scene');
+				const paint = () => {
+					const base = matchMedia('(max-width:780px)').matches ? 1.035 : 1.025, p = Math.min(1, scrollY / 600);
+					scene.style.transform = 'translate3d(0px,' + p * 15 + 'px,0px) scale(' + (base + p * .065) + ')';
+				};
+				addEventListener('scroll', paint, { passive: true }); addEventListener('resize', paint); paint();
+				</script>` ) );
+			await learnAndApplyFluidGeometry( page, { widths: [ 390, 768, 775, 783, 1024, 1440 ], settleMs: 30 } );
+			expect( await page.locator( '#scene' ).getAttribute( 'data-blocks-engine-capture-fluid-segment' ) ).not.toBeNull();
+			await page.locator( 'script' ).evaluateAll( nodes => nodes.forEach( node => node.remove() ) );
+			for ( const [ width, scale ] of [ [ 768, 1.035 ], [ 1440, 1.025 ] ] as const ) {
+				await page.setViewportSize( { width, height: 900 } );
+				const matrix = await page.locator( '#scene' ).evaluate( node => new DOMMatrix( getComputedStyle( node ).transform ).a );
+				expect( matrix, `scale at ${ width }px` ).toBeCloseTo( scale, 3 );
+			}
+		} finally { await context.close(); }
+	}, 30_000 );
+
 	it( 'keeps canvas offsets below the capture width instead of freezing the capture width sheet', async ({ newPage }) => {
 		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 		const reference = await newPage();

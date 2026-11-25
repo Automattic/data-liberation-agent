@@ -3,7 +3,7 @@ import type { SafeFetchResult } from './media-fetch/safe-fetch.js';
 import {
 	canonicalLinkHref,
 	probeCanonicalRouteAliases,
-	queryOnlyAliasCandidates,
+	canonicalAliasCandidates,
 	queryOnlyCanonicalTarget,
 } from './route-aliases.js';
 
@@ -30,8 +30,8 @@ describe( 'canonical route-alias candidates', () => {
 			'https://fixture.test/challenge-page/12', // base of a pair: not a candidate (no query)
 			'https://fixture.test/challenge-page/12?programId=12', // candidate
 		];
-		expect( queryOnlyAliasCandidates( urls ) ).toEqual( [ 'https://fixture.test/challenge-page/12?programId=12' ] );
-		const pair = queryOnlyAliasCandidates( [ 'https://fixture.test/articles/', 'https://fixture.test/articles/?lang=fr' ] );
+		expect( canonicalAliasCandidates( urls ) ).toEqual( [ 'https://fixture.test/challenge-page/12?programId=12' ] );
+		const pair = canonicalAliasCandidates( [ 'https://fixture.test/articles/', 'https://fixture.test/articles/?lang=fr' ] );
 		expect( pair ).toEqual( [ 'https://fixture.test/articles/?lang=fr' ] );
 	} );
 } );

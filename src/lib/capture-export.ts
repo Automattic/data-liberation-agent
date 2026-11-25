@@ -28,6 +28,7 @@ import { materializePortableMedia } from './portable-media.js';
 import { omitDegenerateReplacements, preparePortableReplacements, preparePortableUrlResolver } from './portable-references.js';
 import { portableAssetUrl } from './portable-assets.js';
 import { materializePortableResources } from './portable-resources.js';
+import { projectWidthGatedFontFaces } from './width-gated-font-faces.js';
 import { assetExceedsFileLimit, DEFAULT_MAX_FILE_BYTES, validateMaxFileBytes } from './export-file-limit.js';
 import { assetExceedsTotalBudget, emptyExportBudgetExclusions, planExportBudget, redundantRenditionDropped, resolveExportTotalBudget, type DroppableAsset, type ExportBudgetExclusions, type ExportTotalBudget } from './export-total-budget.js';
 import { collectAssetEvidenceReferences, writeCaptureEvidence, writeSemanticEvidence, type SemanticEvidencePage } from './capture-export-evidence.js';
@@ -336,9 +337,9 @@ function buildExportCapture(
 	// may spend all of it, and the export total budget still bounds the site.
 	const portableMediaTotalBytesLimit = Math.max(
 		0,
-		Math.floor( options.limits?.portableMediaTotalBytes ?? (
+		Math.min( Math.floor( options.limits?.portableMediaTotalBytes ?? (
 			options.limits?.maxTotalBytes !== undefined ? budget.maxTotalBytes - budget.reservedBytes : MAX_PORTABLE_MEDIA_TOTAL_BYTES
-		) )
+		) ), exclusions.mediaBytes ?? Infinity )
 	);
 	validateMaxFileBytes( options.limits?.maxFileBytes );
 	const maxFileBytes = options.limits?.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
@@ -379,7 +380,7 @@ function buildExportCapture(
 		writeFileSync( claimed.htmlPath, appendSourceData( readFileSync( claimed.htmlPath, 'utf8' ), sourceData ) );
 	}
 	routeCaptureDiagnostics.push( ...missingRedirectTargets );
-	if ( ! httpInput ) writeSemanticEvidence( stageDir, semanticEvidencePages( outputDir, retainedEntries, routePathOf ) );
+	if ( ! httpInput ) routeCaptureDiagnostics.push( ...writeSemanticEvidence( stageDir, semanticEvidencePages( outputDir, retainedEntries, routePathOf ) ) );
 	const mediaStubs = MediaStubStore.load( outputDir );
 	const assetReferenceLocations = collectAssetEvidenceReferences(
 		retainedEntries,
@@ -455,6 +456,11 @@ function buildExportCapture(
 	}
 	assets.push( ...resourceStage.assets );
 	const { resourceReplacements, unresolvedDependencies, rejectedReplacementKeys } = resourceStage;
+	// Canonicalize each complete route before styles leave its document. Linked
+	// sheets are content-addressed and may be shared; never rewrite them in place.
+	if ( options.canonicalizeHtml ) for ( const entry of retainedEntries ) {
+		writeFileSync( entry.htmlPath, options.canonicalizeHtml( readFileSync( entry.htmlPath, 'utf8' ) ) );
+	}
 	const stylesheetStage = materializeSharedStylesheets( {
 		entries: retainedEntries, websiteDir, sourceUrl: options.sourceUrl,
 		mediaReplacements, resourceReplacements, rejectedReplacementKeys,
@@ -464,10 +470,12 @@ function buildExportCapture(
 	const replaceResources = preparePortableReplacements( resourceReplacements, rejectedReplacementKeys );
 	const portableMediaReplacements = omitDegenerateReplacements( mediaReplacements, rejectedReplacementKeys );
 
-	const { routes, sourceRouteLinks, portableServedPaths, unresolvedAnchors, boundaryRoutes, capturedRouteKeys, absentRoutes, absentRouteKeys, omittedRouteKeys, resourceInputKeys, verifiedRouteObservations } = collectRouteLinks( { retainedEntries, routePathOf, structuredContent: options.structuredContent, sourceUrl: options.sourceUrl, canonicalRouteAliases, mediaReplacements, resourceReplacements, downloadedMedia: mediaStubs.list().flatMap( ( [ url, stub ] ) => stub.status === 'success' ? [ url ] : [] ), stylesheetServedPaths: stylesheetStage.servedPaths, entries: capture.entries, routeCaptureDiagnostics, outputDir, discoveryDiagnostics: options.discoveryDiagnostics, unresolvedDependencies } );
-	const rendered = renderRoutePages( { canonicalizeHtml: options.canonicalizeHtml, retainedEntries, websiteDir, resourceReplacements, portableUrlByFamily, mixedSrcsetReferences, portableMediaReplacements, replaceResources, replaceMedia, mediaMetadataPathsBySource: mediaStage.metadataPathsBySource, portablePathsBySource, routePathOf, capturedRouteKeys, absentRouteKeys, omittedRouteKeys, resourceInputKeys, routeScope: options.routeScope, boundaryRoutes, verifiedRouteObservations, sourceRouteLinks, portableServedPaths } );
+	const { routes, sourceRouteLinks, portableServedPaths, unresolvedAnchors, boundaryRoutes, capturedRouteKeys, absentRoutes, absentRouteKeys, omittedRouteKeys, resourceInputKeys, verifiedRouteObservations } = collectRouteLinks( { retainedEntries, routePathOf, structuredContent: options.structuredContent, sourceUrl: options.sourceUrl, canonicalRouteAliases, mediaReplacements, resourceReplacements, downloadedMedia: mediaStubs.list().flatMap( ( [ url, stub ] ) => stub.status === 'success' ? [ url ] : [] ), stylesheetServedPaths: stylesheetStage.servedPaths, entries: capture.entries, routeCaptureDiagnostics, outputDir, discoveryDiagnostics: options.discoveryDiagnostics, unresolvedDependencies, preCaptureAliases: options.canonicalAliases } );
+	const rendered = renderRoutePages( { retainedEntries, websiteDir, resourceReplacements, portableUrlByFamily, mixedSrcsetReferences, portableMediaReplacements, replaceResources, replaceMedia, mediaMetadataPathsBySource: mediaStage.metadataPathsBySource, portablePathsBySource, routePathOf, capturedRouteKeys, absentRouteKeys, omittedRouteKeys, resourceInputKeys, routeScope: options.routeScope, boundaryRoutes, verifiedRouteObservations, sourceRouteLinks, portableServedPaths } );
 	unresolvedAnchors.push( ...rendered.unresolvedAnchors );
 	routeCaptureDiagnostics.push( ...rendered.diagnostics );
+	// Variant face sets stay selectable by width once a consumer drops the import gate.
+	projectWidthGatedFontFaces( websiteDir, routes.map( route => join( websiteDir, route.path.replace( /^website\//, '' ) ) ) );
 	const { inventory, diagnostics: projectionDiagnostics } = projectPortableWebsite( { websiteDir, stageDir, sourceUrl: options.sourceUrl, responsiveIdentities: rendered.responsiveIdentities, responsiveBodyClassProjections, collapsedBodyClassProjections, sourceHashesByPortablePath: resourceStage.sourceHashesByPortablePath, retainedEntries, routePathOf, interactionPages, scrollStatesPages, structuredContent: options.structuredContent, routes, portableRedirects, productMediaPaths: portablePathsBySource } );
 	routeCaptureDiagnostics.push( ...projectionDiagnostics );
 	exportPublicationBoundary( EXPORT_PUBLICATION_BOUNDARIES.afterHtml );
@@ -521,6 +529,7 @@ function buildExportCapture(
 	// Media and page resources are the assets export can leave out; generated
 	// stylesheets only shrink with the routes that need them.
 	const droppable = new Map< string, string[] >();
+	const plannedMedia = new Set( mediaAssetPaths );
 	const droppablePaths = new Set( [ ...mediaAssetPaths, ...resourceStage.assets.map( asset => asset.path ) ] );
 	for ( const [ sourceUrl, path ] of portablePathsBySource ) {
 		if ( droppablePaths.has( path ) ) droppable.set( path, [ ...( droppable.get( path ) ?? [] ), sourceUrl ] );
@@ -530,6 +539,6 @@ function buildExportCapture(
 		inventory,
 		entrypointPath: routePathOf( entrypointUrl ).replace( /\\/g, '/' ),
 		routes: routes.map( route => ( { url: route.url, path: websiteRelative( route.path ) } ) ),
-		assets: [ ...droppable ].map( ( [ path, sourceUrls ] ) => ( { path: websiteRelative( path ), sourceUrls: sourceUrls.sort() } ) ).sort( ( a, b ) => ( a.path < b.path ? -1 : a.path > b.path ? 1 : 0 ) ),
+		assets: [ ...droppable ].map( ( [ path, sourceUrls ] ) => ( { path: websiteRelative( path ), sourceUrls: sourceUrls.sort(), ...( plannedMedia.has( path ) ? { media: true } : {} ) } ) ).sort( ( a, b ) => ( a.path < b.path ? -1 : a.path > b.path ? 1 : 0 ) ),
 	};
 }

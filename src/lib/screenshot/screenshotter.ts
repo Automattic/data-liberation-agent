@@ -61,7 +61,7 @@ import { stateChangingAction } from '../url/action-url.js';
 import { normalizedUrl, documentRequestUrl } from '../url/route-key.js';
 import { guardPageErrors, PAGE_ERROR_STORM } from './page-error-guard.js';
 import { defaultViewports, SCREENSHOT_DEVICE_SCALE_FACTOR, type CaptureLogSink, type ScreenshotOpts, type ScreenshotResult, type Viewport } from './types.js';
-import { RouteDeviceEvidence, summarizeRouteDecisions, type DeviceModeDecision, type RouteDeviceDecision, MIDDLE_PROFILE_ID, middleLayoutSampleWidth } from './device-mode.js';
+import { RouteDeviceEvidence, summarizeRouteDecisions, type DeviceModeDecision, type RouteDeviceDecision, MIDDLE_PROFILE_ID, middleLayoutSampleWidth, servedWidthRange } from './device-mode.js';
 import { summarizeSharedChrome, type SharedChromeProbe, type SharedChromeRouteDecision } from './chrome-reuse.js';
 import type { Browser, BrowserContext, BrowserContextOptions, Page } from 'playwright';
 
@@ -143,6 +143,7 @@ function sendLog( server: CaptureLogSink | undefined, message: string ): void {
 }
 
 import { assignNodeIds, observeBoxTree, BOX_TREE_STYLES, NODE_ID_ATTRIBUTE } from './box-tree.js';
+import { normalizeRetainedDocument } from './retained-document.js';
 
 /** Failure reason for a route whose source app crashed into its client error shell. */
 const CLIENT_ERROR_SHELL_FAILURE = 'client error shell';
@@ -233,7 +234,6 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 	const stylesRewritten = await page.evaluate(
 		( { factorySrc, serverHtml } ) => {
 			let rewritten = false;
-			( window as typeof window & { __dlaEntrances?: { stamp(): void } } ).__dlaEntrances?.stamp();
 			const authoredStyles = new Set<string>();
 			if ( serverHtml ) {
 				const baseline = new DOMParser().parseFromString( serverHtml, 'text/html' );
@@ -326,8 +326,12 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 		// The installed source cleanup sweeps first, in this same task: the
 		// settle and media waits above give the source time to mount a widget
 		// after the last sweep, and no source script runs between these two.
-		const result = await page.evaluate( async ( { boxTreeSource, boxTreeProperties, captureBoxes, stampSource, nodeIdAttribute, observeControlSource, controlAttribute, portMapsSource, mapHostSource, iframeEvidenceAttributes, scaffoldingSource, shadowSource, parseSrcsetSource, srcsetShapedSource, initialScrollClassAttribute, currentSourceAttribute } ) => {
+		const result = await page.evaluate( async ( { normalizeDocumentSource, boxTreeSource, boxTreeProperties, captureBoxes, stampSource, nodeIdAttribute, observeControlSource, controlAttribute, portMapsSource, mapHostSource, iframeEvidenceAttributes, scaffoldingSource, shadowSource, parseSrcsetSource, srcsetShapedSource, initialScrollClassAttribute, currentSourceAttribute } ) => {
 			( window as unknown as { __dlaCleanup?: { sweep: () => void } } ).__dlaCleanup?.sweep();
+			// Entrance poses are read in the serializing task, under the motion hold:
+			// read any earlier, an autoplaying slide can rotate out of the pose it
+			// is stamped with before the document is serialized.
+			( window as typeof window & { __dlaEntrances?: { stamp(): void } } ).__dlaEntrances?.stamp();
 			// Independent computed-style sentinels from the styled baseline, before
 			// any serialization-only DOM trials. Never validate evidence against itself.
 			const sentinelProperties = [ 'position', 'display', 'font-family', 'margin-top' ];
@@ -596,13 +600,7 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				// DOM insertion permits flow elements in <head>; the HTML parser
 				// does not. Move them in the snapshot only, after positional walks,
 				// so re-parsing cannot push later base/meta/title into the body.
-				const head = snapshot.querySelector( 'head' );
-				const body = snapshot.querySelector( 'body' );
-				if ( head && body ) {
-					const headTags = new Set( 'base basefont bgsound link meta title noscript noframes style script template'.split( ' ' ) );
-					const misplaced = Array.from( head.children ).filter( element => ! headTags.has( element.localName ) );
-					body.prepend( ...misplaced );
-				}
+				( new Function( 'return (' + normalizeDocumentSource + ')' )() as typeof normalizeRetainedDocument )( snapshot );
 				const observe = new Function('return (' + boxTreeSource + ')')() as typeof observeBoxTree;
 				const checkedObservation = (): import('./box-tree.js').BoxTreeObservation => {
 					const observed = observe(snapshot, boxTreeProperties, nodeIdAttribute);
@@ -648,7 +646,7 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 				}
 				for ( const { element, parent, next } of detached.reverse() ) parent.insertBefore( element, next );
 			}
-		}, { boxTreeSource: observeBoxTree.toString(), boxTreeProperties: BOX_TREE_STYLES, captureBoxes: Boolean(onBoxTree), stampSource: assignNodeIds.toString(), nodeIdAttribute: NODE_ID_ATTRIBUTE, initialScrollClassAttribute: INITIAL_SCROLL_CLASS_ATTRIBUTE, observeControlSource: observeNativeControlState.toString(), controlAttribute: NATIVE_CONTROL_STATE_ATTRIBUTE, portMapsSource: portRenderedGoogleMaps.toString(), mapHostSource: isGoogleMapHost.toString(), iframeEvidenceAttributes, scaffoldingSource: cleanPortableScaffolding.toString(), shadowSource: portStaticShadowContent.toString(), parseSrcsetSource: parseSrcset.toString(), srcsetShapedSource: isSrcsetShaped.toString(), currentSourceAttribute: CURRENT_SOURCE_ATTRIBUTE } );
+		}, { normalizeDocumentSource: normalizeRetainedDocument.toString(), boxTreeSource: observeBoxTree.toString(), boxTreeProperties: BOX_TREE_STYLES, captureBoxes: Boolean(onBoxTree), stampSource: assignNodeIds.toString(), nodeIdAttribute: NODE_ID_ATTRIBUTE, initialScrollClassAttribute: INITIAL_SCROLL_CLASS_ATTRIBUTE, observeControlSource: observeNativeControlState.toString(), controlAttribute: NATIVE_CONTROL_STATE_ATTRIBUTE, portMapsSource: portRenderedGoogleMaps.toString(), mapHostSource: isGoogleMapHost.toString(), iframeEvidenceAttributes, scaffoldingSource: cleanPortableScaffolding.toString(), shadowSource: portStaticShadowContent.toString(), parseSrcsetSource: parseSrcset.toString(), srcsetShapedSource: isSrcsetShaped.toString(), currentSourceAttribute: CURRENT_SOURCE_ATTRIBUTE } );
 		if ( onPainted ) onPainted( await readPaintState( page ) );
 		onBoxTree?.(result.boxNodes);
 		diagnostics?.push( ...result.findings );
@@ -746,7 +744,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		return canonicalizeHtml ? canonicalizeInteractionReport( report, html => canonicalizeHtml( html, baseline.rawDocument ) ) : report;
 	};
 
-	resourceStore.observe( page );
+	resourceStore.observe( page, { profile: viewport.id } );
 	const sourceCrashes: string[] = [];
 	const sourceRuntime = args.observeSource ? await watchSourceRuntimeErrors( page ) : undefined;
 	if ( args.observeSource ) page.on( 'crash', () => sourceCrashes.push( 'source renderer crashed' ) );
@@ -910,14 +908,24 @@ export function mergeInteractionReports(
 	return {
 		...( keepPrevious ? previous : latest ),
 		...( previous.coverage === 'partial' || latest.coverage === 'partial' ? { coverage: 'partial' as const } : {} ),
-		components: [ ...new Map( byIdentity( previous.components ?? [], latest.components ?? [], componentKey ).map( component => {
+		components: [ ...byIdentity( previous.components ?? [], latest.components ?? [], componentKey ).reduce( ( merged, component ) => {
+			const key = componentKey( component );
 			const prior = previous.components?.find(node => node.selector === component.selector);
-			if (!component.slideshow || !prior?.slideshow || prior === component) return [componentKey( component ), component] as const;
-			return [componentKey( component ), { ...component, slideshow: { ...component.slideshow,
+			let next = component;
+			if (component.slideshow && prior?.slideshow && prior !== component) next = { ...component, slideshow: { ...component.slideshow,
 				views: [...prior.slideshow.views, ...component.slideshow.views].filter((view, index, all) => all.findIndex(other => other.width === view.width) === index),
 				navigation: [...prior.slideshow.navigation, ...component.slideshow.navigation].filter((mode, index, all) => all.findIndex(other => other.mode === mode.mode) === index),
-			} }] as const;
-		} ) ).values() ],
+			} };
+			// As with states, a later pass refreshes captured evidence but never
+			// drops it: a state only the earlier pass reached keeps its transition.
+			const earlier = merged.get( key );
+			const kept = earlier?.states.filter( state => state.evidence && ! next.states.some( known => known.id === state.id ) ) ?? [];
+			if ( earlier && kept.length ) next = { ...next,
+				states: [ ...next.states, ...kept ],
+				transitions: [ ...next.transitions, ...earlier.transitions.filter( edge => kept.some( state => state.id === edge.to ) ) ],
+			};
+			return merged.set( key, next );
+		}, new Map< string, CapturedComponent >() ).values() ],
 		states,
 		routeNavigation: [ ...new Map( byIdentity( previous.routeNavigation ?? [], latest.routeNavigation ?? [], route => route.selector )
 			.map( route => [ route.selector, route ] ) ).values() ],
@@ -1334,7 +1342,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	const desktopProfile = viewports.find( viewport => viewport.id === 'desktop' );
 	const phoneProfile = viewports.find( viewport => viewport.id === 'mobile' );
 	const entrypoint = urls.find( url => isSourceCaptureUrl( url, opts.primaryUrl ) ) ?? urls[ 0 ];
-	const sharedChromeEnabled = Boolean( entrypoint && ( opts.sharedChrome ?? ! opts.viewports ) && ( urls.length > 1 || frontier ) );
+	const sharedChromeEnabled = Boolean( entrypoint && ( opts.sharedChrome ?? ! opts.viewports ) );
+	const eagerSharedChrome = sharedChromeEnabled && urls.length > 1;
+	let sharedChromePhoneStates: CapturedDialogInteraction[] | undefined;
 	const sharedChromeResults = new Map< string, SharedChromeProbe >();
 	const rootClassEvidence = new RootClassEvidence();
 	const routeMotion = new RouteMotionEvidence();
@@ -1353,7 +1363,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			telemetryRequest: opts.telemetryRequest,
 		};
 		const probed = await probeDeviceMode( {
-			...comparison, probeDiagnostic: diagnostic => routeDiagnostics.push( { ...diagnostic, url: entrypoint! } ), browser, url: entrypoint, requested, canonicalizeHtml: opts.canonicalizeHtml, sharedChrome: sharedChromeEnabled,
+			...comparison, probeDiagnostic: diagnostic => routeDiagnostics.push( { ...diagnostic, url: entrypoint! } ), browser, url: entrypoint, requested, canonicalizeHtml: opts.canonicalizeHtml, sharedChrome: eagerSharedChrome,
 			deviceDocuments: [
 				...( opts.deviceDocumentSelection ? [ 'documentSelection' ] : [] ),
 				...( opts.additionalProfiles ? [ 'additionalProfiles' ] : [] ),
@@ -1361,7 +1371,10 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			],
 		} );
 		deviceMode = probed.decision;
-		if ( probed.phoneInteractions ) phoneInteractions = { url: probed.url, report: probed.phoneInteractions };
+		if ( probed.phoneInteractions ) {
+			phoneInteractions = { url: probed.url, report: probed.phoneInteractions };
+			sharedChromePhoneStates = probed.phoneInteractions.states;
+		}
 		for ( const [ profile, result ] of probed.sharedChrome ?? [] ) sharedChromeResults.set( profile, result );
 		if ( deviceMode.mode === 'reflow-only' ) {
 			// A reflow route's desktop document also freezes the phone-width reference cell.
@@ -1377,18 +1390,21 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	}
 
 	// --- shared chrome -------------------------------------------------------
-	// The entrypoint's chrome is probed once per built-in profile before any
-	// route, on the device-mode probe's pages when it loaded them, and reused by
-	// every route whose chrome matches (chrome-reuse.ts). A single-route capture
-	// has nothing to share.
+	// Known multi-route inventories probe eagerly, using device-mode pages when
+	// available. A one-route inventory waits until the frontier admits another
+	// route, then probes before admitting it. No extra renderer joins the pool.
 	const sharedChromeDecisions: Array< { url: string; profile: string } & SharedChromeRouteDecision > = [];
-	if ( sharedChromeEnabled ) {
+	let sharedChromeProbed = false;
+	const ensureSharedChrome = async (): Promise< void > => {
+		if ( ! sharedChromeEnabled || sharedChromeProbed ) return;
+		sharedChromeProbed = true;
 		const profiles = ( reflowViewports ?? viewports ).filter( viewport => ( viewport.id === 'desktop' || viewport.id === 'mobile' ) && ! sharedChromeResults.has( viewport.id ) );
 		const sessionContext = profiles.length ? await sourceContextOptions( browser, entryUrl, { publicUrlsOnly: opts.publicUrlsOnly, governors: opts.governors } ) : undefined;
 		await Promise.all( profiles.map( async viewport => {
 			sharedChromeResults.set( viewport.id, await probeSharedChrome( {
 				probeDiagnostic: diagnostic => routeDiagnostics.push( { ...diagnostic, url: entrypoint! } ),
 				browser, url: entrypoint!, options: profileContextOptions( viewport, sessionContext! ), viewport: viewport.id as 'desktop' | 'mobile',
+				...( viewport.id === 'desktop' && sharedChromePhoneStates ? { additionalStates: sharedChromePhoneStates } : {} ),
 				sourceTelemetry: opts.sourceTelemetry,
 				governors: opts.governors, publicUrlsOnly: opts.publicUrlsOnly ?? false, routeScope: opts.routeScope,
 				cleanupPolicy: opts.cleanupPolicy, removeSelectors: opts.removeSelectors, prepareCapture: opts.prepareCapture, initScript: opts.initScript,
@@ -1402,9 +1418,10 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			sendLog( server, message );
 			process.stderr.write( `${ message }\n` );
 		}
-	}
+	};
+	if ( eagerSharedChrome ) await ensureSharedChrome();
 	const sharedChromeFor = ( viewport: Viewport ): SharedChromeProbe | undefined => {
-		if ( ! sharedChromeEnabled || ( viewport.id !== 'desktop' && viewport.id !== 'mobile' ) ) return undefined;
+		if ( ! sharedChromeProbed || ( viewport.id !== 'desktop' && viewport.id !== 'mobile' ) ) return undefined;
 		return sharedChromeResults.get( viewport.id ) ?? { status: 'skipped', reason: `the entrypoint chrome was not probed for the ${ viewport.id } profile`, durationMs: 0 };
 	};
 
@@ -1490,6 +1507,18 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	const deferred = ( url: string ): boolean => {
 		if ( ! deferredRoutes.has( url ) && opts.deferRoute?.( url ) ) deferredRoutes.add( url );
 		return deferredRoutes.has( url );
+	};
+	// The entrypoint's rendered desktop document, published once source
+	// observation finishes. Its links and navigation targets are what successor
+	// ordering needs, so admission does not wait for the rest of the route (#2240).
+	type RenderedDocument = { html: string; url: string; baseUrl: string };
+	let entryRendered: RenderedDocument | undefined;
+	let signalEntryRendered: () => void = () => {};
+	const entryRenderedReady = new Promise< void >( resolve => { signalEntryRendered = resolve; } );
+	const publishEntryLinks = ( document: RenderedDocument ): void => {
+		if ( entryRendered ) return;
+		entryRendered = document;
+		signalEntryRendered();
 	};
 	const processUrl = async ( url: string, reuseOnly = false ): Promise< void > => {
 		const routeStartedAt = Date.now();
@@ -1828,6 +1857,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							} ),
 							routeDeadlineMs,
 							routeRemainingMs: () => routeDeadlineMs ? Math.max( 1, routeDeadlineMs - ( Date.now() - routeStartedAt ) ) : 600_000,
+							// This profile and the ones still to load share what the route has left.
+							routeProfilesLeft: () => Math.max( 1, routeProfiles.filter( profile => ! mergedProfiles.has( profile.id ) && profilePlan( profile ).needsLoad ).length ),
 							probeOverrun: ms => probeOverruns.set( url, ( probeOverruns.get( url ) ?? 0 ) + ms ),
 							serverLinks: serverLinks.get( url ) ?? ( serverLinks.set( url, new Set() ), serverLinks.get( url )! ),
 							phases,
@@ -1861,6 +1892,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 								: {} ),
 							...( opts.learnFluid ? { learnFluid: true, fluidMemo, classBreakpoints, classMemo } : {} ),
 							...( opts.fluidWidths ? { fluidWidths: opts.fluidWidths } : {} ),
+							// #2210: each dual document sweeps only the widths export serves it at.
+							fluidWidthRange: routeDevice?.mode === 'dual' ? servedWidthRange( routeDevice, viewport.id ) : undefined,
 							prepareCapture: opts.prepareCapture,
 							sharedChrome: sharedChromeFor( viewport ),
 							consentViewports: viewports,
@@ -1873,6 +1906,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							beforeFluid: opts.beforeFluid,
 							beforeSerialize: opts.beforeSerialize,
 							observeSource: opts.observeSource,
+							...( url === urls[ 0 ] && viewport.id === 'desktop' ? { publishRenderedLinks: publishEntryLinks } : {} ),
 							...( opts.canonicalizeHtml ? { canonicalizeHtml: opts.canonicalizeHtml } : {} ),
 							...( opts.probeExclusions ? { probeExclusions: opts.probeExclusions } : {} ),
 						} );
@@ -2133,7 +2167,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		}
 		if ( ( entry.html || entry.mobileHtml ) && ! entry.redirectedTo ) {
 			const documents = [ entry.html, entry.mobileHtml, ...Object.values( entry.profiles ?? {} ).map( profile => profile.html ) ];
-			opts.onRouteCaptured?.( url, [ ...new Set( documents.filter( ( path ): path is string => Boolean( path ) ) ) ], resource => resourceStore.has( resource ) );
+			opts.onRouteCaptured?.( url, [ ...new Set( documents.filter( ( path ): path is string => Boolean( path ) ) ) ], resource => resourceStore.has( resource ), entry.interactions, entry.profiles );
 		}
 		completed++;
 		const routeMs = Date.now() - routeStartedAt;
@@ -2149,103 +2183,125 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		if ( opts.timeBudget?.checkpoint && ! force ) {
 			for ( const url of urls ) await processUrl( url, true );
 		}
-		// --- worker pool with browser restart at segment boundaries ----------
-		// URLs are processed in segments of browserRestartEvery; WITHIN a segment a
-		// continuous pool of `concurrency` workers drains a shared cursor, so a slow
-		// page never stalls the others (the old slice loop waited for the slowest
-		// URL in every group of `concurrency` before starting the next group). The
-		// browser is restarted only between segments to bound memory, preserving the
-		// restart-every-N invariant while keeping each worker on a stable browser.
-		let segStart = 0;
-		// Unstarted routes are reordered once, after the entrypoint settles.
+		// One continuous pool. Completed routes are expanded before the next
+		// admission, while other routes keep running on the same browser.
+		let cursor = 0;
 		let pendingPrioritized = ! opts.prioritizePendingRoutes;
-		let entrypointSettled = false;
-		while (segStart < urls.length && ! routeBudget?.closed() && ! routeDeadlines.stalled) {
-			// Cluster-aware discovery must run between admission batches, not only
-			// after the inventory has already spent the browser window.
-			const waveEnd = opts.groupLinkedRoutes
-				? Math.min( urls.length, segStart + ( segStart === 0 ? 1 : concurrency ) )
-				: urls.length;
-			while ( segStart < waveEnd && ! routeBudget?.closed() && ! routeDeadlines.stalled ) {
-				if ( browserRestartEvery > 0 && urlsSinceRestart >= browserRestartEvery ) {
+		let entrypointSettled = reusedRoutes.has( urls[ 0 ]! );
+		// Successors are admitted once the entrypoint's rendered links are expanded,
+		// or when it settles if it never published them.
+		let entryLinksExpanded = false;
+		const entryReleased = (): boolean => entrypointSettled || entryLinksExpanded;
+		const poolStartedAt = Date.now();
+		const entryFirst = Boolean( opts.groupLinkedRoutes || ( opts.prioritizePendingRoutes
+			&& ! routeBudget?.fits( urls.filter( url => ! reusedRoutes.has( url ) ).length, concurrency ) ) );
+		const finished: string[] = [ ...reusedRoutes ];
+		const running = new Set< Promise<void> >();
+		const runningKinds = new Map< Promise<void>, RouteKind >();
+		const timer = memoryAdmission ? setInterval( admission.sample, 100 ) : undefined;
+		let waitingForDeferral: Promise< void > | undefined;
+		const budgetAdmits = (): boolean => {
+			waitingForDeferral = opts.waitForPendingRoute?.();
+			// Preserve pending order, but let unrelated work fill slots while a
+			// cluster waits for its verifier. Failed/missing seeds fall back once idle.
+			let candidate = -1;
+			for ( let index = cursor; index < urls.length; index++ ) {
+				const url = urls[ index ]!;
+				if ( reusedRoutes.has( url ) || deferred( url ) || opts.governors?.forOrigin( url ).blockedClient ) {
+					urls.splice( cursor++, 0, urls.splice( index, 1 )[ 0 ]! );
+					continue;
+				}
+				if ( ( running.size || waitingForDeferral ) && opts.pendingRoute?.( url ) ) continue;
+				candidate = index;
+				break;
+			}
+			if ( candidate < 0 ) return false;
+			if ( candidate > cursor ) urls.splice( cursor, 0, urls.splice( candidate, 1 )[ 0 ]! );
+			return cursor < urls.length && ! routeDeadlines.stalled
+				&& ( ! entryFirst || cursor === 0 || entryReleased() )
+				&& ( browserRestartEvery <= 0 || urlsSinceRestart < browserRestartEvery )
+				&& ( ! routeBudget || routeBudget.admits( urls[ cursor ]!, running.size + 1 ) );
+		};
+		try {
+			while ( true ) {
+				while ( finished.length ) await expandLinks( finished.splice( 0 ) );
+				if ( entryFirst && ! entryReleased() && entryRendered ) {
+					// The same expansion and grouping its serialized documents get at
+					// completion; links only those documents hold are expanded then.
+					if ( frontier ) await expandLinks( [], { url: urls[ 0 ]!, document: entryRendered } );
+					entryLinksExpanded = true;
+					process.stderr.write( `[timing] entry-admission ${ Date.now() - poolStartedAt }ms ${ urls[ 0 ] } (rendered link evidence)\n` );
+					if ( finished.length ) continue;
+				}
+				if ( entryReleased() ) {
+					if ( ! pendingPrioritized ) {
+						pendingPrioritized = true;
+						const from = Math.max( 1, cursor );
+						urls.splice( from, urls.length - from, ...opts.prioritizePendingRoutes!( urls.slice( from ) ) );
+					}
+				}
+				// Completions during asynchronous expansion/probing must be expanded
+				// before their newly freed slots admit another route.
+				if ( finished.length ) continue;
+				// Only restart an idle browser, and never start a route beyond its
+				// segment's limit. Link expansion may have appended more work.
+				if ( ! running.size && cursor < urls.length && browserRestartEvery > 0 && urlsSinceRestart >= browserRestartEvery && ! routeBudget?.closed() && ! routeDeadlines.stalled ) {
 					sendLog( server, `[restart] closing browser after ${ urlsSinceRestart } URLs` );
 					await browser.close().catch( orElse( undefined ) );
 					browser = ( await connectBrowser( {} ) ) as unknown as Browser;
 					browserRestarts++;
 					urlsSinceRestart = 0;
 				}
-				// Appended aliases and linked documents belong to the next wave.
-				// The caller learns priorities from the rendered entrypoint, which
-				// only matter when the budget cannot fit every pending route: then
-				// the entrypoint finishes before its successors are admitted.
-				// Otherwise successors start alongside it, and the routes still
-				// pending when it finishes are reordered.
-				const entryFirst = segStart === 0 && opts.prioritizePendingRoutes
-					&& ! routeBudget?.fits( urls.slice( 0, waveEnd ).filter( url => ! reusedRoutes.has( url ) ).length, concurrency );
-				const segEnd = entryFirst ? 1 : browserRestartEvery > 0
-					? Math.min( waveEnd, segStart + browserRestartEvery - urlsSinceRestart )
-					: waveEnd;
-				let cursor = segStart;
-				const running = new Set< Promise<void> >();
-				const runningKinds = new Map< Promise<void>, RouteKind >();
-				const timer = memoryAdmission ? setInterval( admission.sample, 100 ) : undefined;
-				const budgetAdmits = (): boolean => {
-					while ( cursor < segEnd && ( reusedRoutes.has( urls[ cursor ]! ) || deferred( urls[ cursor ]! ) || opts.governors?.forOrigin(urls[cursor]!).blockedClient ) ) cursor++;
-					return cursor < segEnd && ! routeDeadlines.stalled && ( ! routeBudget || routeBudget.admits( urls[ cursor ]!, running.size + 1 ) );
-				};
-				try {
-					while ( ( cursor < segEnd && budgetAdmits() ) || running.size ) {
-						if ( ! pendingPrioritized && ( entrypointSettled || reusedRoutes.has( urls[ 0 ]! ) ) ) {
-							pendingPrioritized = true;
-							const from = Math.max( 1, cursor );
-							urls.splice( from, urls.length - from, ...opts.prioritizePendingRoutes!( urls.slice( from ) ) );
-						}
-						while ( cursor < segEnd && budgetAdmits() && running.size < concurrency && admission.admit( admission.kind( urls[ cursor ]! ), runningKinds.values() ) ) {
-							const url = urls[ cursor++ ];
-							const kind = admission.kind( url );
-							routeBudget?.start( url );
-							if ( memoryAdmission ) process.stderr.write( `[memory-admission] ${ JSON.stringify( admission.diagnostic( kind, running.size + 1, url ) ) }\n` );
-							admission.start( kind );
-							const pending = processUrl( url ).finally( () => { if ( url === urls[ 0 ] ) entrypointSettled = true; partialRouteCommits.delete( url ); admission.release( kind ); routeBudget?.finish( url, probeOverruns.get( url ) ); routeDeadlines.finish( url ); } ).then( () => {
-								if ( memoryAdmission ) admission.sample();
-							} );
-							// The slot frees even if abandonment unwinds slowly: the route's own
-							// deadline resolves the race at the deadline, after it abandoned the
-							// route and closed its contexts.
-							const slot = Promise.race( [ pending, routeDeadlines.start( url ) ] );
-							running.add( slot );
-							runningKinds.set( slot, kind );
-							// The race observes fatal rejection before browser cleanup.
-							void slot.then( () => { running.delete( slot ); runningKinds.delete( slot ); }, () => {} );
-						}
-						if ( ! running.size ) break;
-						if ( ! routeBudget ) await Promise.race( running );
-						else {
-							await routeBudget.wait( running );
-							if ( await routeBudget.abandonIfDue( running, () => browser.close().catch( orElse( undefined ) ) ) ) break;
-						}
-					}
-				} finally {
-					if ( timer ) clearInterval( timer );
-					// Drain existing context cleanup without suppressing fatal errors.
-					await ( routeBudget ? routeBudget.drain( running ) : Promise.allSettled( running ) );
+				while ( budgetAdmits() && running.size < concurrency && admission.admit( admission.kind( urls[ cursor ]! ), runningKinds.values() ) ) {
+					// The segment loop established chrome evidence before successor
+					// admission. Keep that guarantee even when this pool never idles.
+					if ( cursor > 0 ) await ensureSharedChrome();
+					const url = urls[ cursor++ ];
+					const kind = admission.kind( url );
+					urlsSinceRestart++;
+					routeBudget?.start( url );
+					if ( memoryAdmission ) process.stderr.write( `[memory-admission] ${ JSON.stringify( admission.diagnostic( kind, running.size + 1, url ) ) }\n` );
+					admission.start( kind );
+					const pending = processUrl( url ).finally( () => { if ( url === urls[ 0 ] ) entrypointSettled = true; partialRouteCommits.delete( url ); admission.release( kind ); routeBudget?.finish( url, probeOverruns.get( url ) ); routeDeadlines.finish( url ); } ).then( () => {
+						if ( memoryAdmission ) admission.sample();
+					} );
+					// A deadline frees the slot even while abandoned work unwinds.
+					const slot = Promise.race( [ pending, routeDeadlines.start( url ) ] );
+					running.add( slot );
+					runningKinds.set( slot, kind );
+					// Observe fatal rejection before browser cleanup.
+					void slot.then( () => { if ( url === urls[ 0 ] ) entrypointSettled = true; running.delete( slot ); runningKinds.delete( slot ); finished.push( url ); }, () => {} );
 				}
-				urlsSinceRestart += segEnd - segStart;
-				segStart = segEnd;
+				const progress = new Set( running );
+				if ( entryFirst && ! entryReleased() && running.size ) progress.add( entryRenderedReady );
+				if ( waitingForDeferral && cursor < urls.length && ! routeBudget?.closed() && ! routeDeadlines.stalled ) progress.add( waitingForDeferral );
+				if ( ! progress.size ) break;
+				if ( ! routeBudget ) await Promise.race( progress );
+				else {
+					await routeBudget.wait( progress );
+					if ( await routeBudget.abandonIfDue( running, () => browser.close().catch( orElse( undefined ) ) ) ) break;
+				}
 			}
+		} finally {
+			if ( timer ) clearInterval( timer );
+			await ( routeBudget ? routeBudget.drain( running ) : Promise.allSettled( running ) );
+		}
+		// Budget closure still offers completed links to the frontier so rejected
+		// targets retain diagnostics, including routes completed during drain.
+		if ( finished.length ) await expandLinks( finished.splice( 0 ) );
+
+		async function expandLinks( completedUrls: string[], rendered?: { url: string; document: RenderedDocument } ): Promise<void> {
 			// Deadline-kept profiles are in the manifest before links are read from it.
 			await Promise.allSettled( partialCommitWrites );
 			// Do not spend more source requests on link inspection after a stall.
-			if ( routeDeadlines.stalled || urls.every(url => opts.governors?.forOrigin(url).blockedClient) ) break;
-			// Even after the budget closes, offer this wave's links to the
-			// frontier so rejected targets receive budget diagnostics.
-			// Expand a breadth-first wave from actual rendered artifacts. The normal
+			if ( routeDeadlines.stalled || urls.every(url => opts.governors?.forOrigin(url).blockedClient) ) return;
+			// Expand finished routes from actual rendered artifacts. The normal
 			// navigation/capture contract proves local documents and external boundaries;
 			// successful HTML is never reduced to a classification-only probe.
 			const scheduled = new Set( urls.map( documentRequestUrl ) );
 			const candidates = new Set< string >();
 			const candidateDepths = new Map<string, number>();
-			for ( const url of urls ) {
+			const addServerLinks = ( url: string ): void => {
 				for ( const serverLink of serverLinks.get( url ) ?? [] ) {
 					const link = routeInScope( serverLink, opts.routeScope ) ? scopedRouteKey( serverLink, opts.routeScope ) : serverLink;
 					if ( routeInScope( link, opts.routeScope ) && ! scheduled.has( documentRequestUrl( link ) ) ) {
@@ -2253,6 +2309,23 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 						candidateDepths.set( link, 1 + ( frontier?.depths.get( url ) ?? 0 ) );
 					}
 				}
+			};
+			const addAnchors = ( url: string, anchors: string[] ): void => {
+				for ( const anchor of anchors ) {
+					if (!routeInScope(anchor, opts.routeScope)) continue;
+					const link = scopedRouteKey( anchor, opts.routeScope );
+					if ( ! scheduled.has( documentRequestUrl( link ) ) ) {
+						candidates.add(link);
+						candidateDepths.set(link, Math.min(candidateDepths.get(link) ?? Infinity, 1 + (frontier?.depths.get(url) ?? 0)));
+					}
+				}
+			};
+			if ( rendered ) {
+				addServerLinks( rendered.url );
+				addAnchors( rendered.url, sameOriginPageAnchors( resolveDocumentReferences( rendered.document.html, rendered.document.url, rendered.document.baseUrl ), rendered.url ) );
+			}
+			for ( const url of completedUrls ) {
+				addServerLinks( url );
 				const entry = manifest.getEntry( url );
 				if ( ! entry?.html ) continue;
 				const documents: Array<{ path: string; document?: { url?: string; baseUrl?: string } }> = [ { path: join( opts.outputDir, entry.html ), document: entry.documents?.desktop } ];
@@ -2261,17 +2334,14 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					if ( ! existsSync( htmlPath ) ) continue;
 					const html = resolveDocumentReferences( readFileSync( htmlPath, 'utf8' ), document?.url ?? url, document?.baseUrl );
 					const collectionLinks = ( entry.interactions?.components ?? [] ).flatMap( component => component.collection?.members.flatMap( member => member.url ? [ member.url ] : [] ) ?? [] ).filter( link => new URL( link ).origin === new URL( url ).origin );
-					for ( const anchor of [ ...sameOriginPageAnchors( html, url ), ...collectionLinks ] ) {
-						if (!routeInScope(anchor, opts.routeScope)) continue;
-						const link = scopedRouteKey( anchor, opts.routeScope );
-						if ( ! scheduled.has( documentRequestUrl( link ) ) ) {
-							candidates.add(link);
-							candidateDepths.set(link, Math.min(candidateDepths.get(link) ?? Infinity, 1 + (frontier?.depths.get(url) ?? 0)));
-						}
-					}
+					addAnchors( url, [ ...sameOriginPageAnchors( html, url ), ...collectionLinks ] );
 				}
 			}
 			if (frontier) {
+				if ( opts.probeLinkedRouteAliases && candidates.size ) {
+					const aliases = await opts.probeLinkedRouteAliases( [ ...candidates ] );
+					frontier.registerAliases( aliases );
+				}
 				if ( opts.groupLinkedRoutes && candidates.size && ! routeBudget?.closed() ) {
 					const aliases = await opts.groupLinkedRoutes( [ ...candidates ] );
 					if ( aliases ) frontier.registerAliases( aliases );
@@ -2279,7 +2349,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				const rankedCandidates = opts.groupLinkedRoutes && opts.prioritizePendingRoutes ? opts.prioritizePendingRoutes( [ ...candidates ] ) : candidates;
 				for (const url of rankedCandidates) enqueue(url, candidateDepths.get(url)!);
 				if ( opts.groupLinkedRoutes && opts.prioritizePendingRoutes ) {
-					urls.splice( segStart, urls.length - segStart, ...opts.prioritizePendingRoutes( urls.slice( segStart ) ) );
+					urls.splice( cursor, urls.length - cursor, ...opts.prioritizePendingRoutes( urls.slice( cursor ) ) );
 				}
 			} else if ( candidates.size ) {
 				let context: BrowserContext | undefined;
@@ -2381,9 +2451,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	for (const origin of new Set(urls.map(url => new URL(url).origin))) {
 		const blocked = opts.governors?.forOrigin(origin).blockedClient;
 		const stats = opts.governors?.forOrigin(origin).stats();
-		if (stats?.learnedRateCeiling !== undefined) routeDiagnostics.push({ code: 'source_rate_ceiling_learned', url: origin, reason: `Source requests paced at ${stats.learnedRateCeiling} req/s for the rest of this capture`, ...stats });
+		if (stats?.learnedRateCeiling !== undefined) routeDiagnostics.push({ code: 'source_rate_ceiling_learned', url: origin, scope: 'origin', reason: (stats.throttleEpisodes ?? 1) > 1 ? `Source requests paced at ${stats.learnedRateCeiling} req/s for the rest of this capture after ${stats.throttleEpisodes} throttle episodes` : `Source requests paced at ${stats.learnedRateCeiling} req/s during one throttle episode${stats.rateCeilingActive ? ' (still open when browser capture ended)' : ', then recovered'}`, ...stats });
 		if (blocked) {
-			routeDiagnostics.push({ code: blocked.code, url: origin, reason: blocked.message, ...blocked.evidence, stopReason: blocked.code });
+			routeDiagnostics.push({ code: blocked.code, url: origin, scope: 'origin', reason: blocked.message, ...blocked.evidence, stopReason: blocked.code });
 			for (const url of urls.filter(url => new URL(url).origin === origin && !reusedRoutes.has(url) && !manifest.getEntry(url)?.html && !failedRoutes.has(url))) {
 				routeDiagnostics.push({ code: 'route_capture_pending', url, reason: 'Source blocked this client; pending capture with --resume' });
 			}

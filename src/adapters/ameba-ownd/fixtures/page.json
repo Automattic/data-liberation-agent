@@ -1,0 +1,78 @@
+{
+ "props": {
+  "pageProps": {
+   "state": {
+    "route": {
+     "route": {
+      "path": "/pages/300011/:url_path",
+      "route": {
+       "id": "300011",
+       "type": "static",
+       "idForType": "0",
+       "title": "プロフィール",
+       "isHomePage": false,
+       "urlPath": "/pages/300011/:url_path"
+      }
+     },
+     "params": {
+      "url_path": "profile"
+     }
+    },
+    "page": {
+     "300011": {
+      "fetching": false,
+      "loaded": true,
+      "meta": {
+       "code": 200
+      },
+      "data": {
+       "id": "300011",
+       "siteId": "100001",
+       "type": "static",
+       "idForType": "0",
+       "status": "1",
+       "title": "プロフィール",
+       "urlPath": "profile",
+       "showTitle": true,
+       "blogPosts": null,
+       "facebookAlbumImages": null,
+       "instagramAlbumImages": null,
+       "createdAt": "2024-02-01T13:50:22Z",
+       "updatedAt": "2026-04-10T19:10:22Z",
+       "contents": {
+        "layout": {
+         "rows": [
+          {
+           "columns": [
+            {
+             "blocks": [
+              {
+               "type": "text",
+               "format": "html",
+               "value": "<p>架空のサイトのプロフィールページです。</p>"
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       }
+      }
+     }
+    },
+    "siteConfig": {
+     "siteId": "100001",
+     "title": "サンプルブログ",
+     "homePageId": "300010"
+    }
+   },
+   "url": "/"
+  }
+ },
+ "page": "/[[...path]]",
+ "query": {},
+ "buildId": "SampleBuildId0000000",
+ "isFallback": false,
+ "gssp": true
+}

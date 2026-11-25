@@ -14,7 +14,10 @@ export async function captureSitePreview( websiteDir: string ) {
 		if ( ! response?.ok() ) throw new Error( 'Portable homepage is unavailable for preview' );
 		await page.evaluate( async () => {
 			await Promise.race( [
-				Promise.all( [ document.fonts.ready, ...Array.from( document.images, image => image.decode().catch( () => {} ) ) ] ),
+				// The preview is one viewport; a lazy image below it never loads, so only visible images are awaited.
+				Promise.all( [ document.fonts.ready, ...Array.from( document.images )
+					.filter( image => { const box = image.getBoundingClientRect(); return box.bottom > 0 && box.top < innerHeight && box.width > 0; } )
+					.map( image => image.decode().catch( () => {} ) ) ] ),
 				new Promise( resolve => setTimeout( resolve, 5_000 ) ),
 			] );
 		} );

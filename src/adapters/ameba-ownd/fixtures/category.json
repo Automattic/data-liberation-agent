@@ -1,0 +1,117 @@
+{
+ "props": {
+  "pageProps": {
+   "state": {
+    "route": {
+     "route": {
+      "path": "/posts/categories/:category_id",
+      "route": {
+       "id": "0",
+       "type": "blog_post_category",
+       "idForType": "0",
+       "title": "",
+       "urlPath": "/posts/categories/:category_id",
+       "isHomePage": false
+      }
+     },
+     "params": {
+      "category_id": "400004"
+     }
+    },
+    "postList": {
+     "postList-limit:12-page:1-siteId:100001-categoryIds:400004": {
+      "fetching": false,
+      "loaded": true,
+      "meta": {
+       "code": 200,
+       "pagination": {
+        "total": 5,
+        "offset": 0,
+        "limit": 12,
+        "cursors": {
+         "after": "bGltaXQ9MTImb2Zmc2V0PTEy",
+         "before": ""
+        },
+        "page": 1
+       }
+      },
+      "data": [
+       {
+        "id": "20000304",
+        "siteId": "100001",
+        "status": "publish",
+        "title": "イベントの記録",
+        "contents": [
+         {
+          "type": "text",
+          "format": "html",
+          "value": "<p>架空のイベントの記録です。</p><p class=\"\">カテゴリーページに表示されます。</p>"
+         }
+        ],
+        "urlPath": "",
+        "publishedUrl": "https://example.amebaownd.com/posts/20000304",
+        "ogpImageUrl": "",
+        "blogCategories": [
+         {
+          "id": "400004",
+          "siteId": "100001",
+          "label": "イベント",
+          "publishedCount": 5
+         },
+         {
+          "id": "400002",
+          "siteId": "100001",
+          "label": "日記",
+          "publishedCount": 30
+         },
+         {
+          "id": "400003",
+          "siteId": "100001",
+          "label": "雑記",
+          "publishedCount": 41
+         }
+        ],
+        "user": {
+         "id": "500001",
+         "nickname": "Site owner"
+        },
+        "publishedAt": "2026-09-15T10:14:47Z",
+        "createdAt": "2026-09-15T10:14:48Z",
+        "updatedAt": "2026-09-15T19:01:19Z"
+       }
+      ]
+     }
+    },
+    "category": {
+     "400004": {
+      "fetching": false,
+      "loaded": true,
+      "meta": {
+       "code": 200
+      },
+      "data": {
+       "id": "400004",
+       "siteId": "100001",
+       "label": "イベント",
+       "publishedCount": 5,
+       "createdAt": "2024-03-05T07:35:44Z",
+       "updatedAt": "2026-09-15T19:01:19Z"
+      },
+      "status": "success"
+     }
+    },
+    "siteConfig": {
+     "siteId": "100001",
+     "title": "サンプルブログ",
+     "homePageId": "300010"
+    }
+   },
+   "url": "/"
+  }
+ },
+ "page": "/[[...path]]",
+ "query": {},
+ "buildId": "SampleBuildId0000000",
+ "isFallback": false,
+ "gssp": true
+}

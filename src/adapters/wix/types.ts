@@ -8,6 +8,8 @@ export interface WixAdapterOpts extends Record<string, unknown> {
   resume?: boolean;
   dryRun?: boolean;
   verbose?: boolean;
+  /** The entry document the capture already fetched. */
+  entryHtml?: string;
   outputDir?: string;
   limit?: number;
 }

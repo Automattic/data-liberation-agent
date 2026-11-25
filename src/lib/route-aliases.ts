@@ -8,8 +8,8 @@
  * `rel=canonical` that the pair was one document all along (`routes.duplicates`).
  *
  * Here the confirmation happens before capture, on the cheapest evidence:
- * candidates — routes that differ from another inventory route by query string
- * alone — are fetched as server HTML with the same bounded policy as template
+ * candidates — query siblings or paths ending in another inventory path —
+ * are fetched as server HTML with the same bounded policy as template
  * grouping. A candidate whose `rel=canonical` resolves, by document request
  * identity, to another inventory route is dropped from capture and recorded as
  * an alias of that route. Every uncertain case keeps the route; routes without
@@ -35,7 +35,7 @@ export const ROUTE_ALIAS_LIMITS = {
 export const ROUTE_ALIAS_CANONICAL = 'route_alias_canonical';
 
 export interface CanonicalRouteAlias {
-	/** The inventory route (query rendition) that was skipped. */
+	/** The inventory route that was skipped. */
 	url: string;
 	/** The inventory route its `rel=canonical` resolves to. */
 	canonicalUrl: string;
@@ -45,6 +45,8 @@ export interface RouteAliasProbeInput {
 	sourceUrl: string;
 	/** Deduplicated inventory, entrypoint included. */
 	urls: readonly string[];
+	/** Restrict probes to newly offered routes, retaining the full target inventory. */
+	candidateUrls?: readonly string[];
 	routeScope?: SiteRouteScope;
 	limits?: Partial< typeof ROUTE_ALIAS_LIMITS >;
 }
@@ -71,11 +73,10 @@ const identity = ( url: string ): string | undefined => {
 };
 
 /**
- * Candidates: routes that differ from another inventory route on origin and
- * path by the query string alone. Ordered first, so a probe budget can sample
- * from the front.
+ * Candidates: same-origin query siblings and routes whose path ends with
+ * another inventory path at a segment boundary. Query siblings come first.
  */
-export function queryOnlyAliasCandidates( urls: readonly string[] ): string[] {
+export function canonicalAliasCandidates( urls: readonly string[] ): string[] {
 	const byDocument = new Map< string, string >();
 	const byPath = new Map< string, string[] >();
 	for ( const url of urls ) {
@@ -92,7 +93,19 @@ export function queryOnlyAliasCandidates( urls: readonly string[] ): string[] {
 			// An unparseable inventory entry cannot be a candidate; keep it as-is.
 		}
 	}
-	return [ ...byPath.values() ].filter( group => group.length > 1 ).flatMap( group => group.filter( url => new URL( url ).search !== '' ) );
+	const candidates = new Set( [ ...byPath.values() ].filter( group => group.length > 1 ).flatMap( group => group.filter( url => new URL( url ).search !== '' ) ) );
+	for ( const url of byDocument.values() ) {
+		const route = new URL( url );
+		// Walk segment boundaries, not arbitrary string suffixes; `/` is not a sibling.
+		for ( let slash = route.pathname.indexOf( '/', 1 ); slash > 0; slash = route.pathname.indexOf( '/', slash + 1 ) ) {
+			const suffix = route.pathname.slice( slash );
+			if ( suffix !== '/' && byPath.has( `${ route.origin }${ suffix }` ) ) {
+				candidates.add( url );
+				break;
+			}
+		}
+	}
+	return [ ...candidates ];
 }
 
 /**
@@ -170,7 +183,8 @@ export async function probeCanonicalRouteAliases(
 	dependencies: { fetch: typeof safeFetch } = { fetch: safeFetch }
 ): Promise< RouteAliasProbeDetail > {
 	const limits: typeof ROUTE_ALIAS_LIMITS = { ...ROUTE_ALIAS_LIMITS, ...input.limits };
-	const candidates = queryOnlyAliasCandidates( input.urls );
+	const offered = input.candidateUrls && new Set( input.candidateUrls );
+	const candidates = canonicalAliasCandidates( input.urls ).filter( url => ! offered || offered.has( url ) );
 	if ( ! candidates.length ) return { aliases: [], probes: 0, kept: [] };
 	const sourceIdentity = identity( input.sourceUrl );
 	const inventoryIdentities = new Map< string, string >();

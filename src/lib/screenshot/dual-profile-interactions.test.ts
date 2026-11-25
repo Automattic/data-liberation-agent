@@ -57,3 +57,11 @@ it( 'still lets a later pass over the same document refresh its evidence', () =>
 	const merged = mergeInteractionReports( desktop, phone );
 	expect( merged.components!.find( component => component.selector === '#\\31 ' )!.states[ 0 ].html ).toBe( '<a id="1" aria-label="Menu">Menu</a>' );
 } );
+
+it( 'keeps a state only an earlier pass over the same document reached', () => {
+	const merged = mergeInteractionReports( desktop, report( 1440, [ menu( '#\\31 ', '<a id="1">More</a>' ) ], [] ) );
+	const component = merged.components!.find( component => component.selector === '#\\31 ' )!;
+	expect( component.states.map( state => state.id ) ).toEqual( [ 'closed', 'open' ] );
+	expect( component.transitions ).toEqual( [ { from: 'closed', to: 'open', trigger: { selector: '#\\31 ', action: 'click' } } ] );
+	expect( merged.states.map( state => state.trigger.label ) ).toEqual( [ 'More' ] );
+} );
