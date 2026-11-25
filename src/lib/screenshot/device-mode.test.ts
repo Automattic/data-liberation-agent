@@ -122,6 +122,13 @@ describe( 'device-mode evidence', () => {
 		expect( compareServerHtml( page( 'a1', '2026-10-09T10:00:00Z' ), page( 'a1', '2026-10-09T10:00:00Z' ) ) ).toBe( 'identical' );
 		expect( compareServerHtml( page( 'a1', '2026-10-09T10:00:00Z' ), page( 'b2', '2026-10-09T10:00:01.250+02:00' ) ) ).toBe( 'identical-after-normalization' );
 		expect( compareServerHtml( page( 'a1', '2026-10-09T10:00:00Z' ), page( 'a1', '2026-10-09T10:00:00Z', 'Hello phone' ) ) ).toBe( 'different' );
+		const signedPage = ( token: string, text = 'Hello' ) => `<script data-context-token="${ token }"></script><p>${ text }</p>`;
+		for ( const [ candidate, expected ] of [
+			[ signedPage( 'v1.eyJleHAiOjE3OTQzNDg1NTZ9.signature2' ), 'identical-after-normalization' ],
+			[ signedPage( 'v1.eyJleHAiOjE3OTQzNDg1NTZ9.signature2', 'Hello phone' ), 'different' ],
+		] as const ) {
+			expect( compareServerHtml( signedPage( 'v1.eyJleHAiOjE3OTQzNDg1NTV9.signature1' ), candidate ) ).toBe( expected );
+		}
 		// An ordinary attribute or hidden input is content, not noise.
 		expect( normalizeServerHtml( '<input type="hidden" name="plan" value="pro">' ) ).toBe( '<input type="hidden" name="plan" value="pro">' );
 	} );
