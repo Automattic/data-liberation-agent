@@ -47,7 +47,10 @@ import type { SectionSpec, SourceLandmark } from './section-extract.js';
 // label, classified by buildSectionForms) — powers the jetpack/contact-form
 // emission. Older caches lack it → invalidate + re-extract.
 // v9: SourceLandmark adds aside/complementary roles and optional linkCount.
-export const SECTION_SPECS_SCHEMA = 10;
+// v11: section images record an inline data: source as `inlineMediaType` with
+// empty URLs instead of its payload (#2244). Older caches can hold megabytes of
+// copied base64 → invalidate + re-extract.
+export const SECTION_SPECS_SCHEMA = 11;
 
 interface SectionSpecsFile {
   schema: number;

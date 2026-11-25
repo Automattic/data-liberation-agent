@@ -24,6 +24,23 @@ describe( 'absent sibling corroboration (rendered HTML fixtures)', () => {
 		expect( await new AbsentDocumentProbes().matches( 'https://example.com/events/private', page( '<h1>Access Denied</h1>' ), render ) ).toBe( false );
 	} );
 
+	it( 'keeps a thin page whose nonce sibling declares that page as its canonical document', async () => {
+		const probes = new AbsentDocumentProbes();
+		const real = 'https://example.com/pages/2800187/page_201904201631';
+		const declared = ( href: string ) => `<html><head><link rel="canonical" href="${ href }"><meta property="og:url" content="${ href }"></head><body><main>Short notice</main></body></html>`;
+		const render = vi.fn( async () => ( { status: 200, html: declared( real ) } ) );
+		expect( await probes.matches( real, declared( real ), render ) ).toBe( false );
+		// A fallback that names itself, not the requested route, is still absent.
+		const selfNamed = vi.fn( async ( url: string ) => ( { status: 200, html: declared( url ) } ) );
+		expect( await new AbsentDocumentProbes().matches( 'https://example.com/events/broken', declared( 'https://example.com/events/broken' ), selfNamed ) ).toBe( true );
+		// Query-routed pages share one path: a fallback naming another query is still absent.
+		const otherQuery = vi.fn( async () => ( { status: 200, html: declared( 'https://example.com/product?id=7' ) } ) );
+		expect( await new AbsentDocumentProbes().matches( 'https://example.com/product?id=gone', declared( 'https://example.com/product?id=7' ), otherQuery ) ).toBe( true );
+		// The same query in another order names the same page.
+		const reordered = vi.fn( async () => ( { status: 200, html: declared( 'https://example.com/product?id=7&lang=en' ) } ) );
+		expect( await new AbsentDocumentProbes().matches( 'https://example.com/product?lang=en&id=7', declared( 'https://example.com/product?id=7&lang=en' ), reordered ) ).toBe( false );
+	} );
+
 	it( 'leaves children untouched when their parent probe returns HTTP 404', async () => {
 		const probes = new AbsentDocumentProbes();
 		const html = page( '<h1>Access Denied</h1>' );

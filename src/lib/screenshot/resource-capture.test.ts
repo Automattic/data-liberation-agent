@@ -26,6 +26,7 @@ import {
 	MAX_CAPTURED_RESOURCE_TOTAL_BYTES,
 	MAX_CAPTURED_VIDEO_RESOURCE_BYTES,
 	resourceTimeoutMs,
+	installResourceReplay,
 } from './resource-capture.js';
 
 const dirs: string[] = [];
@@ -216,6 +217,103 @@ describe( 'CapturedResourceStore', () => {
 		const manifest = JSON.parse( readFileSync( join( outputDir, 'resources/manifest.json' ), 'utf8' ) );
 		expect( manifest.resources[ url ] ).toBeUndefined();
 		expect( manifest.failures ).toContainEqual( { url, error: expect.stringContaining( 'mixed-content' ) } );
+	} );
+
+	it( 'keeps each profile document on the stylesheet bytes its own identity loaded', async () => {
+		// A font service serves the phone identity other face binaries under the same url.
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-profile-stylesheet-' ) );
+		dirs.push( outputDir );
+		const sourceUrl = 'https://source.example/';
+		const url = 'https://fonts.example/css2?family=Serif&display=swap';
+		const bodies = { desktop: 'h1{letter-spacing:1px}', mobile: 'h1{letter-spacing:2px}' };
+		const fetchMedia = vi.fn();
+		const store = new CapturedResourceStore( outputDir, sourceUrl, fetchMedia );
+		const html = `<html><head><link rel="stylesheet" href="${ url.replace( /&/g, '&amp;' ) }"></head><body><h1>Home</h1></body></html>`;
+		const serialized: Record< string, string > = {};
+		// The phone route loads first, so its response is the one stored under the url.
+		for ( const profile of [ 'mobile', 'desktop' ] as const ) {
+			const page = new EventEmitter();
+			store.observe( page as never, { profile } );
+			page.emit( 'response', {
+				url: () => url, status: () => 200,
+				headers: () => ( { 'content-type': 'text/css' } ),
+				body: async () => Buffer.from( bodies[ profile ] ),
+				request: () => ( { resourceType: () => 'stylesheet', method: () => 'GET', redirectedFrom: () => null } ),
+			} );
+			serialized[ profile ] = await store.withProfileStylesheets( page as never, html, sourceUrl );
+			await store.settle( page as never );
+			await store.captureDomDependencies( serialized[ profile ], sourceUrl );
+		}
+		await store.flush();
+		expect( fetchMedia ).not.toHaveBeenCalled();
+		for ( const folder of [ 'html', 'html-mobile', 'screenshots' ] ) mkdirSync( join( outputDir, folder ) );
+		writeFileSync( join( outputDir, 'html/home.html' ), serialized.desktop );
+		writeFileSync( join( outputDir, 'html-mobile/home.html' ), serialized.mobile );
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: { [ sourceUrl ]: { slug: 'home', html: 'html/home.html' } } } ) );
+		exportWebsiteCapture( { outputDir, sourceUrl, platform: 'generic', summary: { routesFailed: 0 }, failures: [] } );
+		const website = join( outputDir, 'website' );
+		const document = readFileSync( join( website, 'index.html' ), 'utf8' );
+		const $ = cheerio.load( document );
+		const read = ( path: string ) => readFileSync( join( website, decodeURIComponent( path ) ), 'utf8' );
+		const linked = $( 'link[rel="stylesheet"]' ).toArray().map( link => $( link ).attr( 'href' )! );
+		expect( linked.map( read ) ).toEqual( [ bodies.desktop ] );
+		const imports = [ ...document.matchAll( /@import url\("?([^")]+)"?\) ([^;]+);/g ) ];
+		expect( imports.map( ( [ , path, media ] ) => [ read( path ), media ] ) ).toEqual( [ [ bodies.mobile, '(max-width:767px)' ] ] );
+		expect( document ).not.toContain( 'fonts.example' );
+	} );
+
+	it( 'keeps a phone document face set selected by width once its import gate is dropped', async () => {
+		// Same family and descriptors, other binaries: a consumer hoisting every face
+		// to one global set (a WordPress theme) must still pick by width, not order.
+		const outputDir = mkdtempSync( join( tmpdir(), 'liberation-profile-faces-' ) );
+		dirs.push( outputDir );
+		const sourceUrl = 'https://source.example/';
+		const url = 'https://fonts.example/css2?family=Serif&display=swap';
+		const face = ( file: string ) => `@font-face {\n  font-family: 'Serif';\n  font-weight: 400;\n  src: url(https://fonts.example/${ file }.woff2) format("woff2");\n}\n`;
+		const bodies = { desktop: face( 'desktop' ), mobile: face( 'phone' ) };
+		const store = new CapturedResourceStore( outputDir, sourceUrl, vi.fn() );
+		const html = `<html><head><link rel="stylesheet" href="${ url.replace( /&/g, '&amp;' ) }"></head><body><h1>Home</h1></body></html>`;
+		const respond = ( page: EventEmitter, responseUrl: string, type: string, contentType: string, body: string ) => page.emit( 'response', {
+			url: () => responseUrl, status: () => 200,
+			headers: () => ( { 'content-type': contentType } ),
+			body: async () => Buffer.from( body ),
+			request: () => ( { resourceType: () => type, method: () => 'GET', redirectedFrom: () => null } ),
+		} );
+		const serialized: Record< string, string > = {};
+		for ( const profile of [ 'mobile', 'desktop' ] as const ) {
+			const page = new EventEmitter();
+			store.observe( page as never, { profile } );
+			respond( page, url, 'stylesheet', 'text/css', bodies[ profile ] );
+			respond( page, `https://fonts.example/${ profile === 'mobile' ? 'phone' : 'desktop' }.woff2`, 'font', 'font/woff2', `wOF2${ profile }` );
+			serialized[ profile ] = await store.withProfileStylesheets( page as never, html, sourceUrl );
+			await store.settle( page as never );
+			await store.captureDomDependencies( serialized[ profile ], sourceUrl );
+		}
+		await store.flush();
+		for ( const folder of [ 'html', 'html-mobile', 'screenshots' ] ) mkdirSync( join( outputDir, folder ) );
+		writeFileSync( join( outputDir, 'html/home.html' ), serialized.desktop );
+		writeFileSync( join( outputDir, 'html-mobile/home.html' ), serialized.mobile );
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: { [ sourceUrl ]: { slug: 'home', html: 'html/home.html' } } } ) );
+		exportWebsiteCapture( { outputDir, sourceUrl, platform: 'generic', summary: { routesFailed: 0 }, failures: [] } );
+		const website = join( outputDir, 'website' );
+		const document = readFileSync( join( website, 'index.html' ), 'utf8' );
+		const read = ( path: string ) => readFileSync( join( website, decodeURIComponent( path ) ), 'utf8' );
+		const fontsOf = ( css: string ) => [ ...css.matchAll( /src: url\(([^)]+)\)/g ) ].map( ( [ , src ] ) => src );
+		// The default document's face stays the unconditional, unstretched one.
+		const linked = cheerio.load( document )( 'link[rel="stylesheet"]' ).attr( 'href' )!;
+		expect( read( linked ) ).not.toContain( 'font-stretch' );
+		const [ desktopFont ] = fontsOf( read( linked ) );
+		// The phone face is the exact match only for the stretch its own media requests.
+		const [ , path, media ] = /@import url\("([^"]+)"\) ([^;]+);/.exec( document )!;
+		expect( document ).toContain( `@media ${ media }{:root{font-stretch:101%}}` );
+		const phone = read( path );
+		expect( phone ).toMatch( /font-stretch:\s*101%/ );
+		const [ phoneFont ] = fontsOf( phone );
+		// Its file is qualified, so a consumer registering faces by file keeps it gated.
+		expect( phoneFont ).toMatch( /\?blocks-engine-capture-width-gated$/ );
+		const phoneFile = phoneFont.replace( /\?.*$/, '' );
+		expect( phoneFile ).not.toBe( desktopFont );
+		expect( readFileSync( join( website, phoneFile ), 'utf8' ) ).toBe( 'wOF2mobile' );
 	} );
 
 	it( 'prefers a successful browser response to the mixed-content fallback rule', async () => {
@@ -1785,6 +1883,48 @@ describe( 'CapturedResourceStore', () => {
 describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )(
 	'resources in a real browser',
 	() => {
+		it( 'replays deferred browser images without claiming portable media ownership', async ( { serve, newPage } ) => {
+			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-deferred-replay-' ) );
+			dirs.push( outputDir );
+			let imageRequests = 0;
+			const { server } = await serve( ( req, res ) => {
+				if ( req.url === '/image.svg' ) {
+					imageRequests++;
+					res.setHeader( 'content-type', 'image/svg+xml' );
+					res.setHeader( 'cache-control', 'public, max-age=3600' );
+					return res.end( '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>' );
+				}
+				res.setHeader( 'content-type', 'text/html' );
+				res.end( '<!doctype html><img src="/image.svg#icon">' );
+			} );
+			const origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
+			const store = new CapturedResourceStore( outputDir, origin );
+			const page = await newPage();
+			await installResourceReplay( page, store );
+			store.observe( page );
+			const lookup = vi.spyOn( store, 'getReplayableResponse' );
+			try {
+				await page.goto( origin );
+				// Wait for scratch-cache writes without settling (which materializes media).
+				await Promise.all( ( store as any ).pageCaptures.get( page ) );
+				expect( imageRequests ).toBe( 1 );
+				expect( store.has( `${ origin }/image.svg#icon` ) ).toBe( false );
+				lookup.mockClear();
+				await page.goto( `${ origin }/second` );
+				await Promise.all( ( store as any ).pageCaptures.get( page ) );
+				expect( imageRequests ).toBe( 1 );
+				const imageLookup = lookup.mock.calls.findIndex( ( [ , type ] ) => type === 'image' );
+				expect( imageLookup ).toBeGreaterThanOrEqual( 0 );
+				expect( lookup.mock.results[ imageLookup ]?.value ).toBeDefined();
+				const outcomes: string[] = [];
+				store.getReplayableResponse( `${ origin }/image.svg#icon`, 'image', {}, outcome => outcomes.push( outcome ) );
+				expect( outcomes ).toEqual( [ 'hit' ] );
+			} finally {
+				await store.settle( page );
+				await store.flush();
+			}
+		} );
+
 		it( 'probes each responsive image once per capture and keeps every rendition', async ({ serve, newPage, browser }) => {
 			const outputDir = mkdtempSync( join( tmpdir(), 'liberation-srcset-probe-' ) );
 			dirs.push( outputDir );

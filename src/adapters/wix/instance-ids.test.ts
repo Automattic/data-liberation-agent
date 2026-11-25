@@ -1,3 +1,4 @@
+import * as cheerio from 'cheerio';
 import { describe, expect, it } from 'vitest';
 import { canonicalizeWixCapturedHtml, canonicalizeWixFormControlIds, canonicalizeWixInstanceIds } from './instance-ids.js';
 
@@ -28,6 +29,23 @@ describe( 'canonicalizeWixInstanceIds', () => {
 		expect( out ).toContain( `<header id="${ id }" class="${ id }-container">` );
 		expect( out ).toContain( `#${ id }{position:sticky}.${ id }-container{margin:0}` );
 		expect( out ).not.toContain( 'comp-aaaa1111' );
+	} );
+
+	it.each( [ 'img', 'portal', 'custom' ] )( 'canonicalizes chrome whose only scoped references have derived prefixes (%s, #2218)', ( prefix ) => {
+		const route = ( instance: string ) => `<html><head><style>#${ instance }{position:sticky}#${ prefix }-${ instance }_r_comp-a{width:10px}#portal-${ instance }_r_comp-b{color:red}</style></head>` +
+			`<body><header id="${ instance }"><img id="${ prefix }-${ instance }_r_comp-a"><div id="portal-${ instance }_r_comp-b"></div></header><i id="${ prefix }-${ instance }2"></i></body></html>`;
+		const first = canonicalizeWixInstanceIds( route( 'comp-aaaa1111' ) );
+		const second = canonicalizeWixInstanceIds( route( 'comp-bbbb2222' ) );
+		const $ = cheerio.load( first );
+		expect( $( 'header' ).toString() ).toBe( cheerio.load( second )( 'header' ).toString() );
+		expect( $( 'header' ).attr( 'id' ) ).toMatch( /^comp-dla[0-9a-f]{8}$/ );
+		for ( const rule of $( 'style' ).text().split( '}' ).filter( Boolean ) ) {
+			expect( $( rule.split( '{' )[ 0 ]! ) ).toHaveLength( 1 );
+		}
+		expect( $( 'i' ).attr( 'id' ) ).toBe( `${ prefix }-comp-aaaa11112` );
+		expect( canonicalizeWixInstanceIds( first ) ).toBe( first );
+		const collision = route( 'comp-aaaa1111' ).replace( '</body>', '<aside class="img-comp-cccc3333_r_comp-a portal-comp-cccc3333_r_comp-b"></aside></body>' );
+		expect( canonicalizeWixInstanceIds( collision ) ).toBe( collision );
 	} );
 
 	it( 'does not rewrite an id that merely starts with an instance id', () => {
@@ -69,9 +87,37 @@ describe( 'canonicalizeWixInstanceIds', () => {
 		expect( canonicalizeWixInstanceIds( html ) ).toBe( html );
 	} );
 
+	it( 'derives scope identity only from element ids and classes, not dead inline selectors', () => {
+		const source = page( 'comp-aaaa1111' );
+		const inline = canonicalizeWixInstanceIds( source.replace( '</style>', '.comp-aaaa1111_r_comp-dead{display:none}</style>' ) );
+		const linked = canonicalizeWixInstanceIds( source.replace( /<style>[\s\S]*?<\/style>/, '<link rel="stylesheet" href="/page.css">' ) );
+		expect( /<body>[\s\S]*<\/body>/.exec( inline )?.[ 0 ] ).toBe( /<body>[\s\S]*<\/body>/.exec( linked )?.[ 0 ] );
+	} );
+
 	it( 'leaves markup without instance references unchanged', () => {
 		const html = '<div id="comp-abc" class="comp-abc-container">x</div>';
 		expect( canonicalizeWixInstanceIds( html ) ).toBe( html );
+	} );
+
+	it( 'names markup reused from another page after the instance on this page that shares its components', () => {
+		// Shared chrome's opened menu is captured once, on the first page, and
+		// reused here: it still carries the first page's instance prefix.
+		// The open panel's own components never render in the closed page.
+		const dialog = ( instance: string ) => `<nav id="${ instance }_r_comp-logo" class="${ instance }_r_comp-panel"><a id="${ instance }_r_comp-panel-link" href="/">Home</a></nav>`;
+		const first = page( 'comp-aaaa1111' ), second = page( 'comp-bbbb2222' );
+		const own = canonicalizeWixInstanceIds( dialog( 'comp-aaaa1111' ), first );
+		const reused = canonicalizeWixInstanceIds( dialog( 'comp-aaaa1111' ), second );
+		expect( reused ).toBe( own );
+		const instance = /id="(comp-dla[0-9a-f]{8})_r_comp-logo"/.exec( canonicalizeWixInstanceIds( second ) )?.[ 1 ];
+		expect( reused ).toContain( `id="${ instance }_r_comp-logo"` );
+	} );
+
+	it( 'names reused markup on its own when no single instance on this page shares its components', () => {
+		const dialog = '<nav id="comp-aaaa1111_r_comp-other" class="comp-aaaa1111_r_comp-panel"></nav>';
+		const out = canonicalizeWixInstanceIds( dialog, page( 'comp-bbbb2222' ) );
+		const instance = /id="(comp-dla[0-9a-f]{8})_r_comp-logo"/.exec( canonicalizeWixInstanceIds( page( 'comp-bbbb2222' ) ) )?.[ 1 ];
+		expect( out ).not.toContain( instance );
+		expect( out ).toMatch( /id="comp-dla[0-9a-f]{8}_r_comp-other"/ );
 	} );
 } );
 

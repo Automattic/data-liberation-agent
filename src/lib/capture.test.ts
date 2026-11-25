@@ -745,6 +745,31 @@ describe( 'captureWebsite route budget', () => {
 		expect( captureScreenshotsMock ).not.toHaveBeenCalled();
 	} );
 
+	it( 'probes frontier aliases even when grouping never samples them and the route budget is full', async () => {
+		const linked = `${ sourceUrl }?sort_by=best-selling`;
+		captureScreenshotsMock.mockImplementationOnce( async ( options ) => {
+			const opts = options as ScreenshotOpts;
+			expect( opts.groupLinkedRoutes ).toBeUndefined();
+			vi.mocked( safeFetch ).mockResolvedValueOnce( {
+				finalUrl: linked, status: 200, headers: new Headers( { 'content-type': 'text/html' } ),
+				body: Buffer.from( `<link rel="canonical" href="${ sourceUrl }">` ),
+			} );
+			const aliases = await opts.probeLinkedRouteAliases!( [ linked ] );
+			expect( aliases ).toEqual( [ { url: linked, canonicalUrl: sourceUrl } ] );
+			expect( vi.mocked( safeFetch ).mock.calls.at( -1 )?.[ 1 ]?.governors ).toBeDefined();
+			const { LinkedFrontier } = await import( './screenshot/linked-frontier.js' );
+			const frontier = new LinkedFrontier( { capturePageLimit: 1 } );
+			frontier.admit( sourceUrl, 0, Date.now(), 'inventory' );
+			frontier.registerAliases( aliases );
+			expect( frontier.admit( linked, 1 ) ).toBe( false );
+			// A later stage that rediscovers the link must not turn it back into an omission.
+			return { urls: options.urls, captured: 1, skipped: 0, failed: 0, durationMs: 1, linkedPageCoverage: frontier.coverage(),
+				routeDiagnostics: [ { code: 'route_omitted_by_budget', url: linked, reason: 'browser window spent' } ] };
+		} );
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root, templateClusters: false, routeLimit: 1 }, storeAdapter() );
+		expect( result.discoveryDiagnostics.filter( row => row.url === linked ).map( row => row.code ) ).toEqual( [ 'route_alias_canonical' ] );
+	} );
+
 	it( 'counts frontier budget omissions once and keeps them out of failure and completeness', async () => {
 		const linked = 'https://example.com/linked-only/';
 		captureScreenshotsMock.mockImplementationOnce( async ( { urls }: { urls: string[] } ) => ( {

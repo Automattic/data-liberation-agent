@@ -81,9 +81,10 @@ export interface ScreenshotOpts {
 	onProgress?: ( current: number, total: number, url: string ) => void;
 	/**
 	 * Fired once per route whose documents were saved, with their paths
-	 * relative to `outputDir` and whether the capture already stored a URL's bytes.
+	 * relative to `outputDir`, whether the capture already stored a URL's bytes,
+	 * and the separate interaction states export wires onto its documents.
 	 */
-	onRouteCaptured?: ( url: string, documents: string[], stored: ( resourceUrl: string ) => boolean ) => void;
+	onRouteCaptured?: ( url: string, documents: string[], stored: ( resourceUrl: string ) => boolean, interactions: import('./interaction-capture.js').InteractionStatesReport | undefined, profiles?: import('./manifest-queue.js').ManifestEntry['profiles'] ) => void;
 	/**
 	 * Learn how the source sizes itself by sweeping viewport widths with its
 	 * runtime alive, then emit the learned CSS instead of the pixels that
@@ -144,8 +145,14 @@ export interface ScreenshotOpts {
 	prioritizePendingRoutes?: ( urls: string[] ) => string[];
 	/** Asked when a route comes up for admission: true leaves it to the caller (template-cluster derivation). */
 	deferRoute?: ( url: string ) => boolean;
+	/** Keep undecided template members outside the pool while seeds/checks run. */
+	pendingRoute?: ( url: string ) => boolean;
+	/** Next outstanding deferral check; undefined when none can currently progress. */
+	waitForPendingRoute?: () => Promise< void > | undefined;
 	/** Group newly discovered links before frontier admission, then rank pending work. */
 	groupLinkedRoutes?: ( urls: string[] ) => Promise< readonly import('../route-aliases.js').CanonicalRouteAlias[] | void >;
+	/** Prove frontier aliases before budget admission, independently of grouping. */
+	probeLinkedRouteAliases?: ( urls: string[] ) => Promise< readonly import('../route-aliases.js').CanonicalRouteAlias[] >;
 	/**
 	 * A route resolved to a server redirect alias of `target`, the queued route
 	 * that captures its document. Evidence owed to the alias follows the target.

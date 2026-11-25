@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SafeFetchResult } from '../../lib/media-fetch/safe-fetch.js';
 import { buildTemplateGroups, templateFingerprint, TEMPLATE_GROUPS_SCHEMA } from '../../lib/template-groups.js';
+import { compareDerivedWithCapture } from '../../lib/template-clusters.js';
 import { templateStyleNormalization } from './template-styles.js';
 
 const ORIGIN = 'https://site.example';
@@ -103,5 +104,19 @@ describe( 'wix grouping over per-request page styles (#836)', () => {
 		// the generated content: the generic fingerprint must keep reading it.
 		const without = await buildTemplateGroups( { sourceUrl: `${ ORIGIN }/post/one/`, urls: [ ...routes.keys() ] }, { fetch: fetchDependency } );
 		expect( without.coverage.groups ).toBeGreaterThan( 2 );
+	} );
+} );
+
+describe( 'wix image rendition size in template verification', () => {
+	const media = 'https://static.wixstatic.com/media/34872a_5a44e8443cd24dee8e0f3d88e193d0b6~mv2.png/v1/fill';
+	const page = ( transform: string ) => `<html><body><main><h1>A title</h1><img src="${ media }/${ transform },al_c,q_85,enc_avif,quality_auto/a.png" alt=""></main></body></html>`;
+	it.each( [
+		[ 'a phone-width rendition of the same crop', 'w_362,h_272', true ],
+		[ 'a blurred placeholder', 'w_453,h_340,blur_2', false ],
+	] )( 'verifies against a desktop capture only for %s', ( _name, derived, equal ) => {
+		const realHtml = page( 'w_453,h_340' );
+		const derivedHtml = page( derived );
+		expect( compareDerivedWithCapture( { derivedHtml, realHtml, baseUrl: `${ ORIGIN }/post/a/` } ).checks.images ).toBe( false );
+		expect( compareDerivedWithCapture( { derivedHtml, realHtml, baseUrl: `${ ORIGIN }/post/a/`, styleNormalization: templateStyleNormalization } ).checks.images ).toBe( equal );
 	} );
 } );

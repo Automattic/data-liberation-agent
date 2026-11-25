@@ -7,8 +7,7 @@
  *
  * - At most `concurrency` HTTP requests are in flight at once. Browser
  *   fan-out never takes a slot: after a throttle it waits out the pause and
- *   the learned rate ceiling by time. Every source request stays paced at
- *   that ceiling for the rest of the capture.
+ *   the learned rate ceiling by time.
  * - A throttle response (429 or 503) pauses new requests for the source's
  *   `Retry-After` (delta-seconds or an HTTP date, capped at
  *   `maxRetryAfterMs`), drops the in-flight limit to 1 and retries the
@@ -18,9 +17,15 @@
  * - Each `recoveryStep` consecutive successes raise the limit by one, back up
  *   to `concurrency`.
  *
- * The first throttle learns half the observed rate (minimum 0.1 req/s);
- * subsequent admissions stay evenly paced at that ceiling, even after
- * concurrency recovers. The ceiling and stop reason are receipt evidence.
+ * The first throttle learns half the observed rate (minimum 0.1 req/s) and
+ * opens a throttle episode. Admissions stay evenly paced at that ceiling
+ * until the episode ends: the source's pause has passed and it has gone
+ * `recoveryWindowMs` without another throttle. One transient throttle (a
+ * single 429 or connection reset) therefore slows the capture for a bounded
+ * window instead of for the rest of the run. A throttle in a later episode
+ * shows the pressure is not transient: from then on every request stays
+ * paced at the ceiling for the rest of the capture. The ceiling, episode
+ * count and stop reason are receipt evidence.
  * Documents the source keeps refusing after
  * the capture has slowed down end the capture with `source_blocked_client`
  * and bounded evidence (first refusal time and request count) for the
@@ -46,6 +51,8 @@ export const SOURCE_REQUEST_GOVERNOR_DEFAULTS = {
 	recoveryStep: 4,
 	/** Requests per governed call, the first included, before a throttle response is returned to the caller. */
 	maxAttempts: 10,
+	/** Throttle-free time, after the source's pause, that ends a throttle episode and its pacing. */
+	recoveryWindowMs: 30_000,
 } as const;
 
 /** Statuses a source uses to say "slow down". */
@@ -88,6 +95,7 @@ export interface SourceRequestGovernorOptions {
 	maxRetryAfterMs?: number;
 	fallbackRetryAfterMs?: number;
 	recoveryStep?: number;
+	recoveryWindowMs?: number;
 }
 
 /** Transport refusals are source pressure signals, including nested Node fetch causes. */
@@ -132,8 +140,12 @@ export interface SourceRequestGovernorStats {
 	throttleEvents: number;
 	/** Current in-flight limit. */
 	concurrency: number;
-	/** Persistent requests/second ceiling learned on the first throttle. */
+	/** Requests/second ceiling learned on the first throttle. */
 	learnedRateCeiling?: number;
+	/** Throttle episodes; a second one keeps the ceiling for the rest of the capture. */
+	throttleEpisodes?: number;
+	/** Whether the ceiling still paces requests when the stats were read. */
+	rateCeilingActive?: boolean;
 	stopReason?: 'source_blocked_client';
 	/** Requests per second since the first request; logs only. */
 	sustainedRate: number;
@@ -271,6 +283,9 @@ export class SourceRequestGovernor {
 	private readonly maxRetryAfterMs: number;
 	private readonly fallbackRetryAfterMs: number;
 	private readonly recoveryStep: number;
+	private readonly recoveryWindowMs: number;
+	private episodes = 0;
+	private episodeEndsAt = 0;
 	private limit: number;
 	private active = 0;
 	private successes = 0;
@@ -327,6 +342,7 @@ export class SourceRequestGovernor {
 		this.maxRetryAfterMs = options.maxRetryAfterMs ?? SOURCE_REQUEST_GOVERNOR_DEFAULTS.maxRetryAfterMs;
 		this.fallbackRetryAfterMs = options.fallbackRetryAfterMs ?? SOURCE_REQUEST_GOVERNOR_DEFAULTS.fallbackRetryAfterMs;
 		this.recoveryStep = Math.max( 1, options.recoveryStep ?? SOURCE_REQUEST_GOVERNOR_DEFAULTS.recoveryStep );
+		this.recoveryWindowMs = Math.max( 0, options.recoveryWindowMs ?? SOURCE_REQUEST_GOVERNOR_DEFAULTS.recoveryWindowMs );
 		this.limit = this.maxConcurrency;
 		this.probeAtMs = options.refusalProbeAtMs ?? SOURCE_REFUSAL_DEFAULTS.probeAtMs;
 	}
@@ -343,7 +359,7 @@ export class SourceRequestGovernor {
 
 	stats(): SourceRequestGovernorStats {
 		const elapsed = this.firstRequestAt === undefined ? 0 : ( Date.now() - this.firstRequestAt ) / 1000;
-		return { ...(this.learnedRateCeiling !== undefined ? { learnedRateCeiling: this.learnedRateCeiling } : {}), ...(this.blockedClient ? { stopReason: 'source_blocked_client' as const } : {}), origin: this.origin, requests: this.requests, requestCounts: { ...this.requestCounts }, throttleEvents: this.throttles, concurrency: this.limit, sustainedRate: elapsed > 0 ? this.requests / elapsed : 0 };
+		return { ...(this.learnedRateCeiling !== undefined ? { learnedRateCeiling: this.learnedRateCeiling, throttleEpisodes: this.episodes, rateCeilingActive: this.isPaced } : {}), ...(this.blockedClient ? { stopReason: 'source_blocked_client' as const } : {}), origin: this.origin, requests: this.requests, requestCounts: { ...this.requestCounts }, throttleEvents: this.throttles, concurrency: this.limit, sustainedRate: elapsed > 0 ? this.requests / elapsed : 0 };
 	}
 
 	/**
@@ -397,12 +413,45 @@ export class SourceRequestGovernor {
 		// A one-second minimum observation window avoids an unbounded ceiling
 		// when the first response arrives in the same millisecond as admission.
 		this.learnedRateCeiling ??= Math.max(0.1, this.requests / Math.max(1, (Date.now() - (this.firstRequestAt ?? Date.now())) / 1000) / 2);
+		// Throttles inside an open episode (the rest of one fan-out burst, or a
+		// retry still refused) belong to it; one after it ended opens another.
+		if ( Date.now() >= this.episodeEndsAt ) this.episodes++;
 		this.nextRequestAt = Math.max(this.nextRequestAt, Date.now() + this.paceMs());
 		this.throttles++;
 		this.limit = 1;
 		this.browserThrottled = true;
 		this.successes = 0;
 		this.pausedUntil = Math.max( this.pausedUntil, Date.now() + delayMs );
+		this.episodeEndsAt = Math.max( this.episodeEndsAt, this.pausedUntil + this.recoveryWindowMs );
+	}
+
+	/** A throttle in a second episode makes pacing last for the rest of the capture. */
+	get isRateCeilingPersistent(): boolean { return this.episodes > 1; }
+
+	/** True while the learned ceiling paces admissions: during a throttle episode, or for good after a repeated one. */
+	get isPaced(): boolean {
+		return this.learnedRateCeiling !== undefined && ( this.isRateCeilingPersistent || Date.now() < this.episodeEndsAt );
+	}
+
+	/**
+	 * Resolves `true` once a transient throttle episode has ended and admissions
+	 * are no longer paced, or `false` when pacing is persistent or `untilMs`
+	 * (an epoch time) comes first. Callers that would otherwise add load to a
+	 * throttled source wait here instead of giving up on that work.
+	 */
+	async awaitUnpaced( untilMs: number, signal?: AbortSignal ): Promise< boolean > {
+		for ( ;; ) {
+			if ( ! this.isPaced ) return true;
+			if ( this.isRateCeilingPersistent ) return false;
+			const wait = Math.min( this.episodeEndsAt, untilMs ) - Date.now();
+			if ( wait <= 0 ) return ! this.isPaced;
+			await this.sleep( wait, signal );
+		}
+	}
+
+	/** Earliest start for the next admission: the source's pause, and the ceiling's spacing while paced. */
+	private nextAdmissionAt(): number {
+		return this.isPaced ? Math.max( this.pausedUntil, this.nextRequestAt ) : this.pausedUntil;
 	}
 
 	/** Outcomes observed by the browser's native network stack. */
@@ -423,8 +472,8 @@ export class SourceRequestGovernor {
 	/** Waits for the next request start allowed by the learned rate ceiling. */
 	async pace(signal?: AbortSignal): Promise<void> {
 		if (this.learnedRateCeiling === undefined) return;
-		for (let wait = Math.max(this.pausedUntil, this.nextRequestAt) - Date.now(); wait > 0; wait = Math.max(this.pausedUntil, this.nextRequestAt) - Date.now()) await this.sleep(wait, signal);
-		this.nextRequestAt = Date.now() + this.paceMs();
+		for (let wait = this.nextAdmissionAt() - Date.now(); wait > 0; wait = this.nextAdmissionAt() - Date.now()) await this.sleep(wait, signal);
+		if (this.isPaced) this.nextRequestAt = Date.now() + this.paceMs();
 	}
 
 	private recordSuccess() {
@@ -432,8 +481,8 @@ export class SourceRequestGovernor {
 		if ( ++this.successes < this.recoveryStep ) return;
 		this.successes = 0;
 		this.limit = Math.min(this.maxConcurrency, this.limit + 1);
-		// Recovery restores parallelism, never the pre-throttle rate: every
-		// request stays paced at the learned ceiling.
+		// Recovery restores parallelism; the rate ceiling ends with its
+		// throttle episode (see `isPaced`), not with concurrency recovery.
 		if (this.limit === this.maxConcurrency) this.browserThrottled = false;
 		this.wake();
 	}
@@ -444,9 +493,9 @@ export class SourceRequestGovernor {
 			await this.admitSourceRequest();
 			if ( signal?.aborted ) throw abortReason( signal ); // failure-class: operational
 			if ( (browser && !this.browserThrottled) || this.active < this.limit ) {
-				const wait = Math.max(this.pausedUntil, this.nextRequestAt) - Date.now();
+				const wait = this.nextAdmissionAt() - Date.now();
 				if ( wait <= 0 ) {
-					if (this.learnedRateCeiling !== undefined) this.nextRequestAt = Date.now() + this.paceMs();
+					if (this.isPaced) this.nextRequestAt = Date.now() + this.paceMs();
 					this.active++;
 					return;
 				}

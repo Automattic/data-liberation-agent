@@ -4,10 +4,10 @@ import type { ScreenshotOpts, Viewport } from './types.js';
 import type { FailureEntry, ManifestEntry, ProfileDiagnostic } from './manifest-queue.js';
 import type { PhaseLedger } from './phase-ledger.js';
 import { lockMainFrameNavigation } from './probe-guards.js';
-import { sourceGovernorFor } from '../browser-kit/source-traffic.js';
+import { sourceGovernorFor, sourcePacingDelayMs } from '../browser-kit/source-traffic.js';
 import { isSourceTransportThrottle } from '../source-request-governor.js';
 import { sameHttpSite } from './same-origin.js';
-import { externalNavigationMessage, navigateSourceDocument, storeExternalBoundary, isNavigationTimeout, maxSourceNavigationBudgetMs, SOURCE_LOAD_INCOMPLETE, SOURCE_SCRIPT_NAVIGATION, SOURCE_NAVIGATION_LIMITS, SOURCE_NAVIGATION_SLOW, SourceNavigationError } from '../source-navigation.js';
+import { externalNavigationMessage, navigateSourceDocument, storeExternalBoundary, isNavigationTimeout, maxSourceNavigationBudgetMs, SOURCE_LOAD_INCOMPLETE, SOURCE_SCRIPT_NAVIGATION, SOURCE_NAVIGATION_LIMITS, SOURCE_NAVIGATION_SLOW, SOURCE_NAVIGATION_PACED, SourceNavigationError } from '../source-navigation.js';
 import { resolveDocumentReferences } from '../document-resource-base.js';
 import { applyCaptureRemovals } from './apply-removals.js';
 import { accessGateRemoval, cleanupPolicyForResponse, applySourceCleanup, readSourceCleanup, cleanupPolicy, type CleanupPolicy } from '../source-cleanup.js';
@@ -98,10 +98,12 @@ export async function loadSourceBaseline( args: SourceLoadInput ): Promise<Sourc
 	const governor = sourceGovernorFor( page.context?.(), url );
 	const mayRetry = () => attempt < MAX_NAV_ATTEMPTS && ! timedOut && ! governor?.blockedClient;
 	let redirectedTo: string | undefined;
+	let pacedBefore = 0;
 	while ( ++attempt <= MAX_NAV_ATTEMPTS ) {
 		try {
 			// Refusal confirmation waits here, outside the navigation budget.
 			await governor?.admitSourceRequest();
+			pacedBefore = sourcePacingDelayMs( page );
 			args.phases?.enter( 'navigate' );
 			const started = Date.now();
 			const navigation = await navigateSourceDocument(page, url, {publicUrlsOnly, routeScope: args.routeScope, timeoutMs: budgetMs});
@@ -148,6 +150,16 @@ export async function loadSourceBaseline( args: SourceLoadInput ): Promise<Sourc
 		} catch ( err ) {
 			if ( args.rendererCrashed() ) return undefined;
 			if ( isNavigationTimeout( err ) ) {
+				// Our own rate ceiling held this page's loads back during a
+				// transient throttle episode: the timeout says nothing about the
+				// source. Wait the episode out and retry at the normal budget,
+				// keeping the single slow-source retry. Persistent pacing (the
+				// source throttled again after recovering) is not waited out.
+				if ( governor && attempt < MAX_NAV_ATTEMPTS && ! governor.blockedClient && sourcePacingDelayMs( page ) > pacedBefore
+					&& await governor.awaitUnpaced( Date.now() + maxSourceNavigationBudgetMs() ) ) {
+					args.diagnostics?.push( { code: SOURCE_NAVIGATION_PACED, reason: `navigation attempt ${ attempt } timed out while this capture's source rate ceiling paced the page's loads; retried after the throttle episode ended` } );
+					continue;
+				}
 				if ( mayRetry() ) {
 					timedOut = { budgetMs, error: err instanceof Error ? err.message.split( '\n' )[ 0 ]! : String( err ) };
 					budgetMs = maxSourceNavigationBudgetMs();

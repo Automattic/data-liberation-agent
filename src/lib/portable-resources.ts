@@ -6,7 +6,7 @@ import { isInlineUrl } from './self-contain.js';
 import type { CapturedResourceManifest } from './screenshot/resource-capture.js';
 import { fileHash, pathWithin, portableResourcePath, portableAssetUrl, uniqueAssetPath, TRANSPARENT_IMAGE_DATA_URL } from './portable-assets.js';
 import { DEFAULT_MAX_FILE_BYTES } from './export-file-limit.js';
-import { dependencyReferences, isExcludedRendition, preparePortableReplacements, replaceDanglingCssUrl, removeDanglingMediaSources, removeDanglingResourceReference, stripExcludedRenditionReferences, type DanglingMediaSource, type PortableDependency } from './portable-references.js';
+import { dependencyReferences, isExcludedRendition, preparePortableReplacements, replaceDanglingCssUrls, removeDanglingMediaSources, removeDanglingResourceReference, stripExcludedRenditionReferences, type DanglingMediaSource, type PortableDependency } from './portable-references.js';
 import { stripImageSetCandidates } from './srcset.js';
 
 /** The format named by a recognized binary signature, or undefined for text and unknown bytes. */
@@ -255,6 +255,7 @@ export function materializePortableResources( options: PortableResourceOptions )
 				// sheet's only rewrite: a site-wide pass keyed by authored spellings
 				// would remap one sheet's relative URL to another sheet's file.
 				const stylesheetReplacements = new Map< string, string >();
+				const danglingCss: string[] = [];
 				for ( const nested of dependencyReferences( content, dependency.url, true ) ) {
 					const mediaReplacement = mediaReplacements.get( nested.url );
 					if (
@@ -271,9 +272,10 @@ export function materializePortableResources( options: PortableResourceOptions )
 						}
 						stylesheetReplacements.set( nested.reference, resourceReplacements.get( nested.url )! );
 					} else {
-						content = replaceDanglingCssUrl( content, nested.reference, rejectedReplacementKeys );
+						danglingCss.push( nested.reference );
 					}
 				}
+				content = replaceDanglingCssUrls( content, danglingCss, rejectedReplacementKeys );
 				content = preparePortableReplacements( stylesheetReplacements, rejectedReplacementKeys )( content );
 			} else {
 				content = preparePortableReplacements( mediaReplacements, rejectedReplacementKeys )( content );
@@ -308,8 +310,14 @@ export function materializePortableResources( options: PortableResourceOptions )
 		let html = options.excludedRenditions?.size
 			? stripExcludedRenditionReferences( originalHtml, entry.url, options.excludedRenditions )
 			: originalHtml;
+		// Dangling rewrites read intermediate HTML, so they apply in dependency
+		// order. Pending CSS always precedes pending media: CSS queues only once
+		// earlier media has flushed.
+		const danglingCss: string[] = [];
 		const danglingMedia: DanglingMediaSource[] = [];
-		const flushDanglingMedia = () => {
+		const flushDangling = () => {
+			html = replaceDanglingCssUrls( html, danglingCss, rejectedReplacementKeys );
+			danglingCss.length = 0;
 			html = removeDanglingMediaSources( html, danglingMedia, rejectedReplacementKeys );
 			danglingMedia.length = 0;
 		};
@@ -349,17 +357,16 @@ export function materializePortableResources( options: PortableResourceOptions )
 			} else {
 				if ( dependency.kind === 'media' ) {
 					danglingMedia.push( { ...dependency, mediaReplacements: new Map( mediaReplacements ) } );
+				} else if ( dependency.kind === 'css' ) {
+					if ( danglingMedia.length ) flushDangling();
+					danglingCss.push( dependency.reference );
 				} else {
-					// These rewrites read intermediate HTML (and resource removal
-					// serializes it), so preserve their position among media batches.
-					flushDanglingMedia();
-					html = dependency.kind === 'css'
-						? replaceDanglingCssUrl( html, dependency.reference, rejectedReplacementKeys )
-						: removeDanglingResourceReference( html, dependency.reference );
+					flushDangling();
+					html = removeDanglingResourceReference( html, dependency.reference );
 				}
 			}
 		}
-		flushDanglingMedia();
+		flushDangling();
 		if ( html !== originalHtml ) writeFileSync( entry.htmlPath, html );
 	}
 

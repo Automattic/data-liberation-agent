@@ -215,6 +215,25 @@ describe( 'export total budget (maxTotalBytes, maxFiles)', () => {
 		expect( budgetRows( receipt ).some( row => row.url === SOURCE || row.url === HERO ) ).toBe( false );
 	} );
 
+	it( 'converges in one rebuild when the media plan had more media than it could keep', () => {
+		// Twenty distinct photos; the media plan, bounded by the same budget, keeps
+		// only some, so freed bytes must not readmit the photos it left out.
+		const outputDir = fixture();
+		const photos = Array.from( { length: 20 }, ( _, index ) => `https://cdn.example/gallery-${ index }.png` );
+		const about = join( outputDir, 'html/about.html' );
+		writeFileSync( about, readFileSync( about, 'utf8' ).replace( '</body>', `${ photos.map( url => `<img src="${ url }" alt="">` ).join( '' ) }</body>` ) );
+		const media = MediaStubStore.load( outputDir );
+		photos.forEach( ( url, index ) => {
+			writeFileSync( join( outputDir, `media/gallery-${ index }.png` ), Buffer.alloc( 5120, 10 + index ) );
+			media.markSuccess( url, join( outputDir, `media/gallery-${ index }.png` ) );
+		} );
+		media.flush();
+		exportWebsiteCapture( { outputDir, sourceUrl: SOURCE, platform: 'generic', summary, failures: [], limits: { maxTotalBytes: 60 * 1024 } } );
+		const receipt = receiptOf( outputDir );
+		expect( receipt.exportBudget ).toMatchObject( { withinBudget: true, droppedRoutes: 0, passes: 2 } );
+		expect( measureWebsite( join( outputDir, 'website' ) ).totalBytes ).toBeLessThanOrEqual( 60 * 1024 );
+	} );
+
 	it( 'enforces the file count like the byte total', () => {
 		const baseline = exportWith();
 		const maxFiles = baseline.website.files.length - 1;

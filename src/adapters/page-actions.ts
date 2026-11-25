@@ -32,6 +32,12 @@ export interface LiberationHooks {
    * a profile diagnostic. Recognize them from stable platform markers only.
    */
   probeExclusions?: readonly import('../lib/screenshot/probe-exclusions.js').ProbeExclusion[];
+  /**
+   * Opaque platform-owned runtime islands for template derivation. Their server
+   * shells must map to the capture and member through the existing slot anchors.
+   * Captured markup is retained; undeclared content and verification stay strict.
+   */
+  runtimeWidgetSelectors?: readonly string[];
   /** CSS selectors removed from the DOM before portable artifacts are produced. */
   removeSelectors?: string[];
   /** Acquire a platform-declared virtual route under its requested URL.
@@ -82,6 +88,13 @@ export interface LiberationHooks {
    * page's raw `document`, and must take the names the document gets.
    */
   canonicalizeHtml?(html: string, document?: string): string;
+  /** Resolve derived runtime media from the member's memoized light render.
+   * Undefined declines the member; capture verification remains unchanged. */
+  rewriteDerivedMedia?(input: {
+    memberServerHtml: string;
+    memberRenderedHtml?: string;
+    derivedHtml: string;
+  }): string | undefined;
   /**
    * Selectors that identify this platform's client-error shell: the document
    * its client runtime swaps in when the app crashes (for Next.js App Router,

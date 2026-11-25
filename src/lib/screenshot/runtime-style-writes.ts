@@ -29,7 +29,7 @@ export interface RuntimeStyleWrites {
 	written( element: Element ): boolean;
 	/** Script registered something that can react to a viewport change. */
 	viewportReactive(): boolean;
-	/** Distinct inline transforms written without an intervening viewport resize. */
+	/** Distinct inline transforms written without an intervening viewport resize or scroll. */
 	movingTransform( element: Element ): boolean;
 	/** Drain and begin/end style-mutation evidence for a height-only probe. */
 	heightProbe( active: boolean ): Element[];
@@ -49,6 +49,8 @@ export function observeRuntimeStyleWrites(): void {
 	let transforms = new WeakMap< Element, string >();
 	let transformWidth = innerWidth;
 	let transformHeight = innerHeight;
+	let transformScrollX = scrollX;
+	let transformScrollY = scrollY;
 	const declaration = document.createElement( 'div' ).style;
 	let heightProbe: Set< Element > | null = null;
 	let reactive = false;
@@ -63,11 +65,17 @@ export function observeRuntimeStyleWrites(): void {
 	const record = ( mutations: MutationRecord[] ) => {
 		// Start a new observation window on resize, before its delayed handlers
 		// write geometry. The first write is layout; another distinct transform
-		// at this same viewport is motion, not a width sample.
-		if ( innerWidth !== transformWidth || innerHeight !== transformHeight ) {
+		// at this same viewport is motion, not a width sample. A scroll-linked
+		// transform (parallax) is a function of the scroll offset, so capture's
+		// own lazy-load sweep starts a new window too: only a rewrite at the same
+		// viewport and offset is time-driven motion.
+		if ( innerWidth !== transformWidth || innerHeight !== transformHeight ||
+			scrollX !== transformScrollX || scrollY !== transformScrollY ) {
 			transforms = new WeakMap();
 			transformWidth = innerWidth;
 			transformHeight = innerHeight;
+			transformScrollX = scrollX;
+			transformScrollY = scrollY;
 		}
 		// Index loop: pages may patch Array.prototype.entries in the main world.
 		for ( let index = 0; index < mutations.length; index++ ) {

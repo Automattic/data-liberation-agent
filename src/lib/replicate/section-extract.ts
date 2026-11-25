@@ -532,6 +532,9 @@ export interface SectionSpecImage {
   kind: 'img' | 'background';
   width: number;
   height: number;
+  /** Media type of an inline `data:` source. Its payload already ships in the
+   *  captured page HTML, so `url` and `sourceUrl` are empty rather than a copy. */
+  inlineMediaType?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -1330,6 +1333,21 @@ function basenameIndexFor(mediaMap: Record<string, string>): Map<string, string>
     basenameIndexCache.set(mediaMap, idx);
   }
   return idx;
+}
+
+/**
+ * The bounded image reference a section spec records for one source. An inline
+ * `data:` image is evidence the captured page HTML already carries in full;
+ * copying it into every section (twice: `url` and `sourceUrl`) is what grew one
+ * product page's semantic evidence past 11 MB (#2244).
+ */
+export function sectionImageSource(
+  src: string,
+  mediaMap: Record<string, string>,
+): Pick<SectionSpecImage, 'url' | 'sourceUrl' | 'inlineMediaType'> {
+  const inline = /^data:([^;,]*)/i.exec(src);
+  if (inline) return { url: '', sourceUrl: '', inlineMediaType: inline[1].trim().toLowerCase() || 'text/plain' };
+  return { url: rewriteThroughMediaMap(src, mediaMap), sourceUrl: src };
 }
 
 export function rewriteThroughMediaMap(src: string, mediaMap: Record<string, string>): string {
@@ -2523,7 +2541,10 @@ export async function extractFull(
           const imgEl = cell.querySelector('img');
           if (imgEl) {
             const ir = imgEl.getBoundingClientRect();
-            const src = resolvedImageSrc(imgEl as HTMLImageElement);
+            // An inline data: payload can be megabytes and the page HTML already
+            // carries it; only its media-type header crosses (sectionImageSource).
+            const resolved = resolvedImageSrc(imgEl as HTMLImageElement);
+            const src = /^data:/i.test(resolved) ? resolved.slice(0, 400) : resolved;
             if (src) image = { src, alt: imgEl.getAttribute('alt') || '', w: Math.round(ir.width), h: Math.round(ir.height) };
           }
           let icon: { markup: string; w: number; h: number } | null = null;
@@ -3126,8 +3147,7 @@ export async function extractFull(
         const bodyLineHeight = bodyTexts[0]?.lh ?? 0;
         const image: SectionSpecImage | null = c.image && c.image.src
           ? {
-              url: rewriteThroughMediaMap(c.image.src, mediaMap),
-              sourceUrl: c.image.src,
+              ...sectionImageSource(c.image.src, mediaMap),
               alt: c.image.alt ?? '',
               kind: 'img',
               width: c.image.w,
@@ -3191,8 +3211,7 @@ export async function extractFull(
         }),
       ),
       images: rr.images.map((im) => ({
-        url: rewriteThroughMediaMap(im.src, mediaMap),
-        sourceUrl: im.src,
+        ...sectionImageSource(im.src, mediaMap),
         alt: im.alt,
         kind: im.kind,
         width: im.w,

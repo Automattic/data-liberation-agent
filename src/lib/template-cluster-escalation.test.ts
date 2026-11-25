@@ -174,4 +174,58 @@ describe( 'failed template cluster HTTP fallback', () => {
 			rmSync( outputDir, { recursive: true, force: true } );
 		}
 	} );
+
+	it( 'derives a phone document from the phone server pair when the source serves one (#2152)', async () => {
+		const parent = join( process.cwd(), '.tmp-test' );
+		mkdirSync( parent, { recursive: true } );
+		const outputDir = mkdtempSync( join( parent, 'cluster-phone-server-' ) );
+		mkdirSync( join( outputDir, 'screenshots' ) );
+		const urls = [ 'representative', 'verification', 'member' ].map( slug => `https://fixture.example/${ slug }/` );
+		const phoneAgent = 'Fixture Phone';
+		// The phone identity gets its own server document: a phone-only bar and
+		// phone layout classes, so desktop-pair anchors miss the phone capture.
+		const page = ( url: string, device: 'desktop' | 'mobile' ) => device === 'desktop'
+			? `<html><head><title>Fixture</title></head><body><div id="wrapper"><main class="desktop-layout"><h1>${ new URL( url ).pathname }</h1><p>Complete post content.</p></main></div></body></html>`
+			: `<html><head><title>Fixture</title></head><body><div id="wrapper"><nav class="phone-bar"><span>Menu</span></nav><main class="phone-layout"><h1>${ new URL( url ).pathname }</h1><p>Complete post content.</p></main></div></body></html>`;
+		const write = ( i: number, device: 'desktop' | 'mobile' ) => {
+			writeFileSync( join( outputDir, `screenshots/${ i }.${ device }.html` ), page( urls[ i ]!, device ) );
+			return `screenshots/${ i }.${ device }.html`;
+		};
+		const profile = ( device: 'desktop' | 'mobile' ) => ( { viewport: device === 'desktop' ? { width: 1440, height: 900 } : { width: 402, height: 681 }, html: write( 0, device ), ...( device === 'mobile' ? { userAgent: phoneAgent, identity: { userAgent: phoneAgent, isMobile: true } } : {} ) } );
+		const entries = {
+			[ urls[ 0 ]! ]: { slug: 'post-0', html: write( 0, 'desktop' ), mobileHtml: write( 0, 'mobile' ), capturedAt: new Date().toISOString(), profiles: { desktop: profile( 'desktop' ), mobile: profile( 'mobile' ) } },
+			[ urls[ 1 ]! ]: { slug: 'post-1', html: write( 1, 'desktop' ), capturedAt: new Date().toISOString() },
+		};
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries } ) );
+		const fetch = vi.spyOn( fetching, 'safeFetch' ).mockImplementation( async ( url, options ) => ( {
+			body: Buffer.from( page( String( url ), ( options?.headers as Record< string, string > | undefined )?.[ 'User-Agent' ] === phoneAgent ? 'mobile' : 'desktop' ) ), status: 200, finalUrl: String( url ), headers: new Headers( { 'content-type': 'text/html' } ),
+		} ) );
+		// Runtime media resolve from a light render as the document's own profile.
+		const renders: string[] = [];
+		const deferral = {
+			document: async ( url: string, source: string, render?: { id: string; identity?: { userAgent?: string } } ) => ( { html: source === 'rendered' ? `<!-- ${ render?.identity?.userAgent ?? 'desktop' } --> ${ page( url, render ? 'mobile' : 'desktop' ) }` : page( url, 'desktop' ) } ),
+			release: () => {},
+		} as unknown as NonNullable< Parameters< typeof deriveTemplateClusterMembers >[ 0 ][ 'deferral' ] >;
+		try {
+			const result = await deriveTemplateClusterMembers( {
+				sourceUrl: urls[ 0 ]!, outputDir, frontierUrls: [], governors: new SourceRequestGovernors(), deferral,
+				rewriteDerivedMedia: ( { derivedHtml, memberRenderedHtml } ) => { renders.push( `${ derivedHtml.includes( 'phone-bar' ) ? 'phone' : 'desktop' } document: ${ memberRenderedHtml?.match( /<!-- (.*?) -->/ )?.[ 1 ] }` ); return derivedHtml; },
+				report: {
+					schema: TEMPLATE_GROUPS_SCHEMA, sourceUrl: urls[ 0 ]!, fingerprint: { version: 1, maxSkeletonDepth: 8 },
+					limits: { ...TEMPLATE_GROUPING_LIMITS }, throttle: { events: 0 }, unfingerprinted: [],
+					coverage: { routes: 3, fingerprinted: 3, unfingerprinted: 0, groups: 1, singletons: 0 },
+					groups: [ { id: 't1', ...templateFingerprint( page( urls[ 0 ]!, 'desktop' ), urls[ 0 ]! ), representative: urls[ 0 ]!, size: 3, members: urls } ],
+				},
+			} );
+			expect( result.summary ).toMatchObject( { derived: 1, escalated: 0 } );
+			const member = JSON.parse( readFileSync( join( outputDir, 'screenshots/manifest.json' ), 'utf8' ) ).entries[ urls[ 2 ]! ];
+			expect( readFileSync( join( outputDir, member.mobileHtml ), 'utf8' ) ).toBe( page( urls[ 2 ]!, 'mobile' ) );
+			expect( readFileSync( join( outputDir, member.html ), 'utf8' ) ).toBe( page( urls[ 2 ]!, 'desktop' ) );
+			// Verification and the member's desktop document use the desktop render; its phone document the phone render.
+			expect( new Set( renders ) ).toEqual( new Set( [ 'desktop document: desktop', `phone document: ${ phoneAgent }` ] ) );
+		} finally {
+			fetch.mockRestore();
+			rmSync( outputDir, { recursive: true, force: true } );
+		}
+	} );
 } );

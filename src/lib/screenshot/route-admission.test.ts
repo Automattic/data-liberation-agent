@@ -89,6 +89,29 @@ describe( 'route admission calibration', () => {
 		expect( admission.estimate( 'reference' ) ).toBeCloseTo( 6.375 * GiB );
 	} );
 
+	it( 'admits by the measured plain working set when no route is in the reference sample', () => {
+		// A deferred reference samples no route, so no reference route ever
+		// completes. 13 GiB available on a 48 GiB machine (provisional 6 GiB).
+		const limit = 48 * GiB;
+		let available = 13 * GiB;
+		const admission = createRouteAdmission( { memoryLimit: limit, referenceRoutes: new Set(), availableMemory: () => available } );
+		expect( admission.kind( 'https://example.test/' ) ).toBe( 'plain' );
+		admission.sample(); // 35 GiB idle floor.
+		expect( admission.admit( 'plain', [] ) ).toBe( true );
+		admission.start( 'plain' );
+		available = 11.5 * GiB; // The entrypoint peaks 1.5 GiB above the floor.
+		admission.sample();
+		admission.calibrate( 'plain' );
+		admission.release( 'plain' );
+		available = 13 * GiB;
+		admission.sample();
+		expect( admission.estimate( 'plain' ) ).toBe( 1.5 * GiB );
+		// Five running plain routes plus the admitted one reserve 9 GiB, not 36 GiB.
+		const running: RouteKind[] = [ 'plain', 'plain', 'plain', 'plain', 'plain' ];
+		expect( admission.admit( 'plain', running ) ).toBe( true );
+		expect( admission.diagnostic( 'plain', 6, 'https://example.test/next' ) ).toMatchObject( { reservedBytes: 1.5 * GiB, calibrated: { reference: false, plain: true } } );
+	} );
+
 	it( 'runs a route\'s profiles concurrently only with room for another share', () => {
 		let available = 900;
 		const admission = createRouteAdmission( { memoryLimit: 1000, availableMemory: () => available } );

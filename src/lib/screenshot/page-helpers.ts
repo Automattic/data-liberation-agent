@@ -137,7 +137,8 @@ export async function settleDocument(
             observer.observe(root, { childList: true, subtree: true, attributes: true, attributeOldValue: true, characterData: true });
             const animating = () => animations && document.getAnimations().some((animation) =>
               animation.playState === 'running' && animation.timeline === document.timeline &&
-              animation.effect?.getComputedTiming().iterations !== Infinity);
+              animation.effect?.getComputedTiming().iterations !== Infinity &&
+              (!selector || (animation.effect instanceof KeyframeEffect && !!animation.effect.target && root.contains(animation.effect.target))));
             const pendingMedia = () => {
               if (!media) return [];
               const pending: Element[] = [];

@@ -24,7 +24,7 @@ it( 'closes lazy-load before baseline and geometry work in the profile ledger (#
 		const entry = JSON.parse( readFileSync( result.manifestPath, 'utf8' ) ).entries[ url ];
 		const phases: CapturePhase[] = entry.profiles.desktop.phases;
 		const names = phases.map( row => row.phase );
-		const expected = [ 'lazy-load', 'baseline', 'layout-geometry', 'root-class', 'script-motion', 'baseline-snapshot', 'observe-source' ];
+		const expected = [ 'lazy-load', 'baseline', 'layout-geometry', 'root-class', 'script-motion', 'chrome-hydration', 'baseline-snapshot', 'observe-source' ];
 		const start = names.indexOf( 'lazy-load' );
 		expect( start ).toBeGreaterThanOrEqual( 0 );
 		// Ledger entries close on the next enter; this contiguous sequence proves

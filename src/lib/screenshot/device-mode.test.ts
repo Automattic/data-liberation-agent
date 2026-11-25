@@ -11,7 +11,7 @@ import { exportWebsiteCapture } from '../capture-export.js';
 import { startStaticServer } from '../replicate/local-site/static-server.js';
 import { createReferenceCollector } from '../fidelity/reference.js';
 import { checkFidelity } from '../fidelity/check.js';
-import { compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, normalizeServerHtml, observeSwitchWidth, switchProbeIdentity, type SwitchRendering, withoutEmptyBodyMounts, replayableRequestHeaders, resampleSiteServerHtml, summarizeRouteDecisions } from './device-mode.js';
+import { compareBodyClasses, compareServerHtml, compareStructure, decideRouteMode, decideSiteMode, normalizeServerHtml, observeSwitchWidth, switchProbeIdentity, type SwitchRendering, withoutEmptyBodyMounts, replayableRequestHeaders, resampleSiteServerHtml, servedWidthRange, summarizeRouteDecisions } from './device-mode.js';
 import type { ManifestEntry } from './manifest-queue.js';
 import type { ScreenshotResult } from './types.js';
 
@@ -22,6 +22,16 @@ describe( 'device-mode evidence', () => {
 		expect( comparisonFailedAlike( new SourceNavigationError( 'Source navigation time budget exhausted' ), new SourceNavigationError( 'Source navigation time budget exhausted' ) ) ).toBe( false );
 		expect( comparisonFailedAlike( new Error( 'the desktop document answered HTTP 404' ), new Error( 'the mobile document answered HTTP 404' ) ) ).toBe( true );
 		expect( comparisonFailedAlike( new Error( 'the desktop document answered HTTP 404' ), new Error( 'the mobile document answered HTTP 500' ) ) ).toBe( false );
+	} );
+
+	it( 'bounds each dual document to the widths export always serves it at', () => {
+		const decision = { switchWidth: 479, middleLayout: { minWidth: 480, maxWidth: 529 } };
+		expect( servedWidthRange( decision, 'mobile' ) ).toEqual( { max: 479 } );
+		expect( servedWidthRange( decision, 'middle' ) ).toEqual( { min: 480, max: 529 } );
+		// An export collapse ships the desktop document at every width.
+		expect( servedWidthRange( decision, 'desktop' ) ).toBeUndefined();
+		expect( servedWidthRange( { switchWidth: 479, middleLayout: { minWidth: 480 } }, 'middle' ) ).toBeUndefined();
+		expect( servedWidthRange( {}, 'mobile' ) ).toBeUndefined();
 	} );
 
 	it( 'switches at the first boundary where the phone identity stops rendering the phone document', async () => {

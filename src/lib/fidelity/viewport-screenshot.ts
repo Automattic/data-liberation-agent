@@ -23,6 +23,17 @@ export async function captureFullPageScreenshot( page: Page, excludedMotion: str
 		}
 		return effects;
 	} );
+	// The full-page raster re-paints the whole document at once. An image whose
+	// compositor decode was evicted (a lazy-load sweep decodes every image on a
+	// long page) and that is marked decoding=async may be left out of that frame
+	// and painted only in the next one, so the capture records the background
+	// where a visitor sees the image. Paint every image synchronously for this
+	// frame only; authored attributes are restored below.
+	const decoding = await page.evaluateHandle( () => [ ...document.images ].map( image => {
+		const attribute = image.getAttribute( 'decoding' );
+		image.decoding = 'sync';
+		return { image, attribute };
+	} ) );
 	try {
 		const session = await page.context().newCDPSession( page );
 		try {
@@ -43,6 +54,13 @@ export async function captureFullPageScreenshot( page: Page, excludedMotion: str
 			return PNG.sync.write( normalized );
 		} finally { await session.detach(); }
 	} finally {
+		await decoding.evaluate( entries => {
+			for ( const { image, attribute } of entries ) {
+				if ( attribute === null ) image.removeAttribute( 'decoding' );
+				else image.setAttribute( 'decoding', attribute );
+			}
+		} );
+		await decoding.dispose();
 		await effects.evaluate( effects => { for ( const { effect, frames } of effects ) effect.setKeyframes( frames ); } );
 		await effects.dispose();
 		await hidden.evaluate( entries => { for ( const { element, visibility } of entries ) element.style.visibility = visibility; } );

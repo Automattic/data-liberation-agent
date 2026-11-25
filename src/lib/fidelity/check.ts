@@ -427,27 +427,35 @@ export async function observePage(
 				if ( pose.x || pose.y || pose.innerY ) throw new Error( `Observation pose unproven: baseline callback left the document scrolled to (${ pose.x }, ${ pose.y }), inner scroller at ${ pose.innerY }` );
 			}
 		}
+		const clickUnresolved = ! localOrigin && ! captureSession;
 		const measured = await page.evaluate( async ( { clickUnresolved, skipScrollProbe }: { clickUnresolved: boolean; skipScrollProbe: boolean } ) => {
 			const globalWithName = globalThis as typeof globalThis & { __name?: (fn: unknown) => unknown };
 			if (typeof globalWithName.__name === 'undefined') globalWithName.__name = fn => fn;
-			// Perceptual identity for one image: fetch the bytes (cache-warm —
-			// the page just rendered them), decode locally, downscale to 8x8
-			// grayscale, threshold at the mean. Fetching keeps this
-			// cross-origin safe where canvas reads of the element would taint;
-			// any failure leaves null and the key-only matcher covers it.
-			const hashCache = new Map< string, Promise< { contentHash: string; assetHash: string | null } | null > >();
-			const contentHashFor = ( src: string ): Promise< { contentHash: string; assetHash: string | null } | null > => {
+			// Resource and perceptual identity for one image: fetch the bytes
+			// (cache-warm — the page just rendered them), digest them, then decode
+			// locally, downscale to 8x8 grayscale and threshold at the mean.
+			// Fetching keeps this cross-origin safe where canvas reads of the
+			// element would taint. The digest does not depend on decoding:
+			// createImageBitmap rejects formats such as SVG, and that must not
+			// discard byte identity. Any failure leaves null and the key-only
+			// matcher covers it.
+			const hashCache = new Map< string, Promise< { contentHash: string | null; assetHash: string | null } | null > >();
+			const contentHashFor = ( src: string ): Promise< { contentHash: string | null; assetHash: string | null } | null > => {
 				const cached = hashCache.get( src );
 				if ( cached ) return cached;
 				const pending = ( async () => {
+					let blob: Blob, assetHash: string | null;
 					try {
 						if ( ! src || src.startsWith( 'data:' ) || src.startsWith( 'blob:' ) ) return null;
 						const response = await fetch( src, { mode: 'cors', credentials: 'omit', signal: AbortSignal.timeout( 5000 ) } );
 						if ( ! response.ok ) return null;
-						const blob = await response.blob();
-						const bytes = await blob.arrayBuffer();
-						const digest = await globalThis.crypto?.subtle?.digest( 'SHA-256', bytes );
-						const assetHash = digest ? Array.from( new Uint8Array( digest ), byte => byte.toString( 16 ).padStart( 2, '0' ) ).join( '' ) : null;
+						blob = await response.blob();
+						const digest = await globalThis.crypto?.subtle?.digest( 'SHA-256', await blob.arrayBuffer() );
+						assetHash = digest ? Array.from( new Uint8Array( digest ), byte => byte.toString( 16 ).padStart( 2, '0' ) ).join( '' ) : null;
+					} catch {
+						return null;
+					}
+					try {
 						const bitmap = await createImageBitmap( blob );
 						const side = 8;
 						const canvas = new OffscreenCanvas( side, side );
@@ -470,7 +478,7 @@ export async function observePage(
 						}
 						return { contentHash: value, assetHash };
 					} catch {
-						return null;
+						return assetHash ? { contentHash: null, assetHash } : null;
 					}
 				} )();
 				hashCache.set( src, pending );
@@ -1077,7 +1085,14 @@ export async function observePage(
 				hashTargets,
 				internalPaths,
 			};
-		}, { clickUnresolved: ! localOrigin && ! captureSession, skipScrollProbe } );
+		}, { clickUnresolved, skipScrollProbe } );
+		// The in-page scroll and fragment probes park the document back at its
+		// pose with a bare scrollTo: no settle, and a throttled or debounced
+		// scroll handler may still hold its scrolled state (a sticky header in
+		// its scrolled look). Restore the rest pose the same way the sweep does,
+		// so anything rendered after observation — the frozen screenshot, the
+		// dialog probes — sees the document as a visitor at the top does.
+		if ( ! skipScrollProbe || clickUnresolved ) await restoreTopScrollState( page );
 
 		const internalRoutes: InternalRouteOutcome[] = [];
 		if ( localOrigin ) {
@@ -1634,6 +1649,15 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 	};
 }
 
+/** A capture exported with deferReference freezes its declared reference cells before its first comparison. */
+async function finishDeferredReference( directory: string, log?: ( message: string ) => void ): Promise< void > {
+	const statePath = join( directory, 'reference-stage.json' );
+	if ( ! existsSync( statePath ) || ( JSON.parse( readFileSync( statePath, 'utf8' ) ) as { status?: string } ).status !== 'pending' ) return;
+	log?.( '[compare] freezing deferred reference cells' );
+	const { runReferenceStage } = await import( './reference-stage.js' );
+	await runReferenceStage( directory );
+}
+
 /** Frozen stages share the live observer and registered scoring path; no source browser is created. */
 async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'capture' | 'materialization' ): Promise<FidelityReport> {
 	const concurrency = options.concurrency ?? 3;
@@ -1644,6 +1668,7 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 	if ( stage === 'capture' && options.candidateUrl ) throw new Error( 'candidateUrl requires materialization or drift stage' );
 	const { websiteDir, receiptPath } = resolveCheckDirectory( options.directory );
 	const directory = dirname( receiptPath );
+	await finishDeferredReference( directory, options.log );
 	const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) ) as CaptureReceipt;
 	const sources = routeSourceMap( receipt );
 	let widths = options.widths ?? [ ...REFERENCE_WIDTHS ];

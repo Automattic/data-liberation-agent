@@ -104,6 +104,8 @@ export interface RouteDiagnostic {
 	metrics?: Record< string, number >;
 	stopReason?: 'source_blocked_client';
 	learnedRateCeiling?: number;
+	/** `origin`: the row describes the whole source origin (its `url` is the origin), not one route. */
+	scope?: 'origin';
 }
 
 function documentIdentity( url: string ): string | undefined {
@@ -117,7 +119,9 @@ function documentIdentity( url: string ): string | undefined {
 /**
  * Why the capture holds no rendered page for the source URL, from what the
  * capture itself recorded: a failed or absent route, or a server redirect to
- * another route. Undefined when nothing explains the absence.
+ * another route. Only route-scoped rows name the cause; an origin-wide row (its
+ * `url` is the origin, which can share the homepage's identity) is appended as
+ * context. Undefined when nothing explains the absence.
  */
 function entrypointAbsenceReason(
 	sourceUrl: string,
@@ -126,6 +130,21 @@ function entrypointAbsenceReason(
 	routeDiagnostics: ReadonlyArray< RouteDiagnostic >
 ): string | undefined {
 	const sourceIdentity = normalizedUrl( sourceUrl );
+	const routeRows = routeDiagnostics.filter( ( { scope } ) => scope !== 'origin' );
+	const originContext = routeDiagnostics
+		.filter( ( { scope, url } ) => scope === 'origin' && URL.canParse( url ) && new URL( url ).origin === new URL( sourceUrl ).origin )
+		.map( ( { reason } ) => reason );
+	const cause = entrypointAbsenceCause( sourceUrl, sourceIdentity, capturedIdentities, redirectAliases, routeRows );
+	return cause && originContext.length ? `${ cause } (source origin: ${ originContext.join( '; ' ) })` : cause;
+}
+
+function entrypointAbsenceCause(
+	sourceUrl: string,
+	sourceIdentity: string,
+	capturedIdentities: ReadonlySet< string >,
+	redirectAliases: ReadonlyArray< { url: string; target: string } >,
+	routeDiagnostics: ReadonlyArray< RouteDiagnostic >
+): string | undefined {
 	const recorded = routeDiagnostics.find( ( { url } ) => documentIdentity( url ) === sourceIdentity );
 	if ( recorded ) {
 		const failure = `Source homepage ${ sourceUrl } was not captured: ${ recorded.reason }`;

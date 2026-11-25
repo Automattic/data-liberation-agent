@@ -1,3 +1,5 @@
+import * as cheerio from 'cheerio';
+
 /**
  * Wix repeats every repeater/section component under a page-specific instance
  * prefix — `<page instance>_r_<component>` — in element ids, class names and the
@@ -16,48 +18,98 @@
  * Markup captured from a page, such as an opened dialog, takes the names of
  * its `document`: a fragment holds only some of an instance's components, and
  * named on its own it would no longer match the page CSS that styles it.
+ * Markup reused from another page (shared chrome's opened menu) still carries
+ * that page's instance prefix, and holds components (the open panel's) this
+ * page's closed copy never renders. A component id belongs to one widget, so
+ * when exactly one of the document's instances scopes any component the
+ * foreign instance does, the fragment is that chrome on this page and takes
+ * that instance's name.
  *
- * An instance already named by this canonicalization keeps its name. The export
- * canonicalizes each route again after its stylesheets became linked files, so
- * the markup then shows only some of the instance's components; renaming it
- * from that subset would leave every external rule pointing at the old name.
+ * An instance already named by this canonicalization keeps its name. Export
+ * applies the hook before splitting shared inline styles into linked files;
+ * subsequent calls must preserve names already used by external rules.
  */
-const INSTANCE_REFERENCE = /\b(comp-[a-z0-9]+)_r_(comp-[a-z0-9]+)/gi;
+
+// A hyphen is a boundary too: Wix derives ids such as img-comp-X_r_comp-Y.
+const INSTANCE_REFERENCE = /(?<![a-z0-9])(comp-[a-z0-9]+)_r_(comp-[a-z0-9]+)/gi;
 const CANONICAL_INSTANCE = /^comp-dla[0-9a-f]{8}$/i;
 
 export function canonicalizeWixInstanceIds( html: string, document: string = html ): string {
-	const tokenByInstance = new Map( instanceTokens( document ) );
+	const page = documentInstances( document );
+	const tokenByInstance = new Map( page.tokens );
+	const hosted = new Map< string, string >();
 	if ( document !== html ) {
-		for ( const [ instance, token ] of instanceTokens( html ) ) if ( ! tokenByInstance.has( instance ) ) tokenByInstance.set( instance, token );
+		for ( const [ instance, components ] of instanceComponents( html ) ) {
+			if ( tokenByInstance.has( instance ) ) continue;
+			const hosts = [ ...page.components ].filter( ( [ , scope ] ) => [ ...components ].some( component => scope.has( component ) ) );
+			if ( hosts.length === 1 ) hosted.set( instance, page.tokens.get( hosts[ 0 ]![ 0 ] )! );
+			else tokenByInstance.set( instance, instanceToken( components ) );
+		}
 	}
-	if ( tokenByInstance.size === 0 ) return html;
+	if ( tokenByInstance.size === 0 && hosted.size === 0 ) return html;
 	// Two instances scoping the same components on one page would collapse into
 	// one token and merge rules meant for different elements. Keep such a page
 	// exactly as captured rather than guess.
 	if ( new Set( tokenByInstance.values() ).size !== tokenByInstance.size ) return html;
-	const named = new Set( [ ...`${ document }\n${ html }`.matchAll( INSTANCE_REFERENCE ) ].map( ( [ , instance ] ) => instance!.toLowerCase() ).filter( instance => CANONICAL_INSTANCE.test( instance ) ) );
+	for ( const [ instance, token ] of hosted ) tokenByInstance.set( instance, token );
+	const named = document === html ? page.named : new Set( [ ...page.named, ...namedInstances( html ) ] );
 	if ( [ ...tokenByInstance.values() ].some( token => named.has( token ) ) ) return html;
 
 	// The instance element carries the bare instance id too (`id="<instance>"`,
 	// `<instance>-container`), and the page stylesheet targets it, so every
-	// whole-token occurrence of an instance id is rewritten, not only the
+	// whole-token occurrence (including Wix's img-, portal- and bgMedia_ derived ids and their
+	// selectors/references) is rewritten, not only the
 	// `_r_` references. A longer id that merely starts with it is left alone.
 	const instancePattern = new RegExp(
-		`(?<![a-z0-9_-])(${ [ ...tokenByInstance.keys() ].map( escapeRegExp ).join( '|' ) })(?![a-z0-9])`,
+		`(?<![a-z0-9])(${ [ ...tokenByInstance.keys() ].map( escapeRegExp ).join( '|' ) })(?![a-z0-9])`,
 		'gi'
 	);
 	return html.replace( instancePattern, ( match ) => tokenByInstance.get( match ) ?? match );
 }
 
-function instanceTokens( html: string ): Map< string, string > {
+/**
+ * Captured fragments are canonicalized against their page document, once per
+ * string in an interaction report: thousands of calls in a row with the same
+ * multi-megabyte document. Derive each document's names once, not per call.
+ */
+function lastResult< T >( derive: ( text: string ) => T ): ( text: string ) => T {
+	let last: { text: string; value: T } | undefined;
+	return text => {
+		if ( last?.text !== text ) last = { text, value: derive( text ) };
+		return last.value;
+	};
+}
+
+const documentInstances = lastResult( document => {
+	const components = instanceComponents( document );
+	return { components, tokens: new Map( [ ...components ].map( ( [ instance, scope ] ) => [ instance, instanceToken( scope ) ] ) ), named: namedInstances( document ) };
+} );
+const canonicalDocument = lastResult( document => canonicalizeWixInstanceIds( document ) );
+const documentFormControlTokens = lastResult( formControlTokens );
+
+function namedInstances( html: string ): Set< string > {
+	return new Set( [ ...html.matchAll( INSTANCE_REFERENCE ) ].map( ( [ , instance ] ) => instance!.toLowerCase() ).filter( instance => CANONICAL_INSTANCE.test( instance ) ) );
+}
+
+function instanceToken( components: ReadonlySet< string > ): string {
+	return `comp-dla${ fnv1a( [ ...components ].sort().join( ' ' ) ) }`;
+}
+
+function instanceComponents( html: string ): Map< string, Set< string > > {
 	const componentsByInstance = new Map< string, Set< string > >();
-	for ( const [ , instance, component ] of html.matchAll( INSTANCE_REFERENCE ) ) {
+	// Styles may contain dead selectors, and may already be linked on another
+	// route. Only rendered markup defines the scope's identity.
+	const $ = cheerio.load( html );
+	const references = $( '[id], [class]' ).toArray().map( element =>
+		`${ $( element ).attr( 'id' ) ?? '' } ${ $( element ).attr( 'class' ) ?? '' }`
+	).join( ' ' );
+	for ( const [ , instance, component ] of references.matchAll( INSTANCE_REFERENCE ) ) {
 		if ( CANONICAL_INSTANCE.test( instance! ) ) continue;
 		const components = componentsByInstance.get( instance! ) ?? new Set< string >();
 		components.add( component!.toLowerCase() );
 		componentsByInstance.set( instance!, components );
 	}
-	return new Map( [ ...componentsByInstance ].map( ( [ instance, components ] ) => [ instance, `comp-dla${ fnv1a( [ ...components ].sort().join( ' ' ) ) }` ] ) );
+	return componentsByInstance;
 }
 
 /**
@@ -74,8 +126,9 @@ const FORM_CONTROL_ID = /\sid=(["'])(checkbox-\d+)\1/gi;
 const FORM_FIELD_HOOK = /data-hook=(["'])(form-field-[^"']+)\1/gi;
 
 export function canonicalizeWixFormControlIds( html: string, document: string = html ): string {
-	const tokenById = formControlTokens( document );
-	if ( ! tokenById ) return html;
+	const documentTokens = documentFormControlTokens( document );
+	if ( ! documentTokens ) return html;
+	const tokenById = new Map( documentTokens );
 	if ( document !== html ) {
 		const own = formControlTokens( html );
 		for ( const [ id, token ] of own ?? [] ) if ( ! tokenById.has( id ) ) tokenById.set( id, token );
@@ -108,7 +161,7 @@ function formControlTokens( html: string ): Map< string, string > | undefined {
 
 /** Every Wix runtime-id canonicalization a captured document, or markup captured from it, needs. */
 export function canonicalizeWixCapturedHtml( html: string, document: string = html ): string {
-	return canonicalizeWixFormControlIds( canonicalizeWixInstanceIds( html, document ), canonicalizeWixInstanceIds( document ) );
+	return canonicalizeWixFormControlIds( canonicalizeWixInstanceIds( html, document ), canonicalDocument( document ) );
 }
 
 function escapeRegExp( text: string ): string {

@@ -9,6 +9,7 @@ import { chromium, type Browser, type BrowserContext } from 'playwright';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 // @ts-ignore TS6059: test helpers intentionally live outside the production rootDir.
 import { exportFixture } from '../../test/export-fixture.js';
+import { canonicalizeWixCapturedHtml } from '../adapters/wix/instance-ids.js';
 import * as sharedChrome from './shared-chrome.js';
 import { probeCanonicalRouteAliases } from './route-aliases.js';
 import { includeReferences, readResolvedPage } from './site-includes.js';
@@ -218,6 +219,17 @@ describe( 'exportWebsiteCapture', () => {
 			expect( values.slice( destinations.length ) ).toEqual( unchanged );
 		}
 	} );
+	it( 'reports unproven box trees from capture profiles in export diagnostics', () => {
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		const sourceUrl = 'https://example.test/';
+		const diagnostic = { code: 'box_tree_unproven', reason: 'Saved mobile document could not be bound: unstamped node at html[n0]>head' };
+		capture.page( sourceUrl, '<h1>Home</h1>', { entry: { html: 'html/homepage.html', profiles: { mobile: { viewport: { width: 390, height: 844 }, diagnostics: [ diagnostic ] } } } } );
+		exportWebsiteCapture( { outputDir, sourceUrl, platform: 'generic', summary: {}, failures: [] } );
+		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
+		expect( diagnostics.discoveryDiagnostics ).toContainEqual( { ...diagnostic, url: sourceUrl } );
+	} );
+
 	it( 'names the capture-stage cause when the homepage has no manifest entry', () => {
 		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
 		const outputDir = capture.build();
@@ -482,6 +494,34 @@ describe( 'exportWebsiteCapture', () => {
 		const shard = readFileSync( join( outputDir, index.shards[ 0 ].path ), 'utf8' );
 		expect( Buffer.byteLength( shard ) ).toBe( maxFileBytes );
 		expect( shard ).toContain( '🍜' );
+	} );
+
+	it( 'omits one route\'s oversized semantic evidence and still exports every route (#2244)', () => {
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		capture.page( 'https://example.com/', '<main><h1>Home</h1></main>', { entry: { html: 'html/homepage.html', slug: 'homepage' } } );
+		capture.page( 'https://example.com/product/planter/', '<main><h1>Planter</h1></main>', { entry: { html: 'html/planter.html', slug: 'planter' } } );
+		SectionSpecsStore.load( outputDir ).set( 'https://example.com/', [ { selector: 'main', headings: [ 'Home' ] } as never ], [] );
+		SectionSpecsStore.load( outputDir ).set( 'https://example.com/product/planter/', [ {
+			selector: 'main',
+			headings: [ 'Planter' ],
+			samples: 'x'.repeat( 11 * 1024 * 1024 ),
+		} as never ], [] );
+		const receiptPath = exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
+		expect( existsSync( join( outputDir, 'website', 'index.html' ) ) ).toBe( true );
+		expect( readFileSync( join( outputDir, 'website', 'product', 'planter', 'index.html' ), 'utf8' ) ).toContain( 'Planter' );
+		const index = JSON.parse( readFileSync( join( outputDir, 'semantic-evidence.index.json' ), 'utf8' ) );
+		expect( index ).toMatchObject( {
+			page_count: 1,
+			omitted_pages: [ { path: 'website/product/planter/index.html', url: 'https://example.com/product/planter/', reason: 'exceeds_file_limit' } ],
+		} );
+		const pages = index.shards.flatMap( ( shard: { path: string } ) => JSON.parse( readFileSync( join( outputDir, shard.path ), 'utf8' ) ).pages );
+		expect( pages.map( ( page: { path: string } ) => page.path ) ).toEqual( [ 'website/index.html' ] );
+		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
+		expect( receipt.discoveryDiagnostics ).toContainEqual( expect.objectContaining( {
+			code: 'semantic_evidence_omitted', url: 'https://example.com/product/planter/', path: 'website/product/planter/index.html', severity: 'warning',
+		} ) );
+		expect( receipt.routes.map( ( route: { path: string } ) => route.path ) ).toEqual( expect.arrayContaining( [ 'website/index.html', 'website/product/planter/index.html' ] ) );
 	} );
 
 	it( 'exports hash-bound geometry proof without runtime capture markers', () => {
@@ -1680,7 +1720,7 @@ describe( 'exportWebsiteCapture', () => {
 		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
 		const outputDir = capture.build();
 		capture.file( join( 'html', 'homepage.html' ), '<html><body><main>' +
-				'<iframe class="map" title="Map" style="width:100%;height:auto;aspect-ratio:16 / 9" src="https://source.example/wrong" width="100%" height="100%" allow="fullscreen" loading="lazy" sandbox="allow-scripts" referrerpolicy="no-referrer" allowfullscreen frameborder="0" onclick="steal()" srcdoc="<script>steal()</script>" data-blocks-engine-capture-visual-iframe-src="https://maps.example/embed" data-blocks-engine-capture-visual-iframe-width="1280" data-blocks-engine-capture-visual-iframe-height="350"></iframe>' +
+				'<iframe class="map" data-blocks-engine-node-id="n7" title="Map" style="width:100%;height:auto;aspect-ratio:16 / 9" src="https://source.example/wrong" width="100%" height="100%" allow="fullscreen" loading="lazy" sandbox="allow-scripts" referrerpolicy="no-referrer" allowfullscreen frameborder="0" onclick="steal()" srcdoc="<script>steal()</script>" data-blocks-engine-capture-visual-iframe-src="https://maps.example/embed" data-blocks-engine-capture-visual-iframe-width="1280" data-blocks-engine-capture-visual-iframe-height="350"></iframe>' +
 				'<iframe src="https://hidden.example/embed" width="500" height="300"></iframe>' +
 				'<iframe src="javascript:steal()" data-blocks-engine-capture-visual-iframe-src="javascript:steal()" data-blocks-engine-capture-visual-iframe-width="500" data-blocks-engine-capture-visual-iframe-height="300"></iframe>' +
 				'<iframe src="https://zero.example/embed" data-blocks-engine-capture-visual-iframe-src="https://zero.example/embed" data-blocks-engine-capture-visual-iframe-width="0" data-blocks-engine-capture-visual-iframe-height="300"></iframe>' +
@@ -1693,6 +1733,8 @@ describe( 'exportWebsiteCapture', () => {
 		expect( $( 'iframe' ).attr( 'width' ) ).toBe( '100%' );
 		expect( $( 'iframe' ).attr( 'height' ) ).toBe( '350' );
 		expect( $( 'iframe' ).attr( 'class' ) ).toBe( 'map' );
+		// Its box-tree binding survives, so the frame keeps its captured geometry.
+		expect( $( 'iframe' ).attr( 'data-blocks-engine-node-id' ) ).toBe( 'n7' );
 		// The authored box wins over the one viewport's attested pixel size.
 		expect( $( 'iframe' ).attr( 'style' ) ).toBe( 'width:100%;height:auto;aspect-ratio:16 / 9' );
 		expect( $( 'iframe' ).attr( 'frameborder' ) ).toBeUndefined();
@@ -2809,6 +2851,58 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( html ).not.toContain( '(max-width:767px)' );
 	} );
 
+	it( 'keeps instance markup and linked capture selectors consistent across route-local canonicalization', () => {
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		const first = 'comp-aaaa1111';
+		const second = 'comp-bbbb2222';
+		const document = ( raw: string, title: string, extra = '', deadRule = false ) =>
+			`<!doctype html><html><head><style>#${ raw }_r_comp-header{height:102px}` +
+			`.${ raw }_r_comp-nav{display:flex}#bgMedia_${ raw }_r_comp-header{background:red}</style>` +
+			`${ deadRule ? `<style>.${ raw }_r_comp-dead{display:none}</style>` : '' }</head><body>` +
+			`<header><section id="${ raw }_r_comp-header"><div id="bgMedia_${ raw }_r_comp-header"></div>` +
+			`<nav class="${ raw }_r_comp-nav">Home</nav></section></header>` +
+			`<main><h1>${ title }</h1>${ extra }</main></body></html>`;
+		const collision = '<aside class="comp-cccc3333_r_comp-header comp-cccc3333_r_comp-nav">Other instance</aside>';
+		const pages = [
+			[ '', first, '', true ],
+			[ 'post', second, '', false ],
+			[ 'home-twin', first, '', false ],
+			[ 'collision', second, collision, false ],
+			[ 'collision-two', second, collision, false ],
+		] as const;
+		for ( const [ slug, raw, extra, dead ] of pages ) {
+			capture.page( `https://example.com/${ slug }`, document( raw, slug || 'Home', extra, dead ), {
+				entry: { html: `html/${ slug || 'home' }.html` },
+			} );
+		}
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [], canonicalizeHtml: canonicalizeWixCapturedHtml } );
+		const tokens: string[] = [];
+		for ( const [ slug, raw ] of pages ) {
+			const html = readResolvedPage( join( outputDir, 'website' ), join( outputDir, 'website', slug ? `${ slug }/index.html` : 'index.html' ) );
+			const $ = cheerio.load( html );
+			const id = $( 'section' ).attr( 'id' )!;
+			const token = id.split( '_r_' )[ 0 ]!;
+			tokens.push( token );
+			const linkedCss = $( 'link[rel="stylesheet"]' ).toArray().map( element =>
+				readFileSync( join( outputDir, 'website', $( element ).attr( 'href' )!.replace( /^\//, '' ) ), 'utf8' )
+			);
+			expect( linkedCss.length ).toBeGreaterThan( 0 );
+			expect( linkedCss.join( '\n' ) ).toContain( `#${ id }{height:102px}` );
+			expect( linkedCss.join( '\n' ) ).toContain( `#bgMedia_${ id }{background:red}` );
+			expect( $( '[id^="bgMedia_"]' ).attr( 'id' ) ).toBe( `bgMedia_${ id }` );
+			if ( token !== raw ) {
+				for ( const css of linkedCss ) expect( css ).not.toContain( raw );
+			} else {
+				expect( slug ).toMatch( /^collision/ );
+			}
+		}
+		expect( tokens[ 0 ] ).toMatch( /^comp-dla/ );
+		expect( tokens[ 1 ] ).toBe( tokens[ 0 ] );
+		expect( tokens[ 2 ] ).toBe( tokens[ 0 ] );
+		expect( tokens.slice( 3 ) ).toEqual( [ second, second ] );
+	} );
+
 	it( 'shares identical responsive styles when both authoring bodies are required', () => {
 		const capture = exportFixture( { directories: [ 'html', 'html-mobile', 'screenshots' ] } );
 		const outputDir = capture.build();
@@ -3892,6 +3986,19 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( probe.aliases ).toEqual( [ 'a', 'b' ].map( order => ( {
 			url: `${ sourceUrl }shop?order=${ order }`, canonicalUrl: `${ sourceUrl }shop`,
 		} ) ) );
+	} );
+
+	it( 'treats a link to an alias of a budget-omitted canonical as omitted, not missing', () => {
+		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
+		const outputDir = capture.build();
+		const alias = 'https://example.com/collections/x/products/p';
+		capture.page( 'https://example.com/', `<h1>Home</h1><a href="${ alias }">P</a>`, { entry: { html: 'html/homepage.html' } } );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [],
+			canonicalAliases: [ { url: alias, canonicalUrl: 'https://example.com/products/p' } ],
+			discoveryDiagnostics: [ { code: 'route_omitted_by_budget', url: 'https://example.com/products/p', reason: 'Outside the route budget of 1 routes' } ] } ), 'utf8' ) );
+		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
+		expect( diagnostics.unresolvedAnchors.filter( ( row: { url: string } ) => row.url === alias ).map( ( row: { reason: string } ) => row.reason ) ).not.toContain( 'target route was not captured' );
+		expect( receipt.complete ).not.toBe( false );
 	} );
 
 	it( 'keeps one route when an alternate address declares the claimed route as canonical', () => {

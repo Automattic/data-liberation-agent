@@ -1,7 +1,8 @@
 import type { BrowserContext, BrowserContextOptions } from 'playwright';
 import { captureTriggeredDialogs } from './interaction-capture.js';
 import { captureSelectableSetStates } from './selectable-set-capture.js';
-import { restoreTopScrollState, dismissOverlays } from './page-helpers.js';
+import { restoreTopScrollState, dismissOverlays, withEvaluateTimeout } from './page-helpers.js';
+import { CHROME_HYDRATION_LANDMARKS, CHROME_HYDRATION_TIMEOUT_MS, waitForChromePlaceholderLinks } from './chrome-hydration.js';
 import { withReadOnlyProbes, lockMainFrameNavigation } from './probe-guards.js';
 import { loadForComparison, type DeviceComparisonArgs } from './device-mode-probe.js';
 import { load } from 'cheerio';
@@ -671,6 +672,29 @@ export interface ChromeReuse {
  * the page. With `learn`, chrome no evidence matches is read in full for
  * `learnSharedChrome`.
  */
+/**
+ * A panel's `css` holds only the rules its opening added to the page it was
+ * probed on; rules that page already held are in `baselineRules`. This route
+ * may lack some of those, so they join the reused panel's CSS, ahead of the
+ * added rules as in the source cascade.
+ */
+async function withRouteMissingRules< T extends CapturedDialogInteraction >( page: Page, states: T[] ): Promise< T[] > {
+	if ( ! states.some( state => state.dialog?.baselineRules?.length ) ) return states;
+	const present = new Set( await page.evaluate( () => Array.from( document.styleSheets ).flatMap( sheet => {
+		try {
+			return Array.from( sheet.cssRules ).map( rule => rule.cssText );
+		} catch {
+			return [];
+		}
+	} ) ).catch( orElse( [] as string[] ) ) );
+	if ( ! present.size ) return states;
+	return states.map( state => {
+		const missing = state.dialog?.baselineRules?.filter( rule => ! present.has( rule ) ) ?? [];
+		if ( ! state.dialog || ! missing.length ) return state;
+		return { ...state, dialog: { ...state.dialog, css: [ ...missing, ...( state.dialog.css ? [ state.dialog.css ] : [] ) ].join( '\n' ) } };
+	} );
+}
+
 export async function reuseSharedChrome( page: Page, probe: SharedChromeProbe, { learn: learning = false }: { learn?: boolean } = {} ): Promise< ChromeReuse > {
 	const entrypoint = probe.evidence;
 	if ( probe.status !== 'captured' || ! entrypoint ) {
@@ -739,8 +763,8 @@ export async function reuseSharedChrome( page: Page, probe: SharedChromeProbe, {
 		attribute: CHROME_REUSED_ATTRIBUTE,
 	} );
 	const rejected = eligible.length - reused.length;
-	const states = reused.filter( candidate => candidate.state.status === 'captured' || candidate.state.status === 'observed-incomplete' )
-		.map( candidate => ( { ...candidate.state, reusedFrom: evidence.url } ) );
+	const states = await withRouteMissingRules( page, reused.filter( candidate => candidate.state.status === 'captured' || candidate.state.status === 'observed-incomplete' )
+		.map( candidate => ( { ...candidate.state, reusedFrom: evidence.url } ) ) );
 	const source = evidence === entrypoint ? 'the entrypoint' : `the chrome learned on ${ evidence.url }`;
 	return {
 		decision: {
@@ -844,7 +868,11 @@ export async function probeChromeOnPage(
 	url: string,
 	options: { additionalStates?: CapturedDialogInteraction[] }
 ): Promise< Omit< SharedChromeProbe, 'durationMs' > > {
-	// Read the resting landmark identity before any exploration.
+	// Read the resting landmark identity before any exploration, once its
+	// runtime controls have hydrated: an unhydrated control (a cart link with no
+	// href yet) would give the entrypoint a signature no hydrated route matches,
+	// and a panel probed then is the unhydrated one (#1261).
+	await withEvaluateTimeout( page.evaluate( waitForChromePlaceholderLinks, { timeoutMs: CHROME_HYDRATION_TIMEOUT_MS, landmarks: CHROME_HYDRATION_LANDMARKS } ), CHROME_HYDRATION_TIMEOUT_MS + 5_000 ).catch( orElse( undefined ) );
 	await restoreTopScrollState( page );
 	await withReadOnlyProbes( page, () => dismissOverlays( page ) );
 	let landmarks = await readChromeLandmarks( page, true );
@@ -882,12 +910,12 @@ export async function boundSharedChromeProbe( startedAt: number, probe: () => Pr
 }
 
 /** Load the entrypoint in one capture profile, as the device-mode probe does, and probe its shared chrome. */
-export async function probeSharedChrome( args: Omit< DeviceComparisonArgs, 'desktop' | 'phone' > & { options: BrowserContextOptions; viewport: 'desktop' | 'mobile' } ): Promise< SharedChromeProbe > {
+export async function probeSharedChrome( args: Omit< DeviceComparisonArgs, 'desktop' | 'phone' > & { options: BrowserContextOptions; viewport: 'desktop' | 'mobile'; additionalStates?: CapturedDialogInteraction[] } ): Promise< SharedChromeProbe > {
 	const contexts: BrowserContext[] = [];
 	try {
 		return await boundSharedChromeProbe( Date.now(), async () => {
 			const { page, target } = await loadForComparison( { ...args, desktop: args.options, phone: args.options }, args.options, args.viewport, 'probe', contexts );
-			return probeChromeOnPage( page, target, {} );
+			return probeChromeOnPage( page, target, { additionalStates: args.additionalStates } );
 		} );
 	} finally {
 		await Promise.all( contexts.map( context => context.close().catch( orElse( undefined ) ) ) );

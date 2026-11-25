@@ -1,0 +1,87 @@
+{
+ "props": {
+  "pageProps": {
+   "state": {
+    "route": {
+     "route": {
+      "path": "/posts/archives/:yyyy/:mm",
+      "route": {
+       "id": "0",
+       "type": "blog_post_archive",
+       "idForType": "0",
+       "title": "",
+       "urlPath": "/posts/archives/:yyyy/:mm",
+       "isHomePage": false
+      }
+     },
+     "params": {
+      "yyyy": "2024",
+      "mm": "03"
+     }
+    },
+    "postList": {
+     "postList-limit:12-page:1-siteId:100001-yearMonth:202403": {
+      "fetching": false,
+      "loaded": true,
+      "meta": {
+       "code": 200,
+       "pagination": {
+        "total": 3,
+        "offset": 0,
+        "limit": 12,
+        "cursors": {
+         "after": "",
+         "before": ""
+        }
+       }
+      },
+      "data": [
+       {
+        "id": "1000102",
+        "siteId": "100001",
+        "status": "publish",
+        "title": "古い記事",
+        "contents": [
+         {
+          "type": "text",
+          "format": "html",
+          "value": "<p>月別アーカイブに並ぶ架空の記事です。</p><h3>見出し</h3><p>本文です。</p>"
+         }
+        ],
+        "urlPath": "",
+        "publishedUrl": "https://example.amebaownd.com/posts/1000102",
+        "ogpImageUrl": "",
+        "blogCategories": [
+         {
+          "id": "400002",
+          "siteId": "100001",
+          "label": "日記",
+          "publishedCount": 30
+         }
+        ],
+        "user": {
+         "id": "500001",
+         "nickname": "Site owner"
+        },
+        "publishedAt": "2024-03-28T14:40:42Z",
+        "createdAt": "2024-03-28T14:40:42Z",
+        "updatedAt": "2024-04-06T19:49:08Z"
+       }
+      ]
+     }
+    },
+    "siteConfig": {
+     "siteId": "100001",
+     "title": "サンプルブログ",
+     "homePageId": "300010"
+    }
+   },
+   "url": "/"
+  }
+ },
+ "page": "/[[...path]]",
+ "query": {},
+ "buildId": "SampleBuildId0000000",
+ "isFallback": false,
+ "gssp": true
+}

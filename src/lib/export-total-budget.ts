@@ -70,6 +70,12 @@ export interface ExportBudgetExclusions {
 	renditions: Map< string, number >;
 	/** Website-relative sidecar path -> bytes of optional geometry evidence. */
 	boxTrees: Map< string, number >;
+	/**
+	 * Most bytes the portable media plan may select. Set when the budget drops
+	 * media: the plan would otherwise fill the freed bytes with media it left
+	 * out, and every rebuild would overshoot again.
+	 */
+	mediaBytes?: number;
 }
 
 export function emptyExportBudgetExclusions(): ExportBudgetExclusions {
@@ -139,6 +145,8 @@ export function measureWebsite( websiteDir: string, inventory = new WebsiteInven
 export interface DroppableAsset {
 	path: string;
 	sourceUrls: string[];
+	/** Selected by the portable media plan, within its byte budget. */
+	media?: boolean;
 }
 
 export interface ExportBudgetPlanInput {
@@ -398,7 +406,7 @@ export function planExportBudget( input: ExportBudgetPlanInput ): ExportBudgetPl
 	const namesOf = new Map< string, Set< string > >();
 	const routePaths = new Set( input.routes.map( route => route.path ) );
 	const entryNeeds = referenceClosure( input.entrypointPath, files, websiteDir, byName, namesOf, routePaths );
-	const next: ExportBudgetExclusions = { assets: new Map( input.exclusions.assets ), routes: new Map( input.exclusions.routes ), renditions: new Map( input.exclusions.renditions ), boxTrees: new Map( input.exclusions.boxTrees ) };
+	const next: ExportBudgetExclusions = { assets: new Map( input.exclusions.assets ), routes: new Map( input.exclusions.routes ), renditions: new Map( input.exclusions.renditions ), boxTrees: new Map( input.exclusions.boxTrees ), ...( input.exclusions.mediaBytes === undefined ? {} : { mediaBytes: input.exclusions.mediaBytes } ) };
 	let progressed = false;
 	const satisfied = () => excessBytes <= 0 && excessFiles <= 0;
 
@@ -467,6 +475,11 @@ export function planExportBudget( input: ExportBudgetPlanInput ): ExportBudgetPl
 			progressed = true;
 		}
 	}
+	// The media plan's own selection, not every file it shares a directory with.
+	const planned = input.assets.filter( asset => asset.media && files.has( asset.path ) ).map( asset => asset.path );
+	const droppedMedia = planned.filter( path => droppedPaths.has( path ) || renditionDroppedPaths.has( path ) );
+	const bytesOf = ( paths: string[] ) => paths.reduce( ( sum, path ) => sum + files.get( path )!.bytes, 0 );
+	if ( droppedMedia.length ) next.mediaBytes = bytesOf( planned ) - bytesOf( droppedMedia );
 	return { ...result, withinBudget: false, ...( progressed ? { next } : {} ) };
 }
 

@@ -4,6 +4,7 @@
 // path: recognising a platform's CDN is exactly what an adapter is for.
 //
 import type { LiberationHooks } from '../page-actions.js';
+import { rewriteWixDerivedMedia } from './derived-media.js';
 import { resolveEventFormRedirect } from './event-forms.js';
 import { providerCreditRules } from '../../lib/source-cleanup.js';
 import type { Locator, Page } from 'playwright';
@@ -715,10 +716,13 @@ export const capture: LiberationHooks = {
 		} );
 	},
 	probeExclusions: WIX_PROBE_EXCLUSIONS,
+	// Hydrated blog engagement controls; authored tags and share links stay strict.
+	runtimeWidgetSelectors: [ '[data-hook="post-main-actions__stats"]', '[data-hook="post-stats"]', '[data-hook="post-footer"] > .wChIrD' ],
 	documentSelection: wixDocumentSelection,
 	additionalProfiles: wixAdditionalProfiles,
 	referenceWidths: [ 390, 768, 1440 ],
   resolveClientRedirect: resolveEventFormRedirect,
+  rewriteDerivedMedia: rewriteWixDerivedMedia,
   canonicalizeHtml: ( html, document ) => canonicalizeWixCapturedHtml( restoreWixBlurredImageSources( preserveWixCollections( html ) ), document ),
   cleanupRules: [
     // Wix publishes the measured height of its own banner into these, and its

@@ -512,6 +512,22 @@ export function middleLayoutSampleWidth( layout: MiddleLayout | undefined ): num
 	return MIDDLE_SAMPLE_WIDTHS.find( inside ) ?? Math.floor( ( layout.minWidth + layout.maxWidth ) / 2 );
 }
 
+/**
+ * Widths (inclusive) where export always serves a dual route's captured
+ * `profile` document: the phone document at or below `switchWidth`, the middle
+ * document across its bounded range. Undefined (sweep every width) without an
+ * observed switch, and for the desktop document: an export collapse
+ * (equivalent, identity-subset or missing body) ships the desktop document at
+ * every width, so its learned rules must hold below its band too.
+ */
+export function servedWidthRange( decision: Pick< RouteDeviceDecision, 'switchWidth' | 'middleLayout' >, profile: string ): { min?: number; max?: number } | undefined {
+	if ( decision.switchWidth === undefined ) return undefined;
+	if ( profile === 'mobile' ) return { max: decision.switchWidth };
+	const middle = decision.middleLayout;
+	if ( profile === MIDDLE_PROFILE_ID && middle?.maxWidth !== undefined && middle.minWidth <= middle.maxWidth ) return { min: middle.minWidth, max: middle.maxWidth };
+	return undefined;
+}
+
 /** Each probe loads the phone identity once more; stop after the nearest few boundaries. */
 const SWITCH_PROBE_LIMIT = 4;
 

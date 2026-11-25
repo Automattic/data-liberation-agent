@@ -6,11 +6,11 @@ import { expect, it } from 'vitest';
 import { materializePortableResources } from './portable-resources.js';
 import { portableResourcePath, TRANSPARENT_IMAGE_DATA_URL } from './portable-assets.js';
 
-it( 'preserves the exact dangling-media output across images, renditions, video and metadata', () => {
+it( 'preserves the exact dangling-media and dangling-CSS output across images, renditions, video, metadata and styles', () => {
 	const root = mkdtempSync( join( tmpdir(), 'portable-dangling-' ) );
 	try {
 		const htmlPath = join( root, 'page.html' );
-		writeFileSync( htmlPath, '<!doctype html><html><head><meta property="og:image" content="/missing.jpg"><script type="application/ld+json">{ "image": "/missing.jpg" }</script></head><body><img src="/missing.jpg" alt="lost"><img src="/original.jpg" data-src="/original.jpg" srcset="/small.jpg 1x, /large.jpg 2x"><video src="/movie.mp4" poster="/poster.jpg"></video></body></html>' );
+		writeFileSync( htmlPath, '<!doctype html><html><head><meta property="og:image" content="/missing.jpg"><script type="application/ld+json">{ "image": "/missing.jpg" }</script><style>a{background:url(/gone-a.png)}b{background:url("/gone-b.png")}</style></head><body><img src="/missing.jpg" alt="lost"><img src="/original.jpg" data-src="/original.jpg" srcset="/small.jpg 1x, /large.jpg 2x"><video src="/movie.mp4" poster="/poster.jpg"></video></body></html>' );
 		const result = materializePortableResources( {
 			sourceRoot: root, websiteDir: join( root, 'website' ), entries: [ { url: 'https://example.test/', htmlPath } ],
 			resourceManifest: { version: 1, failures: [], resources: {} },
@@ -18,10 +18,10 @@ it( 'preserves the exact dangling-media output across images, renditions, video 
 			assetPathsByHash: new Map(), assetHashesByPath: new Map(), portablePathsBySource: new Map(),
 			embeddedSources: new Set(), projectEmbeddedHtml: html => html,
 		} );
-		expect( readFileSync( htmlPath, 'utf8' ) ).toBe( `<!doctype html><html><head><meta property="og:image" content="/missing.jpg"><script type="application/ld+json">{"image":"/missing.jpg"}</script></head><body><img src="${ TRANSPARENT_IMAGE_DATA_URL }" alt="lost"><img src="/media/large.jpg" data-src="/media/large.jpg" srcset="${ TRANSPARENT_IMAGE_DATA_URL } 1x, /large.jpg 2x"><video src="https://example.test/movie.mp4" poster="${ TRANSPARENT_IMAGE_DATA_URL }"></video></body></html>` );
+		expect( readFileSync( htmlPath, 'utf8' ) ).toBe( `<!doctype html><html><head><meta property="og:image" content="/missing.jpg"><script type="application/ld+json">{"image":"/missing.jpg"}</script><style>a{background:url(about:blank)}b{background:url("about:blank")}</style></head><body><img src="${ TRANSPARENT_IMAGE_DATA_URL }" alt="lost"><img src="/media/large.jpg" data-src="/media/large.jpg" srcset="${ TRANSPARENT_IMAGE_DATA_URL } 1x, /large.jpg 2x"><video src="https://example.test/movie.mp4" poster="${ TRANSPARENT_IMAGE_DATA_URL }"></video></body></html>` );
 		expect( result.unresolvedDependencies.map( dependency => dependency.url ) ).toEqual( [
 			'https://example.test/missing.jpg', 'https://example.test/original.jpg', 'https://example.test/movie.mp4',
-			'https://example.test/poster.jpg', 'https://example.test/small.jpg',
+			'https://example.test/poster.jpg', 'https://example.test/small.jpg', 'https://example.test/gone-a.png', 'https://example.test/gone-b.png',
 		] );
 		expect( [ ...result.rejectedReplacementKeys ] ).toEqual( [] );
 	} finally { rmSync( root, { recursive: true, force: true } ); }

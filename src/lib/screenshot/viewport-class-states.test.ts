@@ -7,7 +7,7 @@ import { exportWebsiteCapture } from '../capture-export.js';
 import { expect, it } from 'vitest';
 import { observeRuntimeStyleWrites } from './runtime-style-writes.js';
 import { markInitialDocument, projectInitialDocument } from './initial-document.js';
-import { captureViewportClassStates, projectViewportClassRules, type ViewportClassMemo } from './viewport-class-states.js';
+import { captureViewportClassStates, projectViewportClassRules, viewportClassSweepBudgetMs, type ViewportClassMemo } from './viewport-class-states.js';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 import { observeViewportEntrances } from '../viewport-entrances.js';
 import { triggerLazyLoad } from './page-helpers.js';
@@ -336,3 +336,80 @@ it.each( [
 		await browser.close();
 	}
 }, 60_000 );
+
+// Two route documents share unstable header chrome; approximately 5 seconds.
+it( 'memoizes a shared header toggle rejected by the repeat pass (#2222)', async () => {
+	const browser = await chromium.launch();
+	try {
+		const memo: ViewportClassMemo = new Map();
+		const results = [];
+		for ( const route of [ 'first', 'second' ] ) {
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			await page.setContent( `<style>.header.is-inline{color:red}</style><header class="header">Shared</header><main>${ route }</main><script>
+			let flip=false;
+			addEventListener('resize',()=>{
+				flip=!flip;
+				const fits=innerWidth>=600 && innerWidth<768 || innerWidth>=1600;
+				document.querySelector('header').classList.toggle('is-inline',fits!==flip);
+			});</script>` );
+			results.push( await captureViewportClassStates( page, { settleMs: 0, memo } ) );
+			await page.close();
+		}
+		// Before rejection memoization both routes sampled 37 widths. The first
+		// route still does the same work and learns no aliases or rules.
+		expect( results[ 0 ] ).toEqual( { aliased: 0, rules: 0, sampledWidths: expect.any( Array ) } );
+		expect( results[ 0 ]!.sampledWidths ).toHaveLength( 37 );
+		expect( [ ...memo.values() ] ).toEqual( [ 'rejected' ] );
+		expect( results[ 1 ] ).toEqual( { aliased: 0, rules: 0, sampledWidths: [ 390, 1920 ] } );
+	} finally {
+		await browser.close();
+	}
+}, 60_000 );
+
+// One browser pass per page (~3s). Fifty repeated list items each toggle the
+// same stylesheet-named token at a width derived from their layout position
+// (#2264); before grouping each item was bisected on its own. Like real list
+// items, each also carries its own index and tag classes.
+it( 'rejects a token repeated siblings flip at different widths without bisecting each (#2264)', async () => {
+	const browser = await chromium.launch();
+	const fixture = ( headers: number ) => `<!doctype html><style>body{margin:0}li{height:20px}.item.is-folded{opacity:.5}.header.is-compact{color:red}</style>
+		${ Array.from( { length: headers }, ( _, i ) => `<div><header class="header" id="h${ i }">Header</header></div>` ).join( '' ) }
+		<ul>${ Array.from( { length: 50 }, ( _, i ) => `<li class="item item-index-${ i } tag-${ i }">Item ${ i }</li>` ).join( '' ) }</ul><script>
+		const sync=()=>{
+			document.querySelectorAll('.header').forEach((header,i)=>header.classList.toggle('is-compact',innerWidth<1000+i*150));
+			document.querySelectorAll('.item').forEach(item=>item.classList.toggle('is-folded',innerWidth<400+item.offsetTop*1.4));
+		};addEventListener('resize',sync);sync();</script>`;
+	try {
+		const memo: ViewportClassMemo = new Map();
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await page.setContent( fixture( 1 ) );
+		const result = await captureViewportClassStates( page, { settleMs: 0, memo } );
+		// Main bisected every item: 296 sampled widths. Now the ladder plus the header's search.
+		expect( result.sampledWidths.length ).toBeLessThan( 20 );
+		expect( result.aliased ).toBe( 1 );
+		expect( result.budgetExhausted ).toBeUndefined();
+		expect( await page.locator( '#h0' ).getAttribute( 'data-blocks-engine-capture-width-classes' ) ).toContain( 'is-compact' );
+		expect( [ ...memo.values() ].filter( value => value === 'rejected' ) ).toHaveLength( 50 );
+		await page.close();
+
+		// Distinct parents keep the headers separate contracts. A spent search
+		// budget keeps the contracts already proven and fails soft.
+		const bounded = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await bounded.setContent( fixture( 3 ) );
+		const partial = await captureViewportClassStates( bounded, { settleMs: 0, maxProbes: 12 } );
+		expect( partial.budgetExhausted ).toBe( true );
+		expect( partial.aliased ).toBeGreaterThanOrEqual( 1 );
+		expect( partial.aliased ).toBeLessThan( 3 );
+		await bounded.close();
+	} finally {
+		await browser.close();
+	}
+}, 60_000 );
+
+it( 'leaves the profiles still to come their share of the route (#2264)', () => {
+	// A dual route at its start: desktop sweeps on half the route, quartered.
+	expect( viewportClassSweepBudgetMs( 600_000, 2 ) ).toBe( 75_000 );
+	expect( viewportClassSweepBudgetMs( 600_000, 1 ) ).toBe( 150_000 );
+	expect( viewportClassSweepBudgetMs( 600_000, 0 ) ).toBe( 150_000 );
+	expect( viewportClassSweepBudgetMs( -5, 3 ) ).toBe( 0 );
+} );

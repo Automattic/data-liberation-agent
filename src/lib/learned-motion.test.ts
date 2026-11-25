@@ -46,8 +46,12 @@ describe( 'learned editable motion', () => {
 
 		const a = await browser.newPage( { timezoneId: 'UTC' } );
 		const b = await browser.newPage( { timezoneId: 'Europe/Berlin' } );
-		first = await captureSourceBehavior( a, `${ origin }/`, { startupMs: 12000, quietMs: 1500, replayMs: 2500, fixedTime: '2031-02-03T04:17:00Z' } );
-		const second = await captureSourceBehavior( b, `${ origin }/`, { startupMs: 12000, quietMs: 1500, maxClicks: 0, fixedTime: '2032-08-14T19:43:00Z' } );
+		// Observed concurrently, as behavior discovery runs them.
+		const [ observed, second ] = await Promise.all( [
+			captureSourceBehavior( a, `${ origin }/`, { startupMs: 12000, quietMs: 1500, replayMs: 2500, fixedTime: '2031-02-03T04:17:00Z' } ),
+			captureSourceBehavior( b, `${ origin }/`, { startupMs: 12000, quietMs: 1500, maxClicks: 0, fixedTime: '2032-08-14T19:43:00Z' } ),
+		] );
+		first = observed;
 		learned = learnMotion( first, second );
 		// The capture's saved DOM: settled, script-free.
 		const settled = ( await a.content() ).replace( /<script[\s\S]*?<\/script>/g, '' );

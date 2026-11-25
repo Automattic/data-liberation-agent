@@ -191,6 +191,37 @@ describe( 'SourceRequestGovernor', () => {
 	} );
 } );
 
+describe( 'SourceRequestGovernor throttle episodes', () => {
+	// One transient throttle (a single 429 or reset) paces the origin for a
+	// bounded window; a throttle after the window has ended keeps pacing for good.
+	it.each( [
+		{ name: 'paces inside the recovery window of one throttle', throttleAt: [ 0 ], measureAt: 5_000, paced: true },
+		{ name: 'stops pacing after one transient throttle', throttleAt: [ 0 ], measureAt: 31_000, paced: false },
+		{ name: 'treats a burst of throttles as one transient episode', throttleAt: [ 0, 1_000, 2_000 ], measureAt: 33_000, paced: false },
+		{ name: 'keeps pacing for the rest of the capture after a second episode', throttleAt: [ 0, 31_000 ], measureAt: 300_000, paced: true },
+	] )( '$name', async ( { throttleAt, measureAt, paced } ) => {
+		vi.useFakeTimers();
+		const governor = new SourceRequestGovernor( 'https://source.example', { recoveryStep: 1 } );
+		const started = Date.now();
+		await Promise.all( Array.from( { length: 10 }, () => governor.run( async () => ok() ) ) );
+		for ( const at of throttleAt ) {
+			await vi.advanceTimersByTimeAsync( Math.max( 0, started + at - Date.now() ) );
+			const retried = governor.run( vi.fn().mockResolvedValueOnce( throttle( '0' ) ).mockResolvedValue( ok() ) );
+			await vi.advanceTimersByTimeAsync( 1_000 );
+			await retried;
+		}
+		await vi.advanceTimersByTimeAsync( Math.max( 0, started + measureAt - Date.now() ) );
+		const before = Date.now();
+		const sequence = ( async () => {
+			for ( let i = 0; i < 3; i++ ) await governor.run( async () => ok() );
+			return Date.now() - before;
+		} )();
+		await vi.advanceTimersByTimeAsync( 10_000 );
+		// Paced admissions are spaced at the learned ceiling; unpaced ones start at once.
+		expect( await sequence > 0 ).toBe( paced );
+	} );
+} );
+
 describe( 'SourceRequestGovernors', () => {
 	it( 'hands every pass the same governor for one origin', () => {
 		const governors = new SourceRequestGovernors();

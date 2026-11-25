@@ -81,3 +81,21 @@ it('explores responsive disclosures where they render and restores the capture v
 		expect(await page.locator('#search-toggle').getAttribute('aria-expanded')).toBe('false');
 	}
 });
+
+// A loaded browser hydrates slowly: an initially open FAQ toggle is still
+// settling when exploration reaches it, and closing it uses the same
+// activation budget and fallback as opening a closed disclosure.
+it('closes an initially open disclosure whose toggle settles slowly', async ({ newPage }) => {
+	const page = await newPage({ viewport: { width: 1440, height: 900 } });
+	await page.setContent(`<style>@keyframes settle { from { transform: translateX(0) } to { transform: translateX(200px) } } #faq { animation: settle 1.5s linear }</style>
+		<main><div id="faq" role="button" tabindex="0" aria-expanded="true" aria-controls="answer">Question?</div><div id="answer">Answer</div></main>
+		<script>document.getElementById('faq').onclick = event => {
+			const open = event.currentTarget.getAttribute('aria-expanded') !== 'true';
+			event.currentTarget.setAttribute('aria-expanded', String(open));
+			document.getElementById('answer').hidden = !open;
+		};</script>`);
+	const baseline = await snapshotComponents(page);
+	const [component] = await withReadOnlyProbes(page, () => exploreComponents(page, baseline));
+	expect(component).toMatchObject({ selector: '#faq', kind: 'disclosure', initial: 'open', status: 'captured' });
+	expect(component!.states.map(state => state.id)).toEqual(['open', 'closed']);
+});

@@ -12,11 +12,18 @@ afterEach( () => rmSync( root, { recursive: true, force: true } ) );
 
 it( 'renders a portable homepage preview at 1200x900 with local assets', async () => {
 	mkdirSync( root, { recursive: true } );
-	writeFileSync( join( root, 'index.html' ), '<!doctype html><link rel="stylesheet" href="style.css"><h1>Portable homepage</h1>' );
-	writeFileSync( join( root, 'style.css' ), 'body{background:rgb(20,40,60)}' );
+	const swatch = new PNG( { width: 8, height: 8 } );
+	for ( let i = 0; i < swatch.data.length; i += 4 ) swatch.data.set( [ 200, 30, 30, 255 ], i );
+	writeFileSync( join( root, 'swatch.png' ), PNG.sync.write( swatch ) );
+	// A lazy image below the viewport never loads; the visible one must still be painted.
+	writeFileSync( join( root, 'index.html' ), '<!doctype html><link rel="stylesheet" href="style.css"><img src="swatch.png" loading="lazy" style="display:block;width:100px;height:100px"><h1>Portable homepage</h1><img src="swatch.png?below" loading="lazy" style="display:block;margin-top:8000px;width:100px;height:100px">' );
+	writeFileSync( join( root, 'style.css' ), 'body{background:rgb(20,40,60);margin:0}' );
+	const started = Date.now();
 	const preview = await captureSitePreview( root );
+	expect( Date.now() - started ).toBeLessThan( 4_000 );
 	const png = PNG.sync.read( readFileSync( join( root, 'site-preview.png' ) ) );
 	expect( [ png.width, png.height ] ).toEqual( [ 1200, 900 ] );
+	expect( Array.from( png.data.subarray( ( 50 * 1200 + 50 ) * 4, ( 50 * 1200 + 50 ) * 4 + 4 ) ) ).toEqual( [ 200, 30, 30, 255 ] );
 	expect( Array.from( png.data.subarray( png.data.length - 4 ) ) ).toEqual( [ 20, 40, 60, 255 ] );
 	expect( preview.origin ).toBe( 'portable_render' );
 }, 45_000 );

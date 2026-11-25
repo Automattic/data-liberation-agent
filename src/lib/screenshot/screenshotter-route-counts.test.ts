@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { expect, it } from 'vitest';
 import { IntegrityError } from '../failure-class.js';
+import { SourceRequestGovernors } from '../source-request-governor.js';
 import { captureScreenshots } from './screenshotter.js';
 
 const skipBrowser = Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() );
@@ -31,6 +32,10 @@ it.skipIf( skipBrowser )( 'counts routes, not failure records, across viewports 
 	try {
 		const result = await captureScreenshots( {
 			urls: [ `${ origin }/`, `${ origin }/unavailable`, `${ origin }/gone` ],
+			// This tests accounting across real retries, not elapsed throttle pacing.
+			// A permanent 503 otherwise trains a ceiling that delays later routes
+			// even with Retry-After: 0, making the wall time depend on suite load.
+			governors: new SourceRequestGovernors( { maxRetryAfterMs: 0 } ),
 			outputDir, concurrency: 1, settleMs: 0, learnFluid: false,
 			viewports: [ { id: 'desktop', width: 1440, height: 900 }, { id: 'mobile', width: 390, height: 844 } ],
 		} );

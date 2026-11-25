@@ -312,3 +312,28 @@ it('rewrites used-style url() values to the website-local media the page uses, i
 	expect(written).not.toContain('a~mv2');
 	expect(written).not.toContain('https://example.com');
 });
+
+it('observes a phone rendering adopted in place of a desktop placeholder with the phone capture\'s evidence', () => {
+	// Desktop serialized the control before it gained its destination; the shared
+	// document carries the phone capture's linked control under phone ids.
+	const desktopHtml = '<html data-blocks-engine-node-id="n0"><body data-blocks-engine-node-id="n1"><header data-blocks-engine-node-id="n2"><a data-blocks-engine-node-id="n3"><span data-blocks-engine-node-id="n4"></span></a></header></body></html>';
+	const mobileHtml = '<html data-blocks-engine-node-id="n0"><body data-blocks-engine-node-id="n1"><header data-blocks-engine-node-id="n2"><button data-blocks-engine-node-id="n3">Menu</button><a href="/basket/" data-blocks-engine-node-id="n4"><span data-blocks-engine-node-id="n5">0</span></a></header></body></html>';
+	const assembled = '<html data-blocks-engine-node-id="n0"><body data-blocks-engine-node-id="n1"><header data-blocks-engine-node-id="n2"><a href="/basket/" data-blocks-engine-node-id="mobile:n4"><span data-blocks-engine-node-id="mobile:n5">0</span></a></header></body></html>';
+	const fixture = exportFixture();
+	const root = fixture.build();
+	fixture.file('html/home.html', desktopHtml);
+	fixture.file('html-mobile/home.html', mobileHtml);
+	fixture.file('website/index.html', assembled);
+	fixture.json('box-tree/home.json', captured('html/home.html', 'desktop', { width: 1440, height: 900 }, { n0: ['n1'], n1: ['n2'], n2: ['n3'], n3: ['n4'], n4: [] }, 100));
+	const mobile = captured('html-mobile/home.html', 'mobile', { width: 390, height: 844 }, { n0: ['n1'], n1: ['n2'], n2: ['n3', 'n4'], n3: [], n4: ['n5'], n5: [] }, 40);
+	mobile.viewports.desktop = { width: 1440, height: 900 };
+	for (const node of Object.values(mobile.nodes)) node.viewports.desktop = observation(30);
+	fixture.json('box-tree/home.mobile.json', mobile);
+	writeExportBoxTrees(root, join(root, 'website'), [{ sourcePath: 'html/home.html', path: 'index.html' }], new WebsiteInventory(join(root, 'website')));
+	const tree = readSidecar(join(root, 'website/box-tree/index.json'));
+	for (const id of ['mobile:n4', 'mobile:n5']) expect(tree.nodes[id].viewports).toEqual({ desktop: observation(30), mobile: observation(40) });
+	expect(tree.nodes.n2.children).toEqual(['mobile:n4']);
+	// The desktop placeholder's own observations are not attributed to the adopted control.
+	expect(tree.nodes).not.toHaveProperty('n3');
+	expect(tree.nodes).not.toHaveProperty('n4');
+});

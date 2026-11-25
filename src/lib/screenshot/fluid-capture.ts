@@ -82,6 +82,13 @@ export interface FluidSweepOptions {
 	 * refined within DEFAULT_SWEEP_WIDTHS where the observations need it.
 	 */
 	widths?: number[];
+	/**
+	 * Viewport widths (inclusive) where export serves this document. The default
+	 * ladder, its probes and its refinement are clamped to it, with the band
+	 * edges added so the fitter spans the whole band. Explicit `widths` are not
+	 * clamped. Omitted: the full ladder.
+	 */
+	widthRange?: FluidWidthRange;
 	/** Extra rest budget after each resize, beyond the base bound, for slow runtimes. */
 	settleMs?: number;
 	/** Source-owned motion/readiness before each geometry sample, after rest settling. */
@@ -96,6 +103,37 @@ export interface FluidSweepOptions {
 	/** Reports how the adaptive sweep shared work through `memo`, once per call. */
 	onSweep?: ( stats: FluidSweepStats ) => void;
 	onProgress?: ( ( width: number, elements: number ) => void ) | undefined;
+}
+
+/** Inclusive viewport-width band; an absent bound is open. */
+export interface FluidWidthRange { min?: number; max?: number }
+
+/**
+ * The band a sweep may be clamped to: `range` when it is non-empty and holds
+ * the capture width, since learned rules must still reproduce the geometry the
+ * document was captured at. Otherwise none, and the full ladder is swept.
+ */
+export function sweepBand( range: FluidWidthRange | undefined, captureWidth: number | undefined ): FluidWidthRange | undefined {
+	if ( ! range || ( range.min === undefined && range.max === undefined ) ) return undefined;
+	const min = range.min ?? -Infinity, max = range.max ?? Infinity;
+	if ( min > max || ( captureWidth !== undefined && ( captureWidth < min || captureWidth > max ) ) ) return undefined;
+	return range;
+}
+
+/** `ladder` restricted to `band`, plus the band's own edges, ascending. */
+export function bandedWidths( ladder: readonly number[], band: FluidWidthRange | undefined ): number[] {
+	if ( ! band ) return [ ...ladder ];
+	const edges = [ band.min, band.max ].filter( ( width ): width is number => width !== undefined );
+	return [ ...new Set( [ ...ladder.filter( width => inBand( width, band ) ), ...edges ] ) ].sort( ( a, b ) => a - b );
+}
+
+function inBand( width: number, band: FluidWidthRange | undefined ): boolean {
+	return width >= ( band?.min ?? -Infinity ) && width <= ( band?.max ?? Infinity );
+}
+
+/** Each width moved into `range`, deduplicated in order. */
+function clampedWidths( widths: readonly number[], range: FluidWidthRange | undefined ): number[] {
+	return [ ...new Set( widths.map( width => Math.min( Math.max( width, range?.min ?? -Infinity ), range?.max ?? Infinity ) ) ) ];
 }
 
 export interface FluidSweepStats {
@@ -505,9 +543,13 @@ async function learnFluidGeometry(
 	// An explicit ladder is sampled as given; the default samples its coarse
 	// widths and refines the ladder only on evidence (see refinementWidths).
 	const adaptive = options.widths === undefined;
-	const widths = options.widths ?? DEFAULT_SWEEP_WIDTHS;
 	const settleMs = options.settleMs ?? 1200;
 	const original = page.viewportSize();
+	// The band bounds the default ladder, its probes and its refinement alike.
+	const band = adaptive ? sweepBand( options.widthRange, original?.width ) : undefined;
+	const widths = options.widths ?? bandedWidths( DEFAULT_SWEEP_WIDTHS, band );
+	const probeWidths = clampedWidths( PROBE_WIDTHS, band );
+	const coarseWidths = clampedWidths( COARSE_SWEEP_WIDTHS, band );
 	// Resizes before learning (class sweeps, the probes below) can leave a
 	// history-dependent runtime's sheets off their load-time capture-width text.
 	await restoreLoadTimeSheets( page );
@@ -569,7 +611,9 @@ async function learnFluidGeometry(
 	await restoreLoadTimeSheets( page );
 	await bindRuntimeSheets( page );
 	const signatures = adaptive && options.memo ? await baseline.evaluate( templateSignatures, ID_ATTRIBUTE ) : null;
-	const memoKeys = ( id: string ) => ( signatures?.[ id ] ?? [] ).map( signature => `${ options.document ?? '' }|${ signature }` );
+	// A banded sweep stores band-limited series: only the same band may reuse them.
+	const memoScope = band ? `${ options.document ?? '' }@${ band.min ?? '' }-${ band.max ?? '' }` : options.document ?? '';
+	const memoKeys = ( id: string ) => ( signatures?.[ id ] ?? [] ).map( signature => `${ memoScope }|${ signature }` );
 	let reusedElements = 0;
 	let waitedMs = 0;
 
@@ -665,7 +709,9 @@ async function learnFluidGeometry(
 							if ( raw ) declared[ property ] = raw;
 						}
 					}
-					const transformOrigin = getComputedStyle( element ).transformOrigin;
+					// An authored inline origin owns the relationship (`66% 48%`); its
+					// computed px value moves with the box and would read as varying.
+					const transformOrigin = element.style.transformOrigin || getComputedStyle( element ).transformOrigin;
 					const rect = element.getBoundingClientRect();
 					const minHeight = element.style.getPropertyValue( 'min-height' );
 					let redundantMinHeight = false;
@@ -731,7 +777,7 @@ async function learnFluidGeometry(
 		// unexplained series drive the remaining sweep. If those are constant
 		// (perpetual movers excluded) and runtime sheets are constant too,
 		// the probes suffice; repeated chrome keeps its stored ladder.
-		for ( const width of PROBE_WIDTHS ) await sample( width );
+		for ( const width of probeWidths ) await sample( width );
 		for ( const [ id, redundant ] of redundantMinHeight ) if ( redundant ) observations.delete( `${ id }:min-height` );
 		const sheets = await runtimeSheetsObserved( page );
 		// Runtime stylesheets and perpetual movers are learned per route.
@@ -746,20 +792,21 @@ async function learnFluidGeometry(
 			reusedElements = new Set( [ ...reused.keys() ].map( key => key.slice( 0, key.indexOf( ':' ) ) ) ).size;
 			const unexplained = () => new Map( [ ...observations ].filter( ( [ key ] ) => ! reused.has( key ) ) );
 			const sheetObservations = sheets ? await runtimeSheetSeries( page, sampledWidths ) : [];
-			const sheetsConstant = ( ! sheets || sheetObservations.length > 0 ) && sheetObservations.every( series => series.length === PROBE_WIDTHS.length &&
+			const sheetsConstant = ( ! sheets || sheetObservations.length > 0 ) && sheetObservations.every( series => series.length === probeWidths.length &&
 				series.every( sample => Number.isFinite( sample.value ) && sample.value === series[ 0 ]!.value ) );
-			if ( ! sheetsConstant || ! constantAcross( unexplained(), PROBE_WIDTHS.length, await perpetual() ) ) {
-				for ( const width of COARSE_SWEEP_WIDTHS ) if ( ! sampledWidths.includes( width ) ) await sample( width );
+			if ( ! sheetsConstant || ! constantAcross( unexplained(), probeWidths.length, await perpetual() ) ) {
+				for ( const width of coarseWidths ) if ( ! sampledWidths.includes( width ) ) await sample( width );
 				// Runtime-fitted phone text can have an offset as well as a slope.
 				// Observe below 390 and a third interior phone width: a bounded
 				// quantized affine fit needs three non-clamped observations.
 				const phoneSeries = [ ...refinementSeries( unexplained(), await perpetual() ), ...await runtimeSheetSeries( page, sampledWidths ) ];
-				if ( phoneSeries.some( series => {
-					const phone = series.find( sample => sample.viewport === 390 );
-					const large = series.find( sample => sample.viewport === 600 );
+				const [ phoneWidth, largeWidth ] = clampedWidths( [ 390, 600 ], band );
+				if ( largeWidth !== undefined && phoneSeries.some( series => {
+					const phone = series.find( sample => sample.viewport === phoneWidth );
+					const large = series.find( sample => sample.viewport === largeWidth );
 					return phone && large && phone.value !== large.value;
 				} ) ) {
-					for ( const width of [ 320, 360, 414 ] ) await sample( width );
+					for ( const width of [ 320, 360, 414 ] ) if ( inBand( width, band ) && ! sampledWidths.includes( width ) ) await sample( width );
 				}
 				// Refine only intervals unexplained elements or runtime sheets need.
 				for ( ;; ) {
@@ -780,7 +827,7 @@ async function learnFluidGeometry(
 			// discard it after the sweep too, so its partial series cannot be fitted.
 			for ( const [ id, redundant ] of redundantMinHeight ) if ( redundant ) observations.delete( `${ id }:min-height` );
 			// A sweep past the probes is what later routes may reuse.
-			if ( memo && sampledWidths.length > PROBE_WIDTHS.length && moving.size === 0 ) {
+			if ( memo && sampledWidths.length > probeWidths.length && moving.size === 0 ) {
 				const byElement = new Map< string, Map< string, readonly GeometrySample[] > >();
 				for ( const [ key, samples ] of observations ) {
 					const id = key.slice( 0, key.indexOf( ':' ) );
