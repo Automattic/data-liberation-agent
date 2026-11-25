@@ -972,7 +972,8 @@ async function runCaptureWebsite(
 		return result;
 	}
 	const { exportWebsiteCapture } = await import( './capture-export.js' );
-	const captureReceiptPath = exportWebsiteCapture( {
+	const { precollectCapturedRoutes } = await import( './capture-export-parallel.js' );
+	const exportOptions: import( './capture-export.js' ).ExportCaptureOptions = {
 		...( contentSource && contentEntries.length ? { structuredContent: { source: contentSource, entries: contentEntries } } : {} ),
 		outputDir,
 		sourceUrl,
@@ -988,7 +989,14 @@ async function runCaptureWebsite(
 		failures,
 		discoveryDiagnostics: captureDiagnostics,
 		limits: captureExportLimits( options ),
-	} );
+	};
+	const precollected = await precollectCapturedRoutes( exportOptions );
+	let captureReceiptPath: string;
+	try {
+		captureReceiptPath = exportWebsiteCapture( { ...exportOptions, ...( precollected ? { precollectedRoutes: precollected.routes } : {} ) } );
+	} finally {
+		precollected?.release();
+	}
 	process.stderr.write( `[timing] export ${ Date.now() - exportStartedAt }ms\n` );
 	assertEntrypointHasContent( outputDir, options.url, sourceUrl );
 	const previewStartedAt = Date.now();

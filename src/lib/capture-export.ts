@@ -1,5 +1,5 @@
 import { safeCapturedPageHtml } from './captured-page-html.js';
-import { collectCapturedRoutes, collectMediaCandidates, collectRouteLinks, type ScreenshotManifest } from './capture-export-collection.js';
+import { captureCanonicalHost, capturedDocumentReferences, collectCapturedRoutes, collectMediaCandidates, collectRouteLinks, type CollectedRoute, type FailedRouteCollection, type RouteCollectionContext, type ScreenshotManifest } from './capture-export-collection.js';
 import { deferredMediaReferences, linkDeferredMedia, recordMediaLedger } from './media-queue.js';
 import { withParsedDocuments } from './parsed-documents.js';
 import { type DocumentSelection } from './document-selection.js';
@@ -67,7 +67,7 @@ interface ExportBuild {
 	assets: DroppableAsset[];
 }
 
-interface ExportCaptureOptions {
+export interface ExportCaptureOptions {
 	/** Adapter structured content (#1701): entry slugs, term archives, content index and redirects. */
 	structuredContent?: { source: import('../platform/types.js').StructuredContentSource; entries: import('../platform/types.js').StructuredContentEntry[] };
 	routeScope?: SiteRouteScope;
@@ -96,6 +96,27 @@ interface ExportCaptureOptions {
 	/** Routes skipped before capture because their rel=canonical is another inventory route; reported exactly as collapsed duplicates (#835). */
 	canonicalAliases?: ReadonlyArray< import( './route-aliases.js' ).CanonicalRouteAlias >;
 	limits?: ExportLimits;
+	/** Routes collected ahead of export from these same options (see capture-export-parallel.ts). */
+	precollectedRoutes?: ReadonlyMap< string, CollectedRoute | FailedRouteCollection >;
+}
+
+/** Options a route collection reads; all plain data except the adapter's document selection. */
+export type RouteCollectionOptions = Pick< ExportCaptureOptions, 'outputDir' | 'sourceUrl' | 'routeScope' | 'failures' | 'structuredContent' | 'deviceMode' | 'resolveDocumentSelection' | 'limits' >;
+
+/**
+ * The manifest and shared context a browser capture's routes are collected
+ * with: the same values `exportWebsiteCapture` derives for them.
+ */
+export function browserRouteCollectionContext( options: RouteCollectionOptions ): { entries: ScreenshotManifest['entries']; context: RouteCollectionContext } {
+	const outputDir = resolve( options.outputDir );
+	const { entries } = JSON.parse( readFileSync( join( outputDir, 'screenshots', 'manifest.json' ), 'utf8' ) ) as ScreenshotManifest;
+	return { entries, context: {
+		sourceUrl: options.sourceUrl, routeScope: options.routeScope, failures: options.failures, structuredEntries: options.structuredContent?.entries,
+		deviceMode: options.deviceMode, resolveDocumentSelection: options.resolveDocumentSelection, outputDir, embedded: undefined, embeddedSources: new Set(), hasHttpInput: false,
+		siteSwitchWidth: fallbackResponsiveSwitchWidth( outputDir ), phoneSwitchWidth: fallbackResponsiveSwitchWidth( outputDir, COARSE_SWEEP_WIDTHS[ 2 ] ),
+		resourceManifest: capturedResources( outputDir ), routeFailureReasons: groupFailureReasonsByUrl( options.failures ),
+		maxFileBytes: options.limits?.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES, canonicalHost: captureCanonicalHost( entries, options.sourceUrl, outputDir ), documentReferences: capturedDocumentReferences( entries, outputDir ),
+	} };
 }
 
 function isUsableSectionEvidence( sections: unknown ): sections is Record< string, unknown >[] {
@@ -358,7 +379,7 @@ function buildExportCapture(
 	// rejected leaves through, rather than a parallel reporting mechanism.
 	const routeFailureReasons = groupFailureReasonsByUrl( options.failures );
 	const routeCaptureDiagnostics: RouteDiagnostic[] = [];
-	const { capturedEntries, interactionPages, scrollStatesPages, excludedRoutes, redirectAliases, switchWidths, deviceSelections, widthSelections, fluidReports, responsiveBodyClassProjections, collapsedBodyClassProjections, diagnostics: capturedRouteDiagnostics } = collectCapturedRoutes( { entries: capture.entries, sourceUrl: options.sourceUrl, routeScope: options.routeScope, failures: options.failures, structuredEntries: options.structuredContent?.entries, deviceMode: options.deviceMode, input: options.input, resolveDocumentSelection: options.resolveDocumentSelection, outputDir, embedded, embeddedSources, hasHttpInput: Boolean( httpInput ), siteSwitchWidth, phoneSwitchWidth, stagedHtmlDir, resourceManifest, routeFailureReasons, maxFileBytes, budget, exclusions } );
+	const { capturedEntries, interactionPages, scrollStatesPages, excludedRoutes, redirectAliases, switchWidths, deviceSelections, widthSelections, fluidReports, responsiveBodyClassProjections, collapsedBodyClassProjections, diagnostics: capturedRouteDiagnostics } = collectCapturedRoutes( { entries: capture.entries, sourceUrl: options.sourceUrl, routeScope: options.routeScope, failures: options.failures, structuredEntries: options.structuredContent?.entries, deviceMode: options.deviceMode, input: options.input, resolveDocumentSelection: options.resolveDocumentSelection, outputDir, embedded, embeddedSources, hasHttpInput: Boolean( httpInput ), siteSwitchWidth, phoneSwitchWidth, stagedHtmlDir, resourceManifest, routeFailureReasons, maxFileBytes, budget, exclusions, precollected: options.precollectedRoutes } );
 	routeCaptureDiagnostics.push( ...capturedRouteDiagnostics );
 
 	const {
