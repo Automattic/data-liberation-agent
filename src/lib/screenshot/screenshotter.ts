@@ -74,6 +74,16 @@ function linkedAliasMap( aliases?: readonly import('../route-aliases.js').Canoni
 	return map;
 }
 
+/** Build linked admission alongside route admission from the same capture window. */
+export function createLinkedFrontier( opts: Pick< ScreenshotOpts, 'linkedPages' | 'limit' | 'routeScope' | 'linkedCanonicalAliases' | 'primaryUrl' | 'runtimePaths' | 'timeBudget' >, startTime: number ): LinkedFrontier | undefined {
+	return opts.linkedPages ? new LinkedFrontier( {
+		...opts.linkedPages,
+		timeoutMs: opts.linkedPages.timeoutMs ?? ( opts.timeBudget ? Math.max( 0, opts.timeBudget.admitUntil - startTime ) : undefined ),
+		capturePageLimit: opts.limit !== undefined && opts.limit >= 0 ? opts.limit : undefined,
+	}, startTime, opts.routeScope, linkedAliasMap( opts.linkedCanonicalAliases ), opts.linkedCanonicalAliases ?? [],
+		opts.primaryUrl ? { sourceUrl: opts.primaryUrl, runtimePaths: opts.runtimePaths } : undefined ) : undefined;
+}
+
 const ANALYSIS_SAMPLE_LIMIT = 1;
 const MAX_CAPTURED_DIALOGS = 8;
 const MAX_CRASH_RELAUNCHES = 3;
@@ -1161,11 +1171,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	if ( typeof opts.limit === 'number' && opts.limit >= 0 ) {
 		urls = sampleUrlsByType( urls, opts.limit );
 	}
-	const frontier = opts.linkedPages ? new LinkedFrontier( {
-		...opts.linkedPages,
-		capturePageLimit: opts.limit !== undefined && opts.limit >= 0 ? opts.limit : undefined,
-	}, startTime, opts.routeScope, linkedAliasMap( opts.linkedCanonicalAliases ), opts.linkedCanonicalAliases ?? [],
-		opts.primaryUrl ? { sourceUrl: opts.primaryUrl, runtimePaths: opts.runtimePaths } : undefined ) : undefined;
+	const frontier = createLinkedFrontier( opts, startTime );
 	if (frontier) urls = [...new Set(urls.map(documentRequestUrl))].filter(url => frontier.admit(url, 0, startTime, 'inventory'));
 	// Under a time budget the entrypoint starts first, so the budget never skips it.
 	const budgetEntrypoint = opts.timeBudget ? urls.find( url => isSourceCaptureUrl( url, opts.primaryUrl ) ) ?? urls[ 0 ] : undefined;
