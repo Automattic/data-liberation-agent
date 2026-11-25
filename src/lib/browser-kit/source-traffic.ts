@@ -137,32 +137,28 @@ function recordPacedLoad(request: Request, ms: number): void {
   } catch { /* Service workers have no owning page. */ }
 }
 
-const heldLoads = new WeakMap<Page, { held: number; since: number; total: number }>();
+const heldLoads = new WeakMap<Page, Set<Request>>();
+const noHeldLoads: ReadonlySet<Request> = new Set();
 
 /**
- * Monotonic per-page wall-clock milliseconds during which at least one of the
- * page's source loads was held back by this capture (the origin's pause or
- * the learned rate ceiling) and had not yet been sent. Concurrent holds count
- * once. A readiness wait that spent this time was waiting on the capture's own
- * pacing, not on the source.
+ * The page's source loads this capture is holding back right now (the
+ * origin's pause or the learned rate ceiling) and has not yet sent. The
+ * source has not been asked for them, so a readiness wait that spends its
+ * bound meanwhile is waiting on the capture's own pacing, not on the source.
  */
-export function sourceHeldLoadMs(page: Page, now = Date.now()): number {
-  const state = heldLoads.get(page);
-  if (!state) return 0;
-  return state.total + (state.held > 0 ? now - state.since : 0);
+export function sourceHeldLoads(page: Page): ReadonlySet<Request> {
+  return heldLoads.get(page) ?? noHeldLoads;
 }
 
 function holdLoad(request: Request): () => void {
   let page: Page;
   try { page = request.frame().page(); }
   catch { return () => {}; /* Service workers have no owning page. */ }
-  let state = heldLoads.get(page);
-  if (!state) heldLoads.set(page, state = { held: 0, since: 0, total: 0 });
-  if (state.held++ === 0) state.since = Date.now();
-  const held = state;
-  return () => {
-    if (--held.held === 0) held.total += Date.now() - held.since;
-  };
+  let held = heldLoads.get(page);
+  if (!held) heldLoads.set(page, held = new Set());
+  held.add(request);
+  const owner = held;
+  return () => { owner.delete(request); };
 }
 
 const nativeRequests = new WeakMap<Request, {
