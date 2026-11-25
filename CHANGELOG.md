@@ -15,6 +15,18 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.41.5] - 2026-11-25
+
+### Changed
+- regenerate plugin bundles
+- Keep inline SVG icon rows during portable scaffolding removal
+- Cap the media plan to what the export budget kept
+
+### Fixed
+- derive term archive URLs from the entry's collection, not the site URL
+- share Unicode-safe product handle validation
+- keep image byte digest when perceptual decode fails
+
 ## [0.41.4] - 2026-11-24
 
 ### Changed
