@@ -337,9 +337,9 @@ function buildExportCapture(
 	// may spend all of it, and the export total budget still bounds the site.
 	const portableMediaTotalBytesLimit = Math.max(
 		0,
-		Math.floor( options.limits?.portableMediaTotalBytes ?? (
+		Math.min( Math.floor( options.limits?.portableMediaTotalBytes ?? (
 			options.limits?.maxTotalBytes !== undefined ? budget.maxTotalBytes - budget.reservedBytes : MAX_PORTABLE_MEDIA_TOTAL_BYTES
-		) )
+		) ), exclusions.mediaBytes ?? Infinity )
 	);
 	validateMaxFileBytes( options.limits?.maxFileBytes );
 	const maxFileBytes = options.limits?.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
@@ -529,6 +529,7 @@ function buildExportCapture(
 	// Media and page resources are the assets export can leave out; generated
 	// stylesheets only shrink with the routes that need them.
 	const droppable = new Map< string, string[] >();
+	const plannedMedia = new Set( mediaAssetPaths );
 	const droppablePaths = new Set( [ ...mediaAssetPaths, ...resourceStage.assets.map( asset => asset.path ) ] );
 	for ( const [ sourceUrl, path ] of portablePathsBySource ) {
 		if ( droppablePaths.has( path ) ) droppable.set( path, [ ...( droppable.get( path ) ?? [] ), sourceUrl ] );
@@ -538,6 +539,6 @@ function buildExportCapture(
 		inventory,
 		entrypointPath: routePathOf( entrypointUrl ).replace( /\\/g, '/' ),
 		routes: routes.map( route => ( { url: route.url, path: websiteRelative( route.path ) } ) ),
-		assets: [ ...droppable ].map( ( [ path, sourceUrls ] ) => ( { path: websiteRelative( path ), sourceUrls: sourceUrls.sort() } ) ).sort( ( a, b ) => ( a.path < b.path ? -1 : a.path > b.path ? 1 : 0 ) ),
+		assets: [ ...droppable ].map( ( [ path, sourceUrls ] ) => ( { path: websiteRelative( path ), sourceUrls: sourceUrls.sort(), ...( plannedMedia.has( path ) ? { media: true } : {} ) } ) ).sort( ( a, b ) => ( a.path < b.path ? -1 : a.path > b.path ? 1 : 0 ) ),
 	};
 }
