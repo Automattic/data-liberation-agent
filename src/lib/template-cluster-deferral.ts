@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import type { Browser, BrowserContext, BrowserContextOptions } from 'playwright';
 import { mapPool, withTimeout } from './concurrency.js';
 import { interactionReportMismatch, projectInteractionReport } from './interaction-projection.js';
-import { safeFetch } from './media-fetch/safe-fetch.js';
+import { fetchTemplateDocument } from './template-cluster-fetch.js';
 import { pathWithin } from './portable-assets.js';
 import { templateVerificationMember } from './route-budget.js';
 import { normalizedUrl } from './url/route-key.js';
@@ -310,7 +310,7 @@ export class TemplateClusterDeferral {
 
 	private async fetch( url: string, userAgent?: string ): Promise< MemberDocument > {
 		try {
-			const response = await safeFetch( url, { governors: this.input.governors, timeoutMs: TEMPLATE_DEFERRAL_LIMITS.requestTimeoutMs, attribution: { phase: 'template-clusters', url }, ...( userAgent ? { headers: { 'User-Agent': userAgent } } : {} ) } );
+			const response = await fetchTemplateDocument( url, { governors: this.input.governors, deadline: this.input.deadline, timeoutMs: TEMPLATE_DEFERRAL_LIMITS.requestTimeoutMs, userAgent } );
 			if ( response.status < 200 || response.status >= 300 ) return { unavailable: `HTTP ${ response.status }` };
 			return { html: response.body.toString( 'utf8' ) };
 		} catch ( error ) {

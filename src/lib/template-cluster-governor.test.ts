@@ -60,6 +60,14 @@ describe( 'template cluster derivation under source throttling', () => {
 		expect( governor.attribution().totals ).toMatchObject( { 'unattributed/template-clusters not_routed': expect.any( Number ) } );
 	}, 30_000 );
 
+	it( 'lets verification Retry-After outlast the per-attempt timeout without losing the cluster', async () => {
+		const { result, attempts } = await derive( ( path, attempt ) => path === '/verification/' && attempt === 1
+			? { status: 429, headers: { 'retry-after': '16' } }
+			: { status: 200 } );
+		expect( attempts.get( '/verification/' ) ).toBeGreaterThanOrEqual( 2 );
+		expect( result.summary ).toMatchObject( { derived: 2, escalated: 0, unavailable: 0 } );
+	}, 30_000 );
+
 	it( 'reports a representative the source keeps refusing as source-unavailable, not a template gate', async () => {
 		const { result, urls } = await derive( path => path === '/representative/' ? { status: 404 } : { status: 200 } );
 		const cluster = result.receipt.clusters[ 0 ]!;
