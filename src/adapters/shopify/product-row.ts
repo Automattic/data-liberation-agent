@@ -6,7 +6,7 @@ export const safeHandle = (value: unknown): value is string => typeof value === 
 const token = (value: string) => value.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
 /** Fail closed rather than inventing a slug, price, availability or option identity. */
-export function shopifyProductRow(product: Record<string, any>): ProductRow | undefined {
+export function shopifyProductRow(product: Record<string, any>, currency?: string): ProductRow | undefined {
 	if (!safeHandle(product.handle) || typeof product.title !== 'string' || !product.title.trim() || !Array.isArray(product.variants) || !product.variants.length) return undefined;
 	const options = product.options;
 	if (!Array.isArray(options) || !options.length || options.length > 3) return undefined;
@@ -35,6 +35,7 @@ export function shopifyProductRow(product: Record<string, any>): ProductRow | un
 	const images = Array.isArray(product.images) ? product.images.flatMap((image: any) => typeof image?.src === 'string' && /^https?:\/\//.test(image.src) ? [{ src: image.src, alt: typeof image.alt === 'string' && image.alt ? image.alt : product.title }] : []) : [];
 	const gallery = images.filter((image: { src: string }, index: number) => images.findIndex((other: { src: string }) => other.src === image.src) === index);
 	return { name: product.title, slug: product.handle, description: product.body_html,
+		...(currency ? { currency } : {}),
 		...(typeof product.product_type === 'string' && product.product_type ? { category: product.product_type } : {}),
 		tags: [...new Set<string>((typeof product.tags === 'string' ? product.tags.split(',') : product.tags ?? []).map((tag: string) => tag.trim()).filter(Boolean))],
 		regular_price: cheapest.regular_price, ...(cheapest.sale_price ? { sale_price: cheapest.sale_price } : {}),

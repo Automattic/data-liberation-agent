@@ -21,6 +21,7 @@ it('exports fixture catalog rows and materializes catalog-only images while reus
 	vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
 		const url = new URL(String(input));
 		requests.push(url.href);
+		if (url.pathname === '/cart.js') return Response.json({ currency: 'PEN' });
 		if (url.pathname.endsWith('.svg')) return new Response(svg, { headers: { 'Content-Type': 'image/svg+xml' } });
 		const data = url.pathname === '/collections.json' ? fixture('collections') : url.pathname.startsWith('/collections/') ? { products: [{ handle: 'coffee' }, { handle: 'cups' }] } : url.searchParams.get('page') === '1' ? fixture('products') : { products: [] };
 		return new Response(JSON.stringify(data), { headers: { 'Content-Type': 'application/json' } });
@@ -45,6 +46,9 @@ it('exports fixture catalog rows and materializes catalog-only images while reus
 		expect(content.products).toHaveLength(4);
 		expect(content.products).toContainEqual(expect.objectContaining({ slug: unicodeHandle }));
 		expect(content.posts).toContainEqual(expect.objectContaining({ slug: unicodeHandle, kind: 'page' }));
+		expect(content.products.map((product: { currency?: string }) => product.currency)).toEqual(['PEN', 'PEN', 'PEN', 'PEN']);
+		expect(requests.filter(url => url === `${source}cart.js`)).toHaveLength(1);
+		expect(requests).not.toContain(`${source}meta.json`);
 		expect(content.products[0]).toMatchObject({ name: 'Coffee', slug: 'coffee', description: '<p>Roasted</p>', category: 'Coffee', categories: ['Favorites'], tags: ['fresh', 'beans'], regular_price: '10.00', sale_price: '8.00', sku: 'BEAN', stock_status: 'instock', source_path: '/products/coffee/index.html' });
 		expect(content.products[0]).not.toHaveProperty('variants');
 		expect(content.products[1]).toMatchObject({ regular_price: '12.00', categories: ['Favorites'], variants: [
@@ -65,6 +69,27 @@ it('exports fixture catalog rows and materializes catalog-only images while reus
 		expect(content.products[0].images[0].src).toBe(content.products[1].images[0].src);
 		expect(readdirSync(join(directory, 'website/media'))).toHaveLength(1);
 	} finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+it.each(['PEN', undefined])('falls back to meta currency %s or omits currency with a diagnostic', async currency => {
+	const requests: string[] = [];
+	vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+		const url = new URL(String(input));
+		requests.push(url.pathname);
+		if (url.pathname === '/cart.js') return new Response('unavailable', { status: 404 });
+		if (url.pathname === '/meta.json') return Response.json({ currency: currency ?? 'invalid' });
+		return Response.json(url.pathname === '/products.json' && url.searchParams.get('page') === '1' ? fixture('products') : { products: [], collections: [] });
+	}));
+	const result = await enumerateShopifyProducts('https://example.com/', { governors: new SourceRequestGovernors() });
+	const rows = result.entries.flatMap(entry => entry.product ? [entry.product] : []);
+	expect(rows).toHaveLength(4);
+	for (const row of rows) {
+		if (currency) expect(row).toHaveProperty('currency', currency);
+		else expect(row).not.toHaveProperty('currency');
+	}
+	expect(result.diagnostics.filter(item => item.code === 'product_currency_unavailable')).toHaveLength(currency ? 0 : 1);
+	expect(requests.filter(path => path === '/cart.js')).toHaveLength(1);
+	expect(requests.filter(path => path === '/meta.json')).toHaveLength(1);
 });
 
 it('downloads and emits one file for a page srcset and the catalog row naming its cdn.shopify.com alias (#2142)', async () => {

@@ -19,6 +19,18 @@ export async function enumerateShopifyProducts(sourceUrl: string, options: Param
 	const origin = new URL(sourceUrl).origin;
 	const entries: ProductEntry[] = [];
 	const diagnostics: Array<{ code: string; url: string; reason: string }> = [];
+	let currency: string | undefined;
+	for (const path of ['/cart.js', '/meta.json']) {
+		try {
+			const response = await safeFetch(`${origin}${path}`, { governors: options.governors, timeoutMs: 15_000, maxBytes: 1024 * 1024 });
+			const value = response.status === 200 ? JSON.parse(response.body.toString('utf8'))?.currency : undefined;
+			if (typeof value === 'string' && /^[A-Z]{3}$/.test(value)) {
+				currency = value;
+				break;
+			}
+		} catch { /* Try the fallback endpoint before reporting unavailable currency. */ }
+	}
+	if (!currency) diagnostics.push({ code: 'product_currency_unavailable', url: origin, reason: 'Store currency unavailable or malformed at /cart.js and /meta.json; product currency omitted' });
 	const seen = new Set<string>();
 	for (let page = 1; page <= 1000; page++) {
 		const url = `${origin}/products.json?limit=250&page=${page}`;
@@ -46,7 +58,7 @@ export async function enumerateShopifyProducts(sourceUrl: string, options: Param
 				seen.add(product.handle);
 				fresh++;
 				const prices = new Set<string>((Array.isArray(product.variants) ? product.variants : []).map((variant: { price?: unknown } | null) => variant?.price).filter((price: unknown): price is string => typeof price === 'string' && /^\d+\.\d{2}$/.test(price)));
-				const row = shopifyProductRow(product);
+				const row = shopifyProductRow(product, currency);
 				if (!row) diagnostics.push({ code: 'product_row_omitted', url: `${origin}/products/${product.handle}`, reason: 'Catalog product has unrepresentable price, stock or option evidence' });
 				entries.push({ ...(row ? { product: row } : {}), permalink: `${origin}/products/${product.handle}`, slug: product.handle, kind: 'page', title: product.title,
 					contentHtml: product.body_html, published: product.published_at, updated: product.updated_at, author: product.vendor,
