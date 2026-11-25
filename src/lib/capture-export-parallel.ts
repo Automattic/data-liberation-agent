@@ -10,6 +10,8 @@ import type { ExportCaptureOptions } from './capture-export.js';
 /** A route collection holds a few parsed copies of a large builder page; workers use at most a quarter of memory. */
 const WORKER_MEMORY_BYTES = 1.5 * 1024 ** 3;
 const MAX_WORKERS = 8;
+/** Below this, starting workers (each loads the export modules) costs more than collecting inline. */
+export const MIN_PARALLEL_ROUTES = 8;
 
 export interface PrecollectedRoutes {
 	routes: Map< string, CollectedRoute | FailedRouteCollection >;
@@ -32,6 +34,7 @@ export async function precollectCapturedRoutes( options: ExportCaptureOptions ):
 	const manifestPath = join( options.outputDir, 'screenshots', 'manifest.json' );
 	if ( ! existsSync( manifestPath ) ) return undefined;
 	const urls = Object.entries( ( JSON.parse( readFileSync( manifestPath, 'utf8' ) ) as ScreenshotManifest ).entries ).filter( ( [ , entry ] ) => entry.html ).map( ( [ url ] ) => url );
+	if ( urls.length < MIN_PARALLEL_ROUTES ) return undefined;
 	const workers = Math.min( urls.length, MAX_WORKERS, availableParallelism() - 1, Math.floor( totalmem() / 4 / WORKER_MEMORY_BYTES ) );
 	if ( workers < 2 ) return undefined;
 	const dir = mkdtempSync( join( tmpdir(), 'export-routes-' ) );
