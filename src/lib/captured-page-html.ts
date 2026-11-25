@@ -129,8 +129,10 @@ export function renderedHtml( html: string ): string {
 		const node = $( element );
 		const rendered = node.clone();
 		rendered.find( 'script,style,noscript' ).remove();
+		// Inline SVG is drawn content: icon rows (payment marks, badges) carry
+		// no text yet render in the source.
 		if (
-			rendered.find( 'img,video,audio,iframe,form,input,button,a[href]' ).length > 0 ||
+			rendered.find( 'img,svg,video,audio,iframe,form,input,button,a[href]' ).length > 0 ||
 			rendered.text().trim() !== ''
 		)
 			return;
