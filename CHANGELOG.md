@@ -15,6 +15,16 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.41.6] - 2026-11-25
+
+### Changed
+- regenerate plugin bundles
+- Collect export routes in parallel worker threads
+
+### Fixed
+- preserve localized picture currentSrc per device copy
+- export store currency on catalog product rows
+
 ## [0.41.5] - 2026-11-25
 
 ### Changed
