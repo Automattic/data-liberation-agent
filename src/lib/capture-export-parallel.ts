@@ -34,15 +34,22 @@ export async function precollectCapturedRoutes( options: ExportCaptureOptions ):
 	const urls = Object.entries( ( JSON.parse( readFileSync( manifestPath, 'utf8' ) ) as ScreenshotManifest ).entries ).filter( ( [ , entry ] ) => entry.html ).map( ( [ url ] ) => url );
 	const workers = Math.min( urls.length, MAX_WORKERS, availableParallelism() - 1, Math.floor( totalmem() / 4 / WORKER_MEMORY_BYTES ) );
 	if ( workers < 2 ) return undefined;
-	const dir = mkdtempSync( join( tmpdir(), 'dla-routes-' ) );
+	const dir = mkdtempSync( join( tmpdir(), 'export-routes-' ) );
 	const release = () => rmSync( dir, { recursive: true, force: true } );
 	const routes = new Map< string, CollectedRoute | FailedRouteCollection >();
 	const startedAt = Date.now();
+	const { structuredContent, routeScope, failures, deviceMode, limits, outputDir, sourceUrl } = options;
+	const workerData = { options: { structuredContent, routeScope, failures, deviceMode, limits, outputDir, sourceUrl }, platform: options.platform, dir };
+	try {
+		structuredClone( workerData );
+	} catch {
+		// Options carrying functions cannot reach a worker; the export collects inline.
+		release();
+		return undefined;
+	}
 	const built = new URL( './capture-export-route-worker.js', import.meta.url );
 	// Running from source (tests, `npm run liberate`), the worker is loaded through tsx.
 	const script = existsSync( fileURLToPath( built ) ) ? built : new URL( './capture-export-route-worker.ts', import.meta.url );
-	const { structuredContent, routeScope, failures, deviceMode, limits, outputDir, sourceUrl } = options;
-	const workerData = { options: { structuredContent, routeScope, failures, deviceMode, limits, outputDir, sourceUrl }, platform: options.platform, dir };
 	let next = 0;
 	const run = () => new Promise< void >( done => {
 		let worker: Worker;
@@ -68,7 +75,7 @@ export async function precollectCapturedRoutes( options: ExportCaptureOptions ):
 		await Promise.all( Array.from( { length: workers }, run ) );
 	} catch ( error ) {
 		release();
-		throw error;
+		throw error; // failure-class: programmer
 	}
 	process.stderr.write( `[timing] route-collection ${ Date.now() - startedAt }ms (${ routes.size } of ${ urls.length } routes, ${ workers } workers)\n` );
 	return { routes, release };
