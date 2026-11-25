@@ -4,7 +4,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { describe, expect, it, vi } from 'vitest';
-import { captureScreenshots } from './screenshotter.js';
+import { captureScreenshots, createLinkedFrontier } from './screenshotter.js';
+import { captureTimeBudgetWindow } from '../capture-time-budget.js';
 import { LinkedFrontier } from './linked-frontier.js';
 import { createReferenceCollector, readReferenceArtifact } from '../fidelity/reference.js';
 import { exportWebsiteCapture } from '../capture-export.js';
@@ -12,6 +13,29 @@ import { checkFidelity } from '../fidelity/check.js';
 import { documentRequestUrl } from '../url/route-key.js';
 import { findAdapter } from '../../adapters/index.js';
 import { bloggerAdapter } from '../../adapters/blogger/index.js';
+
+it('uses the capture admission window for late linked pages unless explicitly overridden', () => {
+	const minute = 60_000;
+	const captureStartedAt = 1_000;
+	// Discovery/setup has already spent five minutes before browser capture starts.
+	const browserStartedAt = captureStartedAt + 5 * minute;
+	const timeBudget = captureTimeBudgetWindow(captureStartedAt, 90 * minute);
+	const frontier = createLinkedFrontier({linkedPages: {}, timeBudget}, browserStartedAt)!;
+	expect(frontier.admit('https://source.test/late', 1, browserStartedAt + 31 * minute)).toBe(true);
+	expect(frontier.admit('https://source.test/last', 1, timeBudget.admitUntil - 1)).toBe(true);
+	expect(frontier.admit('https://source.test/closed', 1, timeBudget.admitUntil + 1)).toBe(false);
+	expect(frontier.coverage()).toMatchObject({
+		limits: {timeoutMs: timeBudget.admitUntil - browserStartedAt},
+		diagnostics: [{code: 'linked_page_budget_exhausted', url: 'https://source.test/closed'}],
+	});
+	const override = createLinkedFrontier({linkedPages: {timeoutMs: minute}, timeBudget}, browserStartedAt)!;
+	expect(override.admit('https://source.test/override', 1, browserStartedAt + minute)).toBe(false);
+	const unbudgeted = createLinkedFrontier({linkedPages: {}}, browserStartedAt)!;
+	expect(unbudgeted.coverage().limits.timeoutMs).toBe(30 * minute);
+	// An already-spent admission window must not restart the default timeout.
+	const spent = createLinkedFrontier({linkedPages: {}, timeBudget}, timeBudget.admitUntil + minute)!;
+	expect(spent.admit('https://source.test/spent', 1, timeBudget.admitUntil + minute)).toBe(false);
+});
 
 it('merges slash identities while preserving query, depth and time boundaries', () => {
 	const frontier = new LinkedFrontier({maxPages: 2, maxDepth: 1, timeoutMs: 100}, 0);

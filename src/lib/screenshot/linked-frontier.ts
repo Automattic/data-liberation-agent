@@ -12,7 +12,7 @@ export const NON_DOCUMENT_URL = 'non_document_url';
 export interface LinkedPageLimits {
 	maxPages?: number;
 	maxDepth?: number;
-	/** Bounds new linked-route admission, not completion of admitted captures. */
+	/** Bounds new linked-route admission, not completion of admitted captures; zero closes admission immediately. */
 	timeoutMs?: number;
 }
 export interface FrontierDiagnostic {
@@ -55,7 +55,7 @@ export class LinkedFrontier {
 			timeoutMs: limits.timeoutMs ?? 1_800_000,
 		};
 		for (const [name, value] of Object.entries(this.limits)) {
-			if (!Number.isSafeInteger(value) || value < (name === 'maxDepth' ? 0 : 1)) throw new Error(`Invalid linked-page ${name}`);
+			if (!Number.isSafeInteger(value) || value < (name === 'maxPages' ? 1 : 0)) throw new Error(`Invalid linked-page ${name}`);
 		}
 		this.deadline = now + this.limits.timeoutMs;
 	}
