@@ -323,7 +323,6 @@ export async function loadSourceBaseline( args: SourceLoadInput ): Promise<Sourc
 	}
 	const dismissedLate = await dismissOverlays( page, { consentViewports: args.consentViewports } );
 	args.phases?.enter( 'baseline' );
-	if ( process.env.DLA_DEBUG_PACE ) console.error( `[debug-pace] ${ Date.now() } baseline ${ url } combo=${ await page.evaluate( () => !! document.querySelector( '#combo' ) ).catch( () => 'err' ) } paced=${ sourcePacingDelayMs( page ) }` );
 	const dismissedHere = [ ...dismissedEarly, ...dismissedLate ];
 	if ( dismissedHere.length > 0 ) {
 		// Accumulates within one run (desktop + mobile both append); on a resumed

@@ -5,6 +5,7 @@ import { isSourcePromotion } from '../source-cleanup.js';
 import { isConsentNotice } from '../consent-overlay.js';
 import { VIEWPORT_WORK_KEY, type ViewportWork } from './viewport-work.js';
 import { orElse } from '../failure-class.js';
+import { sourceHeldLoadMs } from '../browser-kit/source-traffic.js';
 
 /** Slack given to an in-page step beyond its own budget before Node gives up on it. */
 const EVALUATE_GRACE_MS = 5_000;
@@ -284,10 +285,14 @@ export async function waitForStable(
   // Navigation already awaited `load` within its own budget; a subresource
   // that is still pending must not fail the route here either.
   await page.waitForLoadState('load', { timeout: 5_000 }).catch(orElse( undefined ));
-  const [, outcome] = await Promise.all([
+  const heldBefore = sourceHeldLoadMs(page);
+  let [, outcome] = await Promise.all([
     waitForNetworkQuiet(page, 'network-quiet'),
     settleDocument(page, 'stable', { quietMs: 500, timeoutMs: domTimeoutMs, media: true }),
   ]);
+  // A load the capture held back landed after the concurrent DOM wait may have
+  // ended: let what it renders settle too.
+  if (sourceHeldLoadMs(page) > heldBefore) outcome = await settleDocument(page, 'stable-held', { quietMs: 500, timeoutMs: domTimeoutMs, media: true });
   if (outcome.pendingMedia?.length) onPendingMedia?.(outcome.pendingMedia);
   await waitForFonts(page);
   await waitForDeclaredLoadingState(page);
@@ -575,14 +580,28 @@ function trafficLedger( page: Page, telemetry?: TelemetryRequest ): PageTrafficL
   return ledger;
 }
 
-/** Poll `quiet()` every ≤50ms until it holds or the bound is spent. */
-function awaitQuiet( quiet: () => boolean, timeoutMs: number ): Promise< 'quiet' | 'deadline' > {
+/** The most a quiet wait's bound may grow while the capture itself holds the page's loads. */
+const HELD_LOAD_EXTENSION_MS = 30_000;
+
+/**
+ * Poll `quiet()` every ≤50ms until it holds or the bound is spent.
+ *
+ * Time during which this capture's own source governor held one of the page's
+ * loads back (the origin's pause or the learned rate ceiling) does not spend
+ * the bound: the source has not been asked yet, so a hydration fetch paced
+ * past the bound would otherwise be raced, and the page serialized without
+ * what it renders (a select a menu API fills). The extension is bounded.
+ */
+function awaitQuiet( quiet: () => boolean, timeoutMs: number, page?: Page ): Promise< 'quiet' | 'deadline' > {
   const started = Date.now();
+  const heldAtStart = page ? sourceHeldLoadMs( page, started ) : 0;
+  const bound = ( now: number ) => timeoutMs + ( page ? Math.min( HELD_LOAD_EXTENSION_MS, sourceHeldLoadMs( page, now ) - heldAtStart ) : 0 );
   return new Promise( ( resolve ) => {
     const check = () => {
-      if ( Date.now() - started >= timeoutMs ) { resolve( 'deadline' ); return; }
+      const now = Date.now();
+      if ( now - started >= bound( now ) ) { resolve( 'deadline' ); return; }
       if ( quiet() ) { resolve( 'quiet' ); return; }
-      setTimeout( check, Math.min( 50, Math.max( 1, timeoutMs - ( Date.now() - started ) ) ) );
+      setTimeout( check, Math.min( 50, Math.max( 1, bound( now ) - ( now - started ) ) ) );
     };
     check();
   } );
@@ -632,7 +651,7 @@ export async function waitForRenderIdle(
     return;
   }
   await action();
-  await awaitQuiet( () => networkQuiet( ledger, quietMs ), timeoutMs );
+  await awaitQuiet( () => networkQuiet( ledger, quietMs ), timeoutMs, page );
 }
 
 /**
@@ -666,7 +685,7 @@ export async function waitForNetworkQuiet(
          spend the bound rather than race a hydration fetch */
     }
   } else {
-    reason = await awaitQuiet( () => networkQuiet( ledger, quietMs ), timeoutMs );
+    reason = await awaitQuiet( () => networkQuiet( ledger, quietMs ), timeoutMs, page );
   }
   readinessSinks.get( page )?.( wait, { reason, ms: Date.now() - started } );
 }

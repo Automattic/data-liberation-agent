@@ -137,6 +137,34 @@ function recordPacedLoad(request: Request, ms: number): void {
   } catch { /* Service workers have no owning page. */ }
 }
 
+const heldLoads = new WeakMap<Page, { held: number; since: number; total: number }>();
+
+/**
+ * Monotonic per-page wall-clock milliseconds during which at least one of the
+ * page's source loads was held back by this capture (the origin's pause or
+ * the learned rate ceiling) and had not yet been sent. Concurrent holds count
+ * once. A readiness wait that spent this time was waiting on the capture's own
+ * pacing, not on the source.
+ */
+export function sourceHeldLoadMs(page: Page, now = Date.now()): number {
+  const state = heldLoads.get(page);
+  if (!state) return 0;
+  return state.total + (state.held > 0 ? now - state.since : 0);
+}
+
+function holdLoad(request: Request): () => void {
+  let page: Page;
+  try { page = request.frame().page(); }
+  catch { return () => {}; /* Service workers have no owning page. */ }
+  let state = heldLoads.get(page);
+  if (!state) heldLoads.set(page, state = { held: 0, since: 0, total: 0 });
+  if (state.held++ === 0) state.since = Date.now();
+  const held = state;
+  return () => {
+    if (--held.held === 0) held.total += Date.now() - held.since;
+  };
+}
+
 const nativeRequests = new WeakMap<Request, {
   governor: ReturnType<SourceRequestGovernors['forOrigin']>;
   category: SourceRequestCategory;
@@ -159,16 +187,20 @@ export async function continueSourceRoute(route: Route, context: BrowserContext,
   const governor = sourceGovernorFor(context, request.url());
   if (!governor) return route.continue(options);
   const requestAttribution = attribution(context, request);
-  await governor.admitSourceRequest();
+  const release = holdLoad(request);
   const abort = new AbortController();
   const close = () => abort.abort();
-  context.once('close', close);
-  const pacingStartedAt = Date.now();
-  try { await governor.pace(abort.signal); }
+  let pacingStartedAt: number | undefined;
+  try {
+    await governor.admitSourceRequest();
+    context.once('close', close);
+    pacingStartedAt = Date.now();
+    await governor.pace(abort.signal);
+  }
   finally {
+    release();
     context.off('close', close);
-    recordPacedLoad(request, Date.now() - pacingStartedAt);
-    if (process.env.DLA_DEBUG_PACE && /MenuItem/.test(request.url())) console.error(`[debug-pace] ${Date.now()} paced=${Date.now() - pacingStartedAt} ${request.frame().url()}`);
+    if (pacingStartedAt !== undefined) recordPacedLoad(request, Date.now() - pacingStartedAt);
   }
   nativeRequests.set(request, { governor, attribution: requestAttribution, category: request.resourceType() === 'document' ? traffic.get(context)?.category ?? 'document' : 'subresource', routeUrl: owningDocumentUrl(request), refusalAdmission: governor.refusalAdmission() });
   try { await route.continue(options); }
