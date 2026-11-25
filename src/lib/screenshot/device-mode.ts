@@ -24,7 +24,7 @@ export const DEVICE_MODE_REQUESTS: readonly DeviceModeRequest[] = [ 'auto', 'dua
 /** Per-request noise removed before comparing the two server documents. Everything else must match byte for byte. */
 export const SERVER_HTML_IGNORED = [
 	'nonce attribute values',
-	'values of attributes, meta tags, hidden inputs and JSON keys named like csrf, xsrf, nonce or authenticity token',
+	'values of attributes, meta tags, hidden inputs and JSON keys named like csrf, xsrf, nonce or authenticity token, or ending in token',
 	'ISO-8601 date-time stamps',
 	'Cloudflare window.__CF$cv$params r/t values and challenge-platform scripts/jsd/main.js ray query values',
 ] as const;
@@ -65,7 +65,7 @@ export interface StructureComparison {
 	firstHeadDifference?: string;
 }
 
-const TOKEN_NAME = String.raw`[\w:.-]*(?:csrf|xsrf|nonce|authenticity[_-]?token)[\w:.-]*`;
+const TOKEN_NAME = String.raw`[\w:.-]*(?:(?:csrf|xsrf|nonce|authenticity[_-]?token)[\w:.-]*|token)`;
 
 /** Remove per-request noise from a server document; see `SERVER_HTML_IGNORED`. */
 export function normalizeServerHtml( html: string ): string {
