@@ -308,15 +308,338 @@ export function capturedDocumentReferences( entries: ScreenshotManifest['entries
 	};
 }
 
-export function collectCapturedRoutes( { entries, sourceUrl, routeScope, failures, structuredEntries, deviceMode: siteDeviceMode, input, resolveDocumentSelection, outputDir, embedded, embeddedSources, hasHttpInput, siteSwitchWidth, phoneSwitchWidth, stagedHtmlDir, resourceManifest, routeFailureReasons, maxFileBytes, budget, exclusions }: {
+/** What one route contributes to the export; plain data, so it can cross a worker boundary. */
+export interface CollectedRoute {
+	diagnostics: RouteDiagnostic[];
+	excluded?: boolean;
+	redirectAlias?: { url: string; target: string };
+	switchWidths: number[];
+	deviceSelections: CapturedRoutes['deviceSelections'];
+	widthSelections: CapturedRoutes['widthSelections'];
+	fluidReports: CaptureFluidEvidence[];
+	entry?: CaptureEntry;
+	responsiveProjection?: [ string, { moved: ReadonlyMap<string, string>; documentClasses?: readonly string[] } ];
+	collapsedProjection?: [ string, { moved: Map<string, string>; aliases: Map<string, string>; width: number } ];
+}
+
+/** A route collection that failed: an integrity failure fails the export, any other drops the route. */
+export interface FailedRouteCollection { failed: { message: string; integrity: boolean } }
+
+export interface RouteCollectionContext {
+	sourceUrl: string; routeScope?: SiteRouteScope; failures: Array<{ url: unknown; error: unknown }>; structuredEntries?: StructuredContentEntry[];
+	deviceMode?: DeviceMode; input?: HttpExportInput; resolveDocumentSelection?: ( documents: Readonly<Record<string, string>> ) => DocumentSelection | undefined;
+	outputDir: string; embedded: ReturnType<typeof loadEmbeddedDocuments> | undefined; embeddedSources: Set<string>; hasHttpInput: boolean; siteSwitchWidth: number | undefined; phoneSwitchWidth: number | undefined;
+	resourceManifest: CapturedResourceManifest; routeFailureReasons: Map<string, Array<{ profile: string; reason: string }>>; maxFileBytes: number; canonicalHost: string | undefined; documentReferences: DocumentReferenceOptions;
+}
+
+/** The host the entrypoint names itself by, which canonical metadata on every route is rebased onto. */
+export function captureCanonicalHost( entries: ScreenshotManifest['entries'], sourceUrl: string, outputDir: string ): string | undefined {
+	const homepage = Object.entries( entries ).find( ( [ url ] ) => isSourceCaptureUrl( url, sourceUrl ) )?.[ 1 ];
+	if ( ! homepage?.html ) return undefined;
+	const path = resolve( outputDir, homepage.html );
+	if ( ! pathWithin( outputDir, path ) || ! existsSync( path ) ) return undefined;
+	return entrypointCanonicalHost( sourceUrl, readFileSync( path, 'utf8' ), homepage.metadata?.openGraph?.[ 'og:url' ] );
+}
+
+/**
+ * Turn one manifest entry into its export contribution. Each route reads only
+ * its own documents and the shared context, so routes collect independently;
+ * `stageHtml` stores the assembled page and returns its path.
+ */
+export function collectCapturedRoute( url: string, entry: CaptureManifestEntry, context: RouteCollectionContext, stageHtml: ( html: string ) => string ): CollectedRoute {
+	const { sourceUrl, routeScope, failures, structuredEntries, deviceMode: siteDeviceMode, input, resolveDocumentSelection, outputDir, embedded, embeddedSources, hasHttpInput, siteSwitchWidth, phoneSwitchWidth, resourceManifest, routeFailureReasons, maxFileBytes, canonicalHost, documentReferences } = context;
+	const result: CollectedRoute = { diagnostics: [], switchWidths: [], deviceSelections: [], widthSelections: [], fluidReports: [] };
+	if ( ! routeMatchesSourceOrigin( url, sourceUrl ) || !routeInScope( url, routeScope ) ) {
+		result.excluded = true;
+		return result;
+	}
+	// Capture treats a redirect as an alias, and schedules its target, only
+	// when the route recorded no failure. A route whose passes disagreed
+	// (one saved the page, another was redirected) is a failed capture:
+	// it is reported with its recorded reasons below, like any route
+	// without HTML, not as a redirect to a target nobody scheduled.
+	if ( entry.redirectedTo && ! routeFailureReasons.has( url ) ) {
+		if ( !routeInScope( entry.redirectedTo, routeScope ) ) {
+			result.excluded = true;
+			result.diagnostics.push( { code: 'route_external_redirect', url, reason: 'source redirect outside the adapter-owned site route scope' } );
+			return result;
+		}
+		result.redirectAlias = { url, target: entry.redirectedTo };
+		return result;
+	}
+	if ( entry.externalRedirect ) {
+		// The source sends this link outside the site. Retain only the fact of the
+		// redirect; neither its destination nor its query belongs in the copy.
+		result.excluded = true;
+		const tenantBoundary = entry.sourceOutcomes?.some( outcome => outcome.routeScope && outcome.target.origin === new URL(url).origin );
+		result.diagnostics.push( { code: 'route_external_redirect', url, reason: tenantBoundary
+			? 'source initial-document redirect outside the adapter-owned site route scope (destination not fetched)'
+			: 'source initial-document redirect to an external origin (destination not fetched)' } );
+		return result;
+	}
+	if ( entry.sourceAbsentStatus ) {
+		result.excluded = true;
+		result.diagnostics.push( { code: 'route_not_found', url, reason: `HTTP ${ entry.sourceAbsentStatus }` } );
+		return result;
+	}
+	if ( ! entry.html || entry.redirectedTo ) {
+		const reason = routeFailureReasons.get( url )?.map( failure => failure.reason ).join( '; ' )
+			?? 'capture completed without producing page HTML';
+		if ( failuresAreAbsentDocument( failures, url ) ) {
+			result.excluded = true;
+			result.diagnostics.push( {
+				code: 'route_not_found',
+				url,
+				reason,
+			} );
+		} else {
+			result.diagnostics.push( {
+				code: 'route_capture_failed',
+				url,
+				reason,
+			} );
+		}
+		return result;
+	}
+	const capturedHtmlPath = resolve( outputDir, entry.html );
+	if ( ! pathWithin( outputDir, capturedHtmlPath ) || ! existsSync( capturedHtmlPath ) ) {
+		result.diagnostics.push( {
+			code: 'route_capture_failed',
+			url,
+			reason: `captured HTML file is missing or outside the output directory: ${ entry.html }`,
+		} );
+		return result;
+	}
+	for ( const profile of Object.values( entry.profiles ?? {} ) ) {
+		for ( const diagnostic of profile.diagnostics ?? [] ) {
+			if ( diagnostic.code === 'device_document_incomplete' || diagnostic.code === 'source_mobile_redirect' || diagnostic.code === 'box_tree_unproven' ) result.diagnostics.push( { ...diagnostic, url } );
+		}
+	}
+	const acquiredDesktopHtml = readFileSync(capturedHtmlPath, 'utf8');
+	const desktopHash = createHash('sha256').update(acquiredDesktopHtml).digest('hex');
+	let rawDesktopHtml = embedded && input ? projectRuntimePresentation(projectEmbeddedRegions(acquiredDesktopHtml, url, input.desktopVariant, desktopHash, embedded.receipt.regions), url, input.desktopVariant, desktopHash, embedded.receipt) : acquiredDesktopHtml;
+	rawDesktopHtml = resolveDocumentReferences(rawDesktopHtml, entry.documents?.desktop?.url ?? url, entry.documents?.desktop?.baseUrl, documentReferences);
+	// A builder's own logo is not the site's icon; owner-uploaded icons stay.
+	rawDesktopHtml = withoutPlatformDefaultIcons(rawDesktopHtml, entry.documents?.desktop?.url ?? url);
+	// Each profile's scripted links take the destinations observed in that profile.
+	rawDesktopHtml = lowerScriptedLinks(rawDesktopHtml, entry.scriptedLinks?.desktop);
+	const sourceInteractivity = inspectSourceInteractivity( rawDesktopHtml, url, outputDir, resourceManifest );
+	// A client-routed SPA answers every route with HTTP 200 and renders its
+	// own not-found screen in JavaScript, so the HTTP-status check above
+	// (failuresAreAbsentDocument) never sees it: the entry has HTML, capture
+	// succeeded, there is no failure to inspect. Never applied to the source
+	// URL itself -- it is known good regardless of what it renders.
+	if ( ! isSourceCaptureUrl( url, sourceUrl ) ) {
+		// An empty rendered body (no text, no content-bearing element) is
+		// the same signal in its barest form: the app answered the route
+		// with nothing at all.
+		const absentRenderReason = isAbsentDocumentRender( rawDesktopHtml )
+			? 'rendered document is the client-routed not-found screen: a heading of just "404"/"410" on an otherwise thin page'
+			: isEmptyDocumentRender( rawDesktopHtml )
+				? 'rendered document is empty'
+				: undefined;
+		if ( absentRenderReason ) {
+			result.excluded = true;
+			result.diagnostics.push( {
+				code: 'route_not_found',
+				url,
+				reason: absentRenderReason,
+			} );
+			return result;
+		}
+	}
+	if ( entry.phoneSentTo ) result.diagnostics.push( { code: 'phone_redirect_desktop_only', url, unit: 'profile', profile: 'mobile', severity: 'warning', reason: `The phone identity is sent to ${ entry.phoneSentTo } while desktop renders this route; the route ships its desktop document, reflowed at phone widths` } );
+	const mobileHtmlPath = resolve( outputDir, entry.mobileHtml ?? entry.html.replace( /^html[\\/]/, 'html-mobile/' ) );
+	// A route whose phone identity was sent elsewhere has no phone document,
+	// even if an earlier run left one at the conventional path.
+	const acquiredMobileHtml =
+		! entry.phoneSentTo && ( siteDeviceMode === 'reflow-only' || hasHttpInput ? Boolean( entry.mobileHtml ) : true ) && pathWithin( outputDir, mobileHtmlPath ) && existsSync( mobileHtmlPath )
+			? readFileSync( mobileHtmlPath, 'utf8' )
+			: undefined;
+	const mobileHash = acquiredMobileHtml === undefined ? undefined : createHash('sha256').update(acquiredMobileHtml).digest('hex');
+	let rawMobileHtml = embedded && input?.mobileVariant && acquiredMobileHtml !== undefined ? projectRuntimePresentation(projectEmbeddedRegions(acquiredMobileHtml, url, input.mobileVariant, mobileHash!, embedded.receipt.regions), url, input.mobileVariant, mobileHash!, embedded.receipt) : acquiredMobileHtml;
+	if (rawMobileHtml !== undefined) rawMobileHtml = withoutPlatformDefaultIcons(resolveDocumentReferences(rawMobileHtml, entry.documents?.mobile?.url ?? url, entry.documents?.mobile?.baseUrl, documentReferences), entry.documents?.mobile?.url ?? url);
+	if (rawMobileHtml !== undefined) rawMobileHtml = lowerScriptedLinks(rawMobileHtml, entry.scriptedLinks?.mobile);
+	const sourceDocuments: Record<string, string> = { desktop: rawDesktopHtml, ...( rawMobileHtml === undefined ? {} : { mobile: rawMobileHtml } ) };
+	for ( const [ key, profile ] of Object.entries( entry.profiles ?? {} ) ) {
+		if ( key === 'desktop' || key === 'mobile' || ! profile.html ) continue;
+		const path = resolve( outputDir, profile.html );
+		if ( ! pathWithin( outputDir, path ) || ! existsSync( path ) ) throw new IntegrityError( `Device document is missing or outside capture: ${ key }` );
+		const documentUrl = entry.documents?.[ key ];
+		sourceDocuments[ key ] = lowerScriptedLinks( withoutPlatformDefaultIcons( resolveDocumentReferences( readFileSync( path, 'utf8' ), documentUrl?.url ?? url, documentUrl?.baseUrl, documentReferences ), documentUrl?.url ?? url ), entry.scriptedLinks?.[ key ] );
+	}
+	const selection = resolveDocumentSelection?.( sourceDocuments );
+	if ( selection?.kind === 'width' ) {
+		if ( ! Number.isInteger( selection.switchWidth ) || selection.switchWidth <= 0 || ! selection.evidence ) throw new IntegrityError( 'Invalid observed document switch' );
+		result.widthSelections.push( { url, ...selection } );
+	}
+	const deviceMode = entry.deviceMode;
+	const detectedFloor =
+		selection?.kind === 'device' ? undefined : selection?.kind === 'width' ? selection.switchWidth : entry.deviceMode?.switchWidth !== undefined ? entry.deviceMode.switchWidth : deviceMode?.mode === 'dual' && deviceMode.serverHtml === 'different'
+			? phoneSwitchWidth ?? entry.profiles?.mobile?.viewport.width
+			: typeof entry.fluid?.canvasFloor === 'number' && entry.fluid.canvasFloor > 0
+			? Math.round( entry.fluid.canvasFloor )
+			: phoneResponsiveSwitchWidth( entry, siteSwitchWidth );
+	if ( detectedFloor ) result.switchWidths.push( detectedFloor );
+	// A source that selects a third layout by width (#1379): a bounded range
+	// with its captured document ships as the middle document; otherwise
+	// the copy serves the desktop document there and says so.
+	const middle = entry.deviceMode?.switchWidth === detectedFloor
+		? entry.deviceMode?.middleLayout ?? ( entry.deviceMode as { uncapturedLayout?: MiddleLayout } | undefined )?.uncapturedLayout
+		: undefined;
+	const rawMiddleHtml = middle?.maxWidth !== undefined && selection?.kind !== 'device' && rawMobileHtml !== undefined
+		? sourceDocuments[ MIDDLE_PROFILE_ID ]
+		: undefined;
+	if ( middle && rawMiddleHtml === undefined ) result.diagnostics.push( {
+		code: 'responsive_layout_uncaptured', url, unit: 'profile', severity: 'warning',
+		reason: `source renders a third layout, neither the phone nor the desktop document, from ${ middle.minWidth }px${ middle.maxWidth === undefined ? '' : ` to ${ middle.maxWidth }px` }; the copy serves the desktop document there`,
+		metrics: { minWidth: middle.minWidth, ...( middle.maxWidth === undefined ? {} : { maxWidth: middle.maxWidth } ) },
+	} );
+	if ( entry.fluid ) result.fluidReports.push( entry.fluid );
+	if ( entry.fluidMobile ) result.fluidReports.push( entry.fluidMobile );
+	if ( selection?.kind !== 'device' && embedded && input?.mobileVariant && rawMobileHtml !== undefined ) {
+		const pair = mergeResponsiveEmbeddedRegions( { desktop: rawDesktopHtml, mobile: rawMobileHtml, url, desktopVariant: input.desktopVariant, mobileVariant: input.mobileVariant, receipt: embedded.receipt, switchWidth: detectedFloor ?? DEFAULT_SWITCH_WIDTH, scopeClasses: { desktop: DESKTOP_DOCUMENT_CLASS, mobile: MOBILE_DOCUMENT_CLASS } } );
+		rawDesktopHtml = pair.desktop; rawMobileHtml = pair.mobile;
+	}
+	// Evidence and assembly normalize the same source documents. Keep one
+	// result per exact input within this route, without retaining parser trees
+	// or carrying document state into the next route.
+	const normalizedDocuments = new Map< string, string >();
+	const portableDocument = ( html: string ): string => {
+		let normalized = normalizedDocuments.get( html );
+		if ( normalized === undefined ) {
+			normalized = normalizedDeclarativeFormEmbeds( renderedHtml( html ) );
+			normalizedDocuments.set( html, normalized );
+		}
+		return normalized;
+	};
+	const desktopHtml = portableDocument( rawDesktopHtml );
+	const mobileHtml =
+		rawMobileHtml === undefined
+			? undefined
+			: portableDocument( rawMobileHtml );
+	const readCapturedStylesheet = ( href: string ): string | undefined => {
+		let resource;
+		try { resource = resourceManifest.resources[ new URL( href, url ).href ]; } catch { return undefined; }
+		if ( ! resource?.contentType.startsWith( 'text/css' ) ) return undefined;
+		const path = resolve( outputDir, resource.path );
+		return pathWithin( outputDir, path ) && existsSync( path ) ? readFileSync( path, 'utf8' ) : undefined;
+	};
+	const onUnparseableStylesheet = ( reason: string ): void => {
+		result.diagnostics.push( { code: 'stylesheet_unparseable', url, reason, unit: 'stylesheet', severity: 'warning' } );
+	};
+	const deviceAssembly = selection?.kind === 'device' ? assembleDeviceDocuments(
+		Object.fromEntries( Object.entries( sourceDocuments ).map( ( [ key, html ] ) => [ key, portableDocument( html ) ] ) ), selection, onUnparseableStylesheet, readCapturedStylesheet
+	) : undefined;
+	if ( deviceAssembly ) {
+		result.deviceSelections.push( { url, id: deviceAssembly.selection.id, documents: deviceAssembly.selection.documents, missing: deviceAssembly.missing, evidence: deviceAssembly.selection.evidence } );
+		for ( const key of deviceAssembly.missing ) result.diagnostics.push( { code: 'device_document_uncaptured', url, reason: `Source identity ${ key } has no captured document; portable runtime reports unavailable instead of selecting another identity` } );
+	}
+	const assembly = deviceAssembly ? {
+		html: deviceAssembly.html, hasMobileDocument: 'mobile' in sourceDocuments, portableNormalization: 'applied' as const,
+		evidence: { variants: Object.keys( deviceAssembly.viewports ).length, ...deviceAssembly.evidence! },
+	} : assembleResponsiveCapture( {
+		rawDesktopHtml,
+		rawMobileHtml,
+		portableDesktopHtml: desktopHtml,
+		portableMobileHtml: mobileHtml,
+		switchWidth: detectedFloor,
+		...( rawMiddleHtml === undefined || middle?.maxWidth === undefined ? {} : {
+			portableMiddleHtml: [ { html: portableDocument( rawMiddleHtml ), minWidth: middle.minWidth, maxWidth: middle.maxWidth } ],
+		} ),
+		onUnparseableStylesheet,
+	} );
+	if ( assembly.hasMobileDocument && ! deviceAssembly ) {
+		const $ = cheerio.load( assembly.html );
+		const classes = ( scope: string ) => ( $( `.${ scope }` ).first().attr( 'class' ) ?? '' ).split( /\s+/ ).filter( token => token && token !== scope );
+		// Middle width-range documents (#1379) are further wrappers whose
+		// tokens move the same way; linked styles must reach every wrapper.
+		const middleClasses = $( '[data-blocks-engine-capture-document-scope]' ).toArray()
+			.flatMap( node => ( $( node ).attr( 'class' ) ?? '' ).split( /\s+/ ) )
+			.filter( token => /^data-blocks-engine-capture-middle(?:-\d+)?-document$/.test( token ) );
+		const documentClasses = middleClasses.length ? [ DESKTOP_DOCUMENT_CLASS, MOBILE_DOCUMENT_CLASS, ...middleClasses ] : undefined;
+		const tokenSets = ( documentClasses ?? [ DESKTOP_DOCUMENT_CLASS, MOBILE_DOCUMENT_CLASS ] ).map( scope => ( { scope, tokens: classes( scope ) } ) );
+		const moved = documentClasses
+			? new Map( tokenSets.flatMap( ( { scope, tokens } ) => tokens.filter( token => ! tokenSets.every( other => other.tokens.includes( token ) ) ).map( token => [ token, scope ] as const ) ).reverse() )
+			: responsiveMovedBodyClasses( classes( DESKTOP_DOCUMENT_CLASS ), classes( MOBILE_DOCUMENT_CLASS ) );
+		if ( moved.size ) result.responsiveProjection = [ JSON.stringify( [ [ ...moved ], documentClasses ] ), { moved, documentClasses } ];
+	}
+	if ( !assembly.hasMobileDocument && assembly.evidence?.outcome === 'collapsed-identity-subset' && rawMobileHtml ) {
+		const classes = ( html: string ) => ( cheerio.load( html )( 'body' ).attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean );
+		const moved = responsiveMovedBodyClasses( classes( rawDesktopHtml ), classes( rawMobileHtml ) );
+		const aliases = new Map( [ ...moved ].filter( ( [ , scope ] ) => scope === MOBILE_DOCUMENT_CLASS ).map( ( [ token ] ) => [ token, `data-blocks-engine-capture-responsive-class-${ createHash( 'sha256' ).update( token ).digest( 'hex' ).slice( 0, 12 ) }` ] ) );
+		if ( moved.size ) result.collapsedProjection = [ JSON.stringify( [ ...moved ] ), { moved, aliases, width: detectedFloor ?? DEFAULT_SWITCH_WIDTH } ];
+	}
+	const capturedHtml = assembly.portableNormalization === 'pending'
+		? portableDocument( assembly.html )
+		: assembly.html;
+	normalizedDocuments.clear();
+	// safeCapturedPageHtml removes <base>; record its stylesheet semantics first.
+	const styleHoistContext = capturedStyleHoistContext( capturedHtml );
+	const sanitized = safeCapturedPageHtml( capturedHtml, embeddedSources, url );
+        result.diagnostics.push( ...sanitized.diagnostics.map( diagnostic => ( { ...diagnostic, url } ) ) );
+        const html = deviceAssembly ? installDeviceSelection( sanitized.html, deviceAssembly ) : sanitized.html;
+	assertPageWithinFileLimit( html, maxFileBytes );
+	// A route whose HTML was saved is captured even when a stage failed on it.
+	// A declared capture profile (a manifest profile record, or a viewport a
+	// stage failed in) without its document stays a profile-level loss; the
+	// remaining stage failures only degrade the route.
+	const stageFailures = routeFailureReasons.get( url ) ?? [];
+	const uncapturedProfiles = [ ...new Set( [ ...Object.keys( entry.profiles ?? {} ), ...stageFailures.map( failure => failure.profile ) ] ) ]
+		.filter( profile => profile !== 'all' && profile !== 'unknown' && ! ( profile in sourceDocuments ) );
+	for ( const profile of uncapturedProfiles ) {
+		const reasons = stageFailures.filter( failure => failure.profile === profile ).map( failure => failure.reason );
+		result.diagnostics.push( { code: 'route_profile_uncaptured', url, reason: reasons.join( '; ' ) || `declared capture profile ${ profile } produced no document`, unit: 'profile', severity: 'error', profile } );
+	}
+	const degraded = stageFailures.filter( failure => ! uncapturedProfiles.includes( failure.profile ) );
+	if ( degraded.length ) result.diagnostics.push( { code: 'route_capture_degraded', url, reason: degraded.map( failure => failure.reason ).join( '; ' ), unit: 'route', severity: 'warning', metrics: { failedStages: degraded.length } } );
+	// Evidence blocks capture lost while it still saved the page.
+	for ( const loss of entry.blockLosses ?? [] ) result.diagnostics.push( { ...loss, url } );
+	result.entry = {
+		slug: structuredEntries?.find( feed => normalizedUrl( feed.permalink ) === normalizedUrl( url ) )?.slug ?? entry.slug ?? basename( entry.html, '.html' ),
+		url,
+		htmlPath: stageHtml( html ),
+		evidenceDocuments: [
+			{ state: 'desktop', html: desktopHtml },
+			...( mobileHtml === undefined ? [] : [ { state: 'mobile' as const, html: mobileHtml } ] ),
+		],
+		hasMobileDocument: assembly.hasMobileDocument,
+		responsiveVariants: assembly.evidence,
+		documentSelection: deviceAssembly ? { kind: 'device', id: deviceAssembly.selection.id, documents: deviceAssembly.selection.documents, missing: deviceAssembly.missing, evidence: deviceAssembly.selection.evidence } : selection?.kind === 'width' ? selection : undefined,
+		...( entry.fluid || entry.fluidMobile ? { fluidGeometry: { desktop: entry.fluid, mobile: entry.fluidMobile } } : {} ),
+		...( entry.accessGate ? { accessGate: entry.accessGate } : {} ),
+		sections: entry.sections,
+		canonicalLinkUrl: canonicalMetadataUrl( canonicalLinkHref( desktopHtml, url ), url, routeScope, sourceUrl, canonicalHost ),
+		canonicalUrl: canonicalMetadataUrl( entry.metadata?.openGraph?.[ 'og:url' ] ?? openGraphUrl( html ), url, routeScope, sourceUrl, canonicalHost ),
+		sourceData: sanitized.sourceData,
+		interactions: entry.interactions,
+		scrollStates: entry.scrollStates,
+		styleHoistContext,
+		sourceInteractivity,
+	};
+	return result;
+}
+
+/** Collect a route, reporting a failure as data so a worker can return it. */
+export function tryCollectCapturedRoute( url: string, entry: CaptureManifestEntry, context: RouteCollectionContext, stageHtml: ( html: string ) => string ): CollectedRoute | FailedRouteCollection {
+	try {
+		return collectCapturedRoute( url, entry, context, stageHtml );
+	} catch ( error ) {
+		return { failed: { message: ( error as Error ).message, integrity: isIntegrityError( error ) } };
+	}
+}
+
+export function collectCapturedRoutes( { entries, sourceUrl, routeScope, failures, structuredEntries, deviceMode, input, resolveDocumentSelection, outputDir, embedded, embeddedSources, hasHttpInput, siteSwitchWidth, phoneSwitchWidth, stagedHtmlDir, resourceManifest, routeFailureReasons, maxFileBytes, budget, exclusions, precollected }: {
  entries: ScreenshotManifest['entries']; sourceUrl: string; routeScope?: SiteRouteScope; failures: Array<{ url: unknown; error: unknown }>; structuredEntries?: StructuredContentEntry[];
  deviceMode?: DeviceMode; input?: HttpExportInput; resolveDocumentSelection?: ( documents: Readonly<Record<string, string>> ) => DocumentSelection | undefined;
  outputDir: string; embedded: ReturnType<typeof loadEmbeddedDocuments> | undefined; embeddedSources: Set<string>; hasHttpInput: boolean; siteSwitchWidth: number | undefined; phoneSwitchWidth: number | undefined;
  stagedHtmlDir: string; resourceManifest: CapturedResourceManifest; routeFailureReasons: Map<string, Array<{ profile: string; reason: string }>>; maxFileBytes: number; budget: ExportTotalBudget; exclusions: ExportBudgetExclusions;
+ /** Routes already collected (in parallel, see capture-export-parallel.ts), by manifest URL. */
+ precollected?: ReadonlyMap<string, CollectedRoute | FailedRouteCollection>;
 } ): CapturedRoutes {
 	const switchWidths: number[] = [];
-	const deviceSelections: Array<{ url: string; id: string; documents: string[]; missing: string[]; evidence: string }> = [];
-	const widthSelections: Array<{ url: string; kind: 'width'; switchWidth: number; evidence: string }> = [];
+	const deviceSelections: CapturedRoutes['deviceSelections'] = [];
+	const widthSelections: CapturedRoutes['widthSelections'] = [];
 	const fluidReports: CaptureFluidEvidence[] = [];
 	const capturedEntries: CaptureEntry[] = [];
 	const interactionPages: InteractionStatesReport[] = [];
@@ -324,314 +647,58 @@ export function collectCapturedRoutes( { entries, sourceUrl, routeScope, failure
 	const excludedRoutes: string[] = [];
 	const routeCaptureDiagnostics: RouteDiagnostic[] = [];
 	const redirectAliases: Array< { url: string; target: string } > = [];
-	let canonicalHost: string | undefined;
-	const homepage = Object.entries( entries ).find( ( [ url ] ) => isSourceCaptureUrl( url, sourceUrl ) )?.[ 1 ];
-	if ( homepage?.html ) {
-		const path = resolve( outputDir, homepage.html );
-		if ( pathWithin( outputDir, path ) && existsSync( path ) ) {
-			canonicalHost = entrypointCanonicalHost( sourceUrl, readFileSync( path, 'utf8' ), homepage.metadata?.openGraph?.[ 'og:url' ] );
-		}
-	}
-	const documentReferences = capturedDocumentReferences( entries, outputDir );
-	const responsiveBodyClassProjections = new Map<string, { moved: ReadonlyMap<string, string>; documentClasses?: readonly string[] }>();
-	const collapsedBodyClassProjections = new Map<string, { moved: Map<string, string>; aliases: Map<string, string>; width: number }>();
+	const context: RouteCollectionContext = { sourceUrl, routeScope, failures, structuredEntries, deviceMode, input, resolveDocumentSelection, outputDir, embedded, embeddedSources, hasHttpInput, siteSwitchWidth, phoneSwitchWidth, resourceManifest, routeFailureReasons, maxFileBytes,
+		canonicalHost: captureCanonicalHost( entries, sourceUrl, outputDir ), documentReferences: capturedDocumentReferences( entries, outputDir ) };
+	const responsiveBodyClassProjections: CapturedRoutes['responsiveBodyClassProjections'] = new Map();
+	const collapsedBodyClassProjections: CapturedRoutes['collapsedBodyClassProjections'] = new Map();
 	for ( const [ url, entry ] of Object.entries( entries ) ) {
-		// One route's non-integrity failure drops that route, not the capture. Integrity
-		// errors still fail closed; a dropped entrypoint fails when routes are allocated.
-		const rollback = { diagnostics: routeCaptureDiagnostics.length, switchWidths: switchWidths.length, deviceSelections: deviceSelections.length, widthSelections: widthSelections.length, fluidReports: fluidReports.length };
 		// The total budget only ever drops a route an earlier build exported, never the entrypoint.
 		const budgetDropped = exclusions.routes.get( url );
 		if ( budgetDropped !== undefined && ! isSourceCaptureUrl( url, sourceUrl ) ) {
 			routeCaptureDiagnostics.push( routeExceedsTotalBudget( url, budgetDropped, budget ) );
 			continue;
 		}
+		// Every staged page is this build's own copy: later stages rewrite it.
+		const stageHtml = ( html: string ): string => {
+			const path = join( stagedHtmlDir, `${ capturedEntries.length }.html` );
+			writeFileSync( path, html );
+			return path;
+		};
+		const ready = precollected?.get( url );
+		let route: CollectedRoute | FailedRouteCollection;
 		try {
-			if ( ! routeMatchesSourceOrigin( url, sourceUrl ) || !routeInScope( url, routeScope ) ) {
-				excludedRoutes.push( url );
-				continue;
-			}
-			// Capture treats a redirect as an alias, and schedules its target, only
-			// when the route recorded no failure. A route whose passes disagreed
-			// (one saved the page, another was redirected) is a failed capture:
-			// it is reported with its recorded reasons below, like any route
-			// without HTML, not as a redirect to a target nobody scheduled.
-			if ( entry.redirectedTo && ! routeFailureReasons.has( url ) ) {
-				if ( !routeInScope( entry.redirectedTo, routeScope ) ) {
-					excludedRoutes.push( url );
-					routeCaptureDiagnostics.push( { code: 'route_external_redirect', url, reason: 'source redirect outside the adapter-owned site route scope' } );
-					continue;
-				}
-				redirectAliases.push( { url, target: entry.redirectedTo } );
-				continue;
-			}
-			if ( entry.externalRedirect ) {
-				// The source sends this link outside the site. Retain only the fact of the
-				// redirect; neither its destination nor its query belongs in the copy.
-				excludedRoutes.push( url );
-				const tenantBoundary = entry.sourceOutcomes?.some( outcome => outcome.routeScope && outcome.target.origin === new URL(url).origin );
-				routeCaptureDiagnostics.push( { code: 'route_external_redirect', url, reason: tenantBoundary
-					? 'source initial-document redirect outside the adapter-owned site route scope (destination not fetched)'
-					: 'source initial-document redirect to an external origin (destination not fetched)' } );
-				continue;
-			}
-			if ( entry.sourceAbsentStatus ) {
-				excludedRoutes.push( url );
-				routeCaptureDiagnostics.push( { code: 'route_not_found', url, reason: `HTTP ${ entry.sourceAbsentStatus }` } );
-				continue;
-			}
-			if ( ! entry.html || entry.redirectedTo ) {
-				const reason = routeFailureReasons.get( url )?.map( failure => failure.reason ).join( '; ' )
-					?? 'capture completed without producing page HTML';
-				if ( failuresAreAbsentDocument( failures, url ) ) {
-					excludedRoutes.push( url );
-					routeCaptureDiagnostics.push( {
-						code: 'route_not_found',
-						url,
-						reason,
-					} );
-				} else {
-					routeCaptureDiagnostics.push( {
-						code: 'route_capture_failed',
-						url,
-						reason,
-					} );
-				}
-				continue;
-			}
-			const capturedHtmlPath = resolve( outputDir, entry.html );
-			if ( ! pathWithin( outputDir, capturedHtmlPath ) || ! existsSync( capturedHtmlPath ) ) {
-				routeCaptureDiagnostics.push( {
-					code: 'route_capture_failed',
-					url,
-					reason: `captured HTML file is missing or outside the output directory: ${ entry.html }`,
-				} );
-				continue;
-			}
-			for ( const profile of Object.values( entry.profiles ?? {} ) ) {
-				for ( const diagnostic of profile.diagnostics ?? [] ) {
-					if ( diagnostic.code === 'device_document_incomplete' || diagnostic.code === 'source_mobile_redirect' || diagnostic.code === 'box_tree_unproven' ) routeCaptureDiagnostics.push( { ...diagnostic, url } );
-				}
-			}
-			const acquiredDesktopHtml = readFileSync(capturedHtmlPath, 'utf8');
-			const desktopHash = createHash('sha256').update(acquiredDesktopHtml).digest('hex');
-			let rawDesktopHtml = embedded && input ? projectRuntimePresentation(projectEmbeddedRegions(acquiredDesktopHtml, url, input.desktopVariant, desktopHash, embedded.receipt.regions), url, input.desktopVariant, desktopHash, embedded.receipt) : acquiredDesktopHtml;
-			rawDesktopHtml = resolveDocumentReferences(rawDesktopHtml, entry.documents?.desktop?.url ?? url, entry.documents?.desktop?.baseUrl, documentReferences);
-			// A builder's own logo is not the site's icon; owner-uploaded icons stay.
-			rawDesktopHtml = withoutPlatformDefaultIcons(rawDesktopHtml, entry.documents?.desktop?.url ?? url);
-			// Each profile's scripted links take the destinations observed in that profile.
-			rawDesktopHtml = lowerScriptedLinks(rawDesktopHtml, entry.scriptedLinks?.desktop);
-			const sourceInteractivity = inspectSourceInteractivity( rawDesktopHtml, url, outputDir, resourceManifest );
-			// A client-routed SPA answers every route with HTTP 200 and renders its
-			// own not-found screen in JavaScript, so the HTTP-status check above
-			// (failuresAreAbsentDocument) never sees it: the entry has HTML, capture
-			// succeeded, there is no failure to inspect. Never applied to the source
-			// URL itself -- it is known good regardless of what it renders.
-			if ( ! isSourceCaptureUrl( url, sourceUrl ) ) {
-				// An empty rendered body (no text, no content-bearing element) is
-				// the same signal in its barest form: the app answered the route
-				// with nothing at all.
-				const absentRenderReason = isAbsentDocumentRender( rawDesktopHtml )
-					? 'rendered document is the client-routed not-found screen: a heading of just "404"/"410" on an otherwise thin page'
-					: isEmptyDocumentRender( rawDesktopHtml )
-						? 'rendered document is empty'
-						: undefined;
-				if ( absentRenderReason ) {
-					excludedRoutes.push( url );
-					routeCaptureDiagnostics.push( {
-						code: 'route_not_found',
-						url,
-						reason: absentRenderReason,
-					} );
-					continue;
-				}
-			}
-			if ( entry.phoneSentTo ) routeCaptureDiagnostics.push( { code: 'phone_redirect_desktop_only', url, unit: 'profile', profile: 'mobile', severity: 'warning', reason: `The phone identity is sent to ${ entry.phoneSentTo } while desktop renders this route; the route ships its desktop document, reflowed at phone widths` } );
-			const mobileHtmlPath = resolve( outputDir, entry.mobileHtml ?? entry.html.replace( /^html[\\/]/, 'html-mobile/' ) );
-			// A route whose phone identity was sent elsewhere has no phone document,
-			// even if an earlier run left one at the conventional path.
-			const acquiredMobileHtml =
-				! entry.phoneSentTo && ( siteDeviceMode === 'reflow-only' || hasHttpInput ? Boolean( entry.mobileHtml ) : true ) && pathWithin( outputDir, mobileHtmlPath ) && existsSync( mobileHtmlPath )
-					? readFileSync( mobileHtmlPath, 'utf8' )
-					: undefined;
-			const mobileHash = acquiredMobileHtml === undefined ? undefined : createHash('sha256').update(acquiredMobileHtml).digest('hex');
-			let rawMobileHtml = embedded && input?.mobileVariant && acquiredMobileHtml !== undefined ? projectRuntimePresentation(projectEmbeddedRegions(acquiredMobileHtml, url, input.mobileVariant, mobileHash!, embedded.receipt.regions), url, input.mobileVariant, mobileHash!, embedded.receipt) : acquiredMobileHtml;
-			if (rawMobileHtml !== undefined) rawMobileHtml = withoutPlatformDefaultIcons(resolveDocumentReferences(rawMobileHtml, entry.documents?.mobile?.url ?? url, entry.documents?.mobile?.baseUrl, documentReferences), entry.documents?.mobile?.url ?? url);
-			if (rawMobileHtml !== undefined) rawMobileHtml = lowerScriptedLinks(rawMobileHtml, entry.scriptedLinks?.mobile);
-			const sourceDocuments: Record<string, string> = { desktop: rawDesktopHtml, ...( rawMobileHtml === undefined ? {} : { mobile: rawMobileHtml } ) };
-			for ( const [ key, profile ] of Object.entries( entry.profiles ?? {} ) ) {
-				if ( key === 'desktop' || key === 'mobile' || ! profile.html ) continue;
-				const path = resolve( outputDir, profile.html );
-				if ( ! pathWithin( outputDir, path ) || ! existsSync( path ) ) throw new IntegrityError( `Device document is missing or outside capture: ${ key }` );
-				const documentUrl = entry.documents?.[ key ];
-				sourceDocuments[ key ] = lowerScriptedLinks( withoutPlatformDefaultIcons( resolveDocumentReferences( readFileSync( path, 'utf8' ), documentUrl?.url ?? url, documentUrl?.baseUrl, documentReferences ), documentUrl?.url ?? url ), entry.scriptedLinks?.[ key ] );
-			}
-			const selection = resolveDocumentSelection?.( sourceDocuments );
-			if ( selection?.kind === 'width' ) {
-				if ( ! Number.isInteger( selection.switchWidth ) || selection.switchWidth <= 0 || ! selection.evidence ) throw new IntegrityError( 'Invalid observed document switch' );
-				widthSelections.push( { url, ...selection } );
-			}
-			const deviceMode = entry.deviceMode;
-			const detectedFloor =
-				selection?.kind === 'device' ? undefined : selection?.kind === 'width' ? selection.switchWidth : entry.deviceMode?.switchWidth !== undefined ? entry.deviceMode.switchWidth : deviceMode?.mode === 'dual' && deviceMode.serverHtml === 'different'
-					? phoneSwitchWidth ?? entry.profiles?.mobile?.viewport.width
-					: typeof entry.fluid?.canvasFloor === 'number' && entry.fluid.canvasFloor > 0
-					? Math.round( entry.fluid.canvasFloor )
-					: phoneResponsiveSwitchWidth( entry, siteSwitchWidth );
-			if ( detectedFloor ) switchWidths.push( detectedFloor );
-			// A source that selects a third layout by width (#1379): a bounded range
-			// with its captured document ships as the middle document; otherwise
-			// the copy serves the desktop document there and says so.
-			const middle = entry.deviceMode?.switchWidth === detectedFloor
-				? entry.deviceMode?.middleLayout ?? ( entry.deviceMode as { uncapturedLayout?: MiddleLayout } | undefined )?.uncapturedLayout
-				: undefined;
-			const rawMiddleHtml = middle?.maxWidth !== undefined && selection?.kind !== 'device' && rawMobileHtml !== undefined
-				? sourceDocuments[ MIDDLE_PROFILE_ID ]
-				: undefined;
-			if ( middle && rawMiddleHtml === undefined ) routeCaptureDiagnostics.push( {
-				code: 'responsive_layout_uncaptured', url, unit: 'profile', severity: 'warning',
-				reason: `source renders a third layout, neither the phone nor the desktop document, from ${ middle.minWidth }px${ middle.maxWidth === undefined ? '' : ` to ${ middle.maxWidth }px` }; the copy serves the desktop document there`,
-				metrics: { minWidth: middle.minWidth, ...( middle.maxWidth === undefined ? {} : { maxWidth: middle.maxWidth } ) },
-			} );
-			if ( entry.fluid ) fluidReports.push( entry.fluid );
-			if ( entry.fluidMobile ) fluidReports.push( entry.fluidMobile );
-			if ( selection?.kind !== 'device' && embedded && input?.mobileVariant && rawMobileHtml !== undefined ) {
-				const pair = mergeResponsiveEmbeddedRegions( { desktop: rawDesktopHtml, mobile: rawMobileHtml, url, desktopVariant: input.desktopVariant, mobileVariant: input.mobileVariant, receipt: embedded.receipt, switchWidth: detectedFloor ?? DEFAULT_SWITCH_WIDTH, scopeClasses: { desktop: DESKTOP_DOCUMENT_CLASS, mobile: MOBILE_DOCUMENT_CLASS } } );
-				rawDesktopHtml = pair.desktop; rawMobileHtml = pair.mobile;
-			}
-			// Evidence and assembly normalize the same source documents. Keep one
-			// result per exact input within this route, without retaining parser trees
-			// or carrying document state into the next route.
-			const normalizedDocuments = new Map< string, string >();
-			const portableDocument = ( html: string ): string => {
-				let normalized = normalizedDocuments.get( html );
-				if ( normalized === undefined ) {
-					normalized = normalizedDeclarativeFormEmbeds( renderedHtml( html ) );
-					normalizedDocuments.set( html, normalized );
-				}
-				return normalized;
-			};
-			const desktopHtml = portableDocument( rawDesktopHtml );
-			const mobileHtml =
-				rawMobileHtml === undefined
-					? undefined
-					: portableDocument( rawMobileHtml );
-			const readCapturedStylesheet = ( href: string ): string | undefined => {
-				let resource;
-				try { resource = resourceManifest.resources[ new URL( href, url ).href ]; } catch { return undefined; }
-				if ( ! resource?.contentType.startsWith( 'text/css' ) ) return undefined;
-				const path = resolve( outputDir, resource.path );
-				return pathWithin( outputDir, path ) && existsSync( path ) ? readFileSync( path, 'utf8' ) : undefined;
-			};
-			const onUnparseableStylesheet = ( reason: string ): void => {
-				routeCaptureDiagnostics.push( { code: 'stylesheet_unparseable', url, reason, unit: 'stylesheet', severity: 'warning' } );
-			};
-			const deviceAssembly = selection?.kind === 'device' ? assembleDeviceDocuments(
-				Object.fromEntries( Object.entries( sourceDocuments ).map( ( [ key, html ] ) => [ key, portableDocument( html ) ] ) ), selection, onUnparseableStylesheet, readCapturedStylesheet
-			) : undefined;
-			if ( deviceAssembly ) {
-				deviceSelections.push( { url, id: deviceAssembly.selection.id, documents: deviceAssembly.selection.documents, missing: deviceAssembly.missing, evidence: deviceAssembly.selection.evidence } );
-				for ( const key of deviceAssembly.missing ) routeCaptureDiagnostics.push( { code: 'device_document_uncaptured', url, reason: `Source identity ${ key } has no captured document; portable runtime reports unavailable instead of selecting another identity` } );
-			}
-			const assembly = deviceAssembly ? {
-				html: deviceAssembly.html, hasMobileDocument: 'mobile' in sourceDocuments, portableNormalization: 'applied' as const,
-				evidence: { variants: Object.keys( deviceAssembly.viewports ).length, ...deviceAssembly.evidence! },
-			} : assembleResponsiveCapture( {
-				rawDesktopHtml,
-				rawMobileHtml,
-				portableDesktopHtml: desktopHtml,
-				portableMobileHtml: mobileHtml,
-				switchWidth: detectedFloor,
-				...( rawMiddleHtml === undefined || middle?.maxWidth === undefined ? {} : {
-					portableMiddleHtml: [ { html: portableDocument( rawMiddleHtml ), minWidth: middle.minWidth, maxWidth: middle.maxWidth } ],
-				} ),
-				onUnparseableStylesheet,
-			} );
-			if ( assembly.hasMobileDocument && ! deviceAssembly ) {
-				const $ = cheerio.load( assembly.html );
-				const classes = ( scope: string ) => ( $( `.${ scope }` ).first().attr( 'class' ) ?? '' ).split( /\s+/ ).filter( token => token && token !== scope );
-				// Middle width-range documents (#1379) are further wrappers whose
-				// tokens move the same way; linked styles must reach every wrapper.
-				const middleClasses = $( '[data-blocks-engine-capture-document-scope]' ).toArray()
-					.flatMap( node => ( $( node ).attr( 'class' ) ?? '' ).split( /\s+/ ) )
-					.filter( token => /^data-blocks-engine-capture-middle(?:-\d+)?-document$/.test( token ) );
-				const documentClasses = middleClasses.length ? [ DESKTOP_DOCUMENT_CLASS, MOBILE_DOCUMENT_CLASS, ...middleClasses ] : undefined;
-				const tokenSets = ( documentClasses ?? [ DESKTOP_DOCUMENT_CLASS, MOBILE_DOCUMENT_CLASS ] ).map( scope => ( { scope, tokens: classes( scope ) } ) );
-				const moved = documentClasses
-					? new Map( tokenSets.flatMap( ( { scope, tokens } ) => tokens.filter( token => ! tokenSets.every( other => other.tokens.includes( token ) ) ).map( token => [ token, scope ] as const ) ).reverse() )
-					: responsiveMovedBodyClasses( classes( DESKTOP_DOCUMENT_CLASS ), classes( MOBILE_DOCUMENT_CLASS ) );
-				if ( moved.size ) responsiveBodyClassProjections.set( JSON.stringify( [ [ ...moved ], documentClasses ] ), { moved, documentClasses } );
-			}
-			if ( !assembly.hasMobileDocument && assembly.evidence?.outcome === 'collapsed-identity-subset' && rawMobileHtml ) {
-				const classes = ( html: string ) => ( cheerio.load( html )( 'body' ).attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean );
-				const moved = responsiveMovedBodyClasses( classes( rawDesktopHtml ), classes( rawMobileHtml ) );
-				const aliases = new Map( [ ...moved ].filter( ( [ , scope ] ) => scope === MOBILE_DOCUMENT_CLASS ).map( ( [ token ] ) => [ token, `data-blocks-engine-capture-responsive-class-${ createHash( 'sha256' ).update( token ).digest( 'hex' ).slice( 0, 12 ) }` ] ) );
-				if ( moved.size ) collapsedBodyClassProjections.set( JSON.stringify( [ ...moved ] ), { moved, aliases, width: detectedFloor ?? DEFAULT_SWITCH_WIDTH } );
-			}
-			const capturedHtml = assembly.portableNormalization === 'pending'
-				? portableDocument( assembly.html )
-				: assembly.html;
-			normalizedDocuments.clear();
-			// safeCapturedPageHtml removes <base>; record its stylesheet semantics first.
-			const styleHoistContext = capturedStyleHoistContext( capturedHtml );
-			const sanitized = safeCapturedPageHtml( capturedHtml, embeddedSources, url );
-	        routeCaptureDiagnostics.push( ...sanitized.diagnostics.map( diagnostic => ( { ...diagnostic, url } ) ) );
-	        const html = deviceAssembly ? installDeviceSelection( sanitized.html, deviceAssembly ) : sanitized.html;
-			assertPageWithinFileLimit( html, maxFileBytes );
-			// A route whose HTML was saved is captured even when a stage failed on it.
-			// A declared capture profile (a manifest profile record, or a viewport a
-			// stage failed in) without its document stays a profile-level loss; the
-			// remaining stage failures only degrade the route.
-			const stageFailures = routeFailureReasons.get( url ) ?? [];
-			const uncapturedProfiles = [ ...new Set( [ ...Object.keys( entry.profiles ?? {} ), ...stageFailures.map( failure => failure.profile ) ] ) ]
-				.filter( profile => profile !== 'all' && profile !== 'unknown' && ! ( profile in sourceDocuments ) );
-			for ( const profile of uncapturedProfiles ) {
-				const reasons = stageFailures.filter( failure => failure.profile === profile ).map( failure => failure.reason );
-				routeCaptureDiagnostics.push( { code: 'route_profile_uncaptured', url, reason: reasons.join( '; ' ) || `declared capture profile ${ profile } produced no document`, unit: 'profile', severity: 'error', profile } );
-			}
-			const degraded = stageFailures.filter( failure => ! uncapturedProfiles.includes( failure.profile ) );
-			if ( degraded.length ) routeCaptureDiagnostics.push( { code: 'route_capture_degraded', url, reason: degraded.map( failure => failure.reason ).join( '; ' ), unit: 'route', severity: 'warning', metrics: { failedStages: degraded.length } } );
-			// Evidence blocks capture lost while it still saved the page.
-			for ( const loss of entry.blockLosses ?? [] ) routeCaptureDiagnostics.push( { ...loss, url } );
-			const stagedHtmlPath = join( stagedHtmlDir, `${ capturedEntries.length }.html` );
-			writeFileSync( stagedHtmlPath, html );
-			capturedEntries.push( {
-				slug: structuredEntries?.find( feed => normalizedUrl( feed.permalink ) === normalizedUrl( url ) )?.slug ?? entry.slug ?? basename( entry.html, '.html' ),
-				url,
-				htmlPath: stagedHtmlPath,
-				evidenceDocuments: [
-					{ state: 'desktop', html: desktopHtml },
-					...( mobileHtml === undefined ? [] : [ { state: 'mobile' as const, html: mobileHtml } ] ),
-				],
-				hasMobileDocument: assembly.hasMobileDocument,
-				responsiveVariants: assembly.evidence,
-				documentSelection: deviceAssembly ? { kind: 'device', id: deviceAssembly.selection.id, documents: deviceAssembly.selection.documents, missing: deviceAssembly.missing, evidence: deviceAssembly.selection.evidence } : selection?.kind === 'width' ? selection : undefined,
-				...( entry.fluid || entry.fluidMobile ? { fluidGeometry: { desktop: entry.fluid, mobile: entry.fluidMobile } } : {} ),
-				...( entry.accessGate ? { accessGate: entry.accessGate } : {} ),
-				sections: entry.sections,
-				canonicalLinkUrl: canonicalMetadataUrl( canonicalLinkHref( desktopHtml, url ), url, routeScope, sourceUrl, canonicalHost ),
-				canonicalUrl: canonicalMetadataUrl( entry.metadata?.openGraph?.[ 'og:url' ] ?? openGraphUrl( html ), url, routeScope, sourceUrl, canonicalHost ),
-				sourceData: sanitized.sourceData,
-				interactions: entry.interactions,
-				scrollStates: entry.scrollStates,
-				styleHoistContext,
-				sourceInteractivity,
-			} );
-			if (
-				entry.interactions?.schema === INTERACTION_STATES_SCHEMA ||
-				entry.interactions?.schema === LEGACY_INTERACTION_STATES_SCHEMA
-			) {
-				interactionPages.push( entry.interactions );
-			}
-			if ( entry.scrollStates?.schema === SCROLL_STATES_SCHEMA && entry.scrollStates.toggles.length > 0 ) {
-				scrollStatesPages.push( entry.scrollStates );
-			}
+			route = ready ?? collectCapturedRoute( url, entry, context, stageHtml );
 		} catch ( error ) {
 			if ( isIntegrityError( error ) ) throw error; // failure-class: integrity
+			route = { failed: { message: ( error as Error ).message, integrity: false } };
+		}
+		// One route's non-integrity failure drops that route, not the capture. Integrity
+		// errors still fail closed; a dropped entrypoint fails when routes are allocated.
+		if ( 'failed' in route ) {
+			if ( route.failed.integrity ) throw new IntegrityError( route.failed.message ); // failure-class: integrity
 			// The dropped route keeps only its route_export_failed row.
-			routeCaptureDiagnostics.length = rollback.diagnostics;
-			switchWidths.length = rollback.switchWidths; deviceSelections.length = rollback.deviceSelections;
-			widthSelections.length = rollback.widthSelections; fluidReports.length = rollback.fluidReports;
-			routeCaptureDiagnostics.push( { code: 'route_export_failed', url, reason: ( error as Error ).message, unit: 'route', severity: 'error' } );
+			routeCaptureDiagnostics.push( { code: 'route_export_failed', url, reason: route.failed.message, unit: 'route', severity: 'error' } );
+			continue;
+		}
+		routeCaptureDiagnostics.push( ...route.diagnostics );
+		if ( route.excluded ) excludedRoutes.push( url );
+		if ( route.redirectAlias ) redirectAliases.push( route.redirectAlias );
+		switchWidths.push( ...route.switchWidths );
+		deviceSelections.push( ...route.deviceSelections );
+		widthSelections.push( ...route.widthSelections );
+		fluidReports.push( ...route.fluidReports );
+		if ( route.responsiveProjection ) responsiveBodyClassProjections.set( ...route.responsiveProjection );
+		if ( route.collapsedProjection ) collapsedBodyClassProjections.set( ...route.collapsedProjection );
+		if ( ! route.entry ) continue;
+		capturedEntries.push( ready ? { ...route.entry, htmlPath: stageHtml( readFileSync( route.entry.htmlPath, 'utf8' ) ) } : route.entry );
+		if (
+			entry.interactions?.schema === INTERACTION_STATES_SCHEMA ||
+			entry.interactions?.schema === LEGACY_INTERACTION_STATES_SCHEMA
+		) {
+			interactionPages.push( entry.interactions );
+		}
+		if ( entry.scrollStates?.schema === SCROLL_STATES_SCHEMA && entry.scrollStates.toggles.length > 0 ) {
+			scrollStatesPages.push( entry.scrollStates );
 		}
 	}
 
