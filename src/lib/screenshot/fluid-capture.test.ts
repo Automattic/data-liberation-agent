@@ -3,7 +3,7 @@ import { it } from '../../../test/browser.js';
 import { mkdirSync, writeFileSync } from 'node:fs';
 
 import { markInitialDocument, projectInitialDocument } from './initial-document.js';
-import { bandedWidths, DEFAULT_SWEEP_WIDTHS, sweepBand, type FluidSeriesMemo, type FluidSweepStats, fluidSweepLogLine, learnAndApplyFluidGeometry, refinementSeries, refinementWidths } from './fluid-capture.js';
+import { bandedWidths, DEFAULT_SWEEP_WIDTHS, sweepBand, type FluidSeriesMemo, type FluidSweepStats, fluidSweepLogLine, learnAndApplyFluidGeometry, locatingWidths, MAX_LOCATING_WIDTHS, refinementSeries, refinementWidths } from './fluid-capture.js';
 
 describe( 'learnAndApplyFluidGeometry', () => {
 
@@ -1572,6 +1572,33 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			// refined waits, since that sample may give it a straight window.
 			expect( refinementWidths( [ sampled( width => width < 768 ? width : width >= 1440 ? 500 : 400 ) ], coarse ) ).toEqual( [ 414, 900, 1536 ] );
 			expect( refinementWidths( [ sampled( width => width < 768 ? width : width >= 1440 ? 500 : 400 ), sampled( width => width >= 900 ? 600 : 300 ) ], coarse ) ).toEqual( [ 414, 900, 1536 ] );
+		} );
+		it( 'locates a jump inside a ladder gap with a bounded number of midpoints', () => {
+			// Two centred columns below 1105px, three from 1105px; 1024–1200 has no ladder width.
+			const first = ( width: number ) => width >= 1105 ? width / 2 - 532.5 : Math.max( 175, width / 2 - 355 );
+			const widths = [ 390, 600, 768, 1024, 1200, 1440, 1920 ];
+			expect( refinementWidths( [ sampled( first, widths ) ], widths ) ).toEqual( [] );
+			expect( locatingWidths( [ sampled( first, widths ) ], widths ) ).toEqual( [ 1112 ] );
+			let budget = MAX_LOCATING_WIDTHS;
+			for ( let next = locatingWidths( [ sampled( first, widths ) ], widths ); next.length && budget > 0; next = locatingWidths( [ sampled( first, widths ) ], widths ) ) {
+				widths.push( ...next.slice( 0, budget ) );
+				budget -= next.length;
+			}
+			const below = Math.max( ...widths.filter( width => width < 1105 ) ), above = Math.min( ...widths.filter( width => width >= 1105 ) );
+			expect( above - below ).toBeLessThanOrEqual( 8 );
+			expect( widths.length - 7 ).toBeLessThanOrEqual( MAX_LOCATING_WIDTHS );
+		} );
+		it( 'does not locate kinks, clamps or straight runs in a ladder gap', () => {
+			const widths = [ 390, 600, 768, 1024, 1200, 1440, 1920 ];
+			expect( locatingWidths( [
+				sampled( width => width / 2, widths ),
+				sampled( () => 40, widths ),
+				// The cap's knee (1111) sits in the 1024–1200 gap; the fitter places it.
+				sampled( width => Math.min( 1000, width * 0.9 ), widths ),
+				sampled( width => Math.max( 175, width / 2 - 355 ), widths ),
+			], widths ) ).toEqual( [] );
+			// A jump at a sweep edge has no line on one side to judge it by.
+			expect( locatingWidths( [ sampled( width => width >= 1700 ? 600 : 300, widths ) ], widths ) ).toEqual( [] );
 		} );
 		it( 'refines a series that appears, vanishes or stops being pixels inside an interval', () => {
 			expect( refinementWidths( [ series( { 390: 1, 600: 1, 768: 1, 1024: 1, 1440: 1 } ) ], coarse ) ).toEqual( [ 1536 ] );

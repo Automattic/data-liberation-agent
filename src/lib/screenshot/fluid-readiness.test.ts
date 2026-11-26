@@ -772,7 +772,7 @@ describe( 'responsive readiness contract', () => {
 		addEventListener( 'resize', resize ); resize();
 		</script>`;
 
-	it( 'learns the same copy from the adaptive and full ladders', async ({ newPage }) => {
+	it( 'learns the full ladder\'s copy adaptively and locates a switch between ladder widths', async ({ newPage }) => {
 		const copyGeometry = async ( { newPage }: Pick<BrowserFixtures, 'newPage'>, widths?: number[] ) => {
 			const page = await newPage( { viewport: { width: 1440, height: 900 } } );
 			const copy = await newPage( { viewport: { width: 1440, height: 900 } } );
@@ -788,20 +788,26 @@ describe( 'responsive readiness contract', () => {
 					const boxes = await copy.locator( '[id^=box-]' ).evaluateAll( nodes => nodes.map( node => Math.round( node.getBoundingClientRect().width ) ) );
 					boxes.forEach( ( box, index ) => ( geometry[ shapes[ index ]![ 0 ] ] ??= [] ).push( box ) );
 				}
-				return { result, geometry, css: await copy.locator( 'style[data-blocks-engine-capture-fluid-rules]' ).allTextContents() };
+				return { result, geometry };
 			} finally { await page.close(); await copy.close(); }
 		};
 		const full = await copyGeometry({ newPage },  DEFAULT_SWEEP_WIDTHS );
 		const adaptive = await copyGeometry({ newPage });
 		// Every rule kind the issue names is learned by the full ladder.
 		for ( const kind of [ 'segmented', 'capped', 'container', 'breakpoint' ] ) expect( full.result.byKind[ kind ], kind ).toBeGreaterThan( 0 );
-		expect( adaptive.result.byKind ).toEqual( full.result.byKind );
-		expect( adaptive.css ).toEqual( full.css );
-		expect( adaptive.geometry ).toEqual( full.geometry );
+		// The desktop switch (992) sits between the ladder's 900 and 1024. The full
+		// ladder cannot fit it and freezes the box; the adaptive sweep locates the
+		// switch with a few extra widths and learns both regimes.
+		const located = 'segmented affine past a desktop switch';
+		expect( full.geometry[ located ] ).toEqual( Array( 9 ).fill( 760 ) );
+		const source = [ 500, 700, 772, 786, 795, 900, 1100, 1300, 1700 ].map( width => width < 992 ? width * 0.9 : width * 0.5 + 40 );
+		adaptive.geometry[ located ]!.forEach( ( box, index ) => expect( Math.abs( box - source[ index ]! ) ).toBeLessThanOrEqual( 3 ) );
+		expect( adaptive.result.byKind ).toEqual( { ...full.result.byKind, segmented: full.result.byKind.segmented! + 1 } );
+		expect( { ...adaptive.geometry, [ located ]: null } ).toEqual( { ...full.geometry, [ located ]: null } );
 		// One page sweeps for every shape's evidence at once, so every ladder width
-		// is observed here; each shape's own cost is pinned without a browser in
-		// fluid-capture.test.ts.
-		expect( adaptive.result.sampledWidths ).toEqual( DEFAULT_SWEEP_WIDTHS );
+		// is observed here, plus the widths that locate the desktop switch; each
+		// shape's own cost is pinned without a browser in fluid-capture.test.ts.
+		expect( adaptive.result.sampledWidths ).toEqual( [ ...DEFAULT_SWEEP_WIDTHS, 962, 978, 986, 993 ].sort( ( a, b ) => a - b ) );
 	}, 120_000 );
 
 	// A breakpoint-owned subtree is remounted whenever the viewport crosses its

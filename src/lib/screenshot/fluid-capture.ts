@@ -414,6 +414,50 @@ export function refinementWidths( series: Iterable< readonly GeometrySample[] >,
 	} );
 }
 
+/** Extra widths a sweep may spend locating jumps that fall between ladder widths. */
+export const MAX_LOCATING_WIDTHS = 6;
+/** An interval this narrow (px) already locates its jump closely enough. */
+const LOCATING_RESOLUTION_PX = 8;
+/** A miss within this (px) is pixel noise, not a jump. */
+const LOCATING_TOLERANCE_PX = 2;
+
+/**
+ * Widths that locate a jump the ladder cannot reach: one midpoint per interval.
+ *
+ * Refinement stops once a change sits between adjacent ladder widths, and
+ * segments then switch at the first sampled width past it. When the ladder
+ * has a wide gap (1024–1200), a layout that switches inside it (columns that
+ * wrap at 1105) keeps its old regime up to the far end of the gap.
+ *
+ * Only a jump is located. A continuous kink between the neighbouring lines
+ * moves each line's prediction at the far end by at most the slope change
+ * times the interval width; a series that misses both predictions by more
+ * than that cannot be one kink, so the regime changes somewhere inside and
+ * the midpoint is sampled. A clamp keeps its current boundary, and the
+ * segment fitter places a floor's switch where its line reaches the floor.
+ */
+export function locatingWidths( series: Iterable< readonly GeometrySample[] >, sampled: readonly number[], ladder: readonly number[] = DEFAULT_SWEEP_WIDTHS ): number[] {
+	const widths = [ ...new Set( sampled ) ].sort( ( a, b ) => a - b );
+	const candidates = widths.slice( 1, -2 ).map( ( _, offset ) => offset + 1 ).filter( index =>
+		widths[ index + 1 ]! - widths[ index ]! > LOCATING_RESOLUTION_PX &&
+		! ladder.some( width => width > widths[ index ]! && width < widths[ index + 1 ]! ) );
+	const located = new Set< number >();
+	for ( const samples of series ) {
+		const at = new Map( samples.map( sample => [ sample.viewport, sample.value ] ) );
+		for ( const index of candidates ) {
+			if ( located.has( index ) ) continue;
+			const [ w0, a, b, w3 ] = [ widths[ index - 1 ]!, widths[ index ]!, widths[ index + 1 ]!, widths[ index + 2 ]! ];
+			const [ v0, va, vb, v3 ] = [ at.get( w0 ), at.get( a ), at.get( b ), at.get( w3 ) ];
+			if ( ! [ v0, va, vb, v3 ].every( value => value !== undefined && Number.isFinite( value ) ) ) continue;
+			const left = ( va! - v0! ) / ( a - w0 ), right = ( v3! - vb! ) / ( w3 - b );
+			const missLeft = Math.abs( va! + left * ( b - a ) - vb! );
+			const missRight = Math.abs( vb! - right * ( b - a ) - va! );
+			if ( Math.min( missLeft, missRight ) > Math.abs( right - left ) * ( b - a ) + LOCATING_TOLERANCE_PX ) located.add( index );
+		}
+	}
+	return candidates.filter( index => located.has( index ) ).map( index => Math.round( ( widths[ index ]! + widths[ index + 1 ]! ) / 2 ) );
+}
+
 /**
  * The series refinement must explain before skipped widths can be interpolated.
  *
@@ -809,9 +853,16 @@ async function learnFluidGeometry(
 					for ( const width of [ 320, 360, 414 ] ) if ( inBand( width, band ) && ! sampledWidths.includes( width ) ) await sample( width );
 				}
 				// Refine only intervals unexplained elements or runtime sheets need.
+				// Once the ladder is exhausted, a bounded number of extra widths
+				// locate jumps that fall inside its gaps (see locatingWidths).
+				let locating = MAX_LOCATING_WIDTHS;
 				for ( ;; ) {
-					const series = refinementSeries( unexplained(), await perpetual() );
-					const next = refinementWidths( [ ...series, ...await runtimeSheetSeries( page, sampledWidths ) ], sampledWidths, widths );
+					const series = [ ...refinementSeries( unexplained(), await perpetual() ), ...await runtimeSheetSeries( page, sampledWidths ) ];
+					let next = refinementWidths( series, sampledWidths, widths );
+					if ( next.length === 0 && locating > 0 ) {
+						next = locatingWidths( series, sampledWidths, widths ).slice( 0, locating );
+						locating -= next.length;
+					}
 					if ( next.length === 0 ) break;
 					for ( const width of next ) await sample( width );
 				}

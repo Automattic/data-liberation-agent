@@ -1,7 +1,7 @@
 import { describe, expect } from 'vitest';
 import { it, type BrowserFixtures } from '../../../test/browser.js';
 
-import { DEFAULT_SWEEP_WIDTHS, learnAndApplyFluidGeometry } from './fluid-capture.js';
+import { DEFAULT_SWEEP_WIDTHS, learnAndApplyFluidGeometry, MAX_LOCATING_WIDTHS } from './fluid-capture.js';
 import { RUNTIME_SHEET_RULES_ATTRIBUTE } from './fluid-runtime-sheets.js';
 import { observeRuntimeStyleWrites, restoreLoadTimeSheets } from './runtime-style-writes.js';
 import { markInitialDocument, projectInitialDocument } from './initial-document.js';
@@ -205,6 +205,35 @@ describe( 'runtime-written stylesheet offsets', () => {
 		expect( adaptive.result.byKind ).toEqual( full.result.byKind );
 		expect( adaptive.result.sampledWidths ).toEqual( [ 320, 360, 390, 414, 600, 768, 775, 783, 801, 900, 1024, 1440, 1920 ] );
 	}, 60_000 );
+
+	it( 'locates a column switch that falls between two ladder widths', async ({ newPage }) => {
+		// Two centred columns below 1105px, three from 1105px. The ladder has no
+		// width between 1024 and 1200, so the switch must be located by extra widths.
+		// The grid's inline width is ordinary runtime geometry, so the sweep runs.
+		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			await page.setContent( `<style>body{margin:0}#grid{position:relative;margin:0 45px;height:1400px}.card{position:absolute;width:265px;height:600px}</style>
+				<div id="grid" style="width:1350px"><div id="one" class="card"></div><div id="two" class="card"></div><div id="three" class="card"></div></div>
+				<script>const sheet=document.createElement('style');document.head.appendChild(sheet);
+				const update=()=>{
+					const w=innerWidth, wide=w>=1105, a=wide?w/2-532.5:Math.max(175,w/2-355);
+					document.getElementById('grid').style.width=(w-90)+'px';
+					sheet.textContent='#grid #one{top:20px;inset-inline-start:'+a+'px}#grid #two{top:20px;inset-inline-start:'+(a+355)+'px}'+
+						'#grid #three{top:'+(wide?20:700)+'px;inset-inline-start:'+(wide?a+710:a)+'px}';
+				};
+				addEventListener('resize',update);update();</script>` );
+			const result = await learnAndApplyFluidGeometry( page, { settleMs: 30 } );
+			const rules = ( await page.evaluate( attribute => [ ...document.querySelectorAll( `[${ attribute }]` ) ].map( node => node.textContent ?? '' ), RUNTIME_SHEET_RULES_ATTRIBUTE ) ).join( '\n' );
+			// The three-column rule starts within a few pixels of the real switch, not at 1200.
+			const switches = [ ...rules.matchAll( /@media \(min-width:(\d+)px\) \{\n[^\n]*#three\) \{ top: 20px/g ) ].map( match => Number( match[ 1 ] ) );
+			expect( switches ).toHaveLength( 1 );
+			expect( switches[ 0 ] ).toBeGreaterThanOrEqual( 1105 );
+			expect( switches[ 0 ] ).toBeLessThanOrEqual( 1113 );
+			expect( result.sampledWidths.filter( width => width > 1024 && width < 1200 ).length ).toBeLessThanOrEqual( MAX_LOCATING_WIDTHS );
+			// Below the switch the two columns keep centring instead of holding one offset.
+			expect( rules ).toContain( 'inset-inline-start: calc(50vw + -355px)' );
+		} finally { await page.close(); }
+	}, 30_000 );
 
 	it( 'stops after the probes when inline geometry and observed runtime sheets are constant', async ({ newPage }) => {
 		const page = await newPage( { viewport: { width: 1440, height: 900 } } );
