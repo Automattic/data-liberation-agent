@@ -17,6 +17,7 @@ import { portWixRuntimeEmbeds, WIX_AI_ASSISTANT_LAYER, WIX_CHAT_LAUNCHER_LAYER }
 import { portWixVideoPlayers, portWixBackgroundVideos } from './video.js';
 import { normalizeWixImageGeometry, normalizeWixImageSources, restoreWixBlurredImageSources } from './image-geometry.js';
 import { normalizeWixGalleryStrips } from './gallery-strip-geometry.js';
+import { staticWixRepeaters } from './repeater-grid.js';
 
 /**
  * The Wix Blog per-post counters (views, comments). The server document holds
@@ -1123,6 +1124,9 @@ export const capture: LiberationHooks = {
 	 * DOM that is about to be frozen so a late-hydrated widget is not lost.
 	 */
 	beforeSerialize: async ( page, ctx ) => {
+		// Card lists placed by a resize script become a static grid before the
+		// width sweep, so it has no offsets to learn (see repeater-grid.ts).
+		await staticWixRepeaters( page ).catch( () => 0 );
 		await revealAndCollectWixSlideshows( page, ctx.serverHtml );
 		// A slide is snapshotted as soon as it mounts, often still on its
 		// blurred placeholder, so its declared source is supplied again here.
