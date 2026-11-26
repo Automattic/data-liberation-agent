@@ -1,9 +1,10 @@
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, expect, it } from 'vitest';
 import { exportWebsiteCapture } from './capture-export.js';
-import { MIN_PARALLEL_ROUTES, precollectCapturedRoutes } from './capture-export-parallel.js';
+import { MIN_PARALLEL_ROUTES, precollectCapturedRoutes, routeWorkerScript } from './capture-export-parallel.js';
 
 const roots: string[] = [];
 afterEach( () => { for ( const root of roots.splice( 0 ) ) rmSync( root, { recursive: true, force: true } ); } );
@@ -61,3 +62,22 @@ it( 'exports the same site from routes collected in worker threads as from inlin
 	expect( expected[ 'capture-receipt.json' ] ).toContain( 'route_export_failed' );
 	expect( tree( parallel ) ).toEqual( expected );
 }, 120_000 );
+
+it( 'finds the built route worker from the bundle, the tsc build and the source', () => {
+	const root = mkdtempSync( join( tmpdir(), 'liberation-route-worker-' ) );
+	roots.push( root );
+	mkdirSync( join( root, 'src', 'lib' ), { recursive: true } );
+	mkdirSync( join( root, 'dist', 'lib' ), { recursive: true } );
+	const built = join( root, 'dist', 'lib', 'capture-export-route-worker.js' );
+	writeFileSync( built, '' );
+	const source = pathToFileURL( join( root, 'src', 'lib', 'capture-export-parallel.ts' ) ).href;
+	const bundle = join( root, 'dist', 'capture-engine.bundle.mjs' );
+	// The bundle build points import.meta.url at the source file.
+	expect( routeWorkerScript( source, bundle ) ).toEqual( { url: pathToFileURL( built ), tsx: false } );
+	const tsc = join( root, 'dist', 'lib', 'capture-export-parallel.js' );
+	expect( routeWorkerScript( pathToFileURL( tsc ).href, tsc ) ).toEqual( { url: pathToFileURL( built ), tsx: false } );
+	expect( routeWorkerScript( source, join( root, 'src', 'lib', 'capture-export-parallel.ts' ) ) ).toEqual( { url: new URL( './capture-export-route-worker.ts', source ), tsx: true } );
+	// A bundle without the built worker collects inline instead of starting workers that cannot load.
+	rmSync( built );
+	expect( routeWorkerScript( source, bundle ) ).toBeUndefined();
+} );

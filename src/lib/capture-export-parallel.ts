@@ -20,6 +20,20 @@ export interface PrecollectedRoutes {
 }
 
 /**
+ * Find the route worker. `moduleUrl` is this module's `import.meta.url` and
+ * `runningFile` is the file Node runs. They differ only in the capture-engine
+ * bundle: its build points `import.meta.url` at this module's source file under
+ * src/, but tsc writes the built worker under dist/.
+ */
+export function routeWorkerScript( moduleUrl: string, runningFile: string ): { url: URL; tsx: boolean } | undefined {
+	// Running from source (tests, `npm run liberate`), the worker is loaded through tsx.
+	if ( runningFile.endsWith( '.ts' ) ) return { url: new URL( './capture-export-route-worker.ts', moduleUrl ), tsx: true };
+	const url = new URL( moduleUrl.endsWith( '.ts' ) ? '../../dist/lib/capture-export-route-worker.js' : './capture-export-route-worker.js', moduleUrl );
+	// Without a built worker (a bundle copied on its own), the export collects inline.
+	return existsSync( fileURLToPath( url ) ) ? { url, tsx: false } : undefined;
+}
+
+/**
  * Collect a browser capture's routes in worker threads before export. Each
  * route is independent (see `collectCapturedRoute`), and collection is most of
  * an export's CPU, so this is where export uses the machine's cores. The
@@ -37,6 +51,8 @@ export async function precollectCapturedRoutes( options: ExportCaptureOptions ):
 	if ( urls.length < MIN_PARALLEL_ROUTES ) return undefined;
 	const workers = Math.min( urls.length, MAX_WORKERS, availableParallelism() - 1, Math.floor( totalmem() / 4 / WORKER_MEMORY_BYTES ) );
 	if ( workers < 2 ) return undefined;
+	const script = routeWorkerScript( import.meta.url, import.meta.filename );
+	if ( ! script ) return undefined;
 	const dir = mkdtempSync( join( tmpdir(), 'export-routes-' ) );
 	const release = () => rmSync( dir, { recursive: true, force: true } );
 	const routes = new Map< string, CollectedRoute | FailedRouteCollection >();
@@ -50,14 +66,11 @@ export async function precollectCapturedRoutes( options: ExportCaptureOptions ):
 		release();
 		return undefined;
 	}
-	const built = new URL( './capture-export-route-worker.js', import.meta.url );
-	// Running from source (tests, `npm run liberate`), the worker is loaded through tsx.
-	const script = existsSync( fileURLToPath( built ) ) ? built : new URL( './capture-export-route-worker.ts', import.meta.url );
 	let next = 0;
 	const run = () => new Promise< void >( done => {
 		let worker: Worker;
 		try {
-			worker = new Worker( script, { workerData, ...( script === built ? {} : { execArgv: [ '--import', 'tsx' ] } ) } );
+			worker = new Worker( script.url, { workerData, ...( script.tsx ? { execArgv: [ '--import', 'tsx' ] } : {} ) } );
 		} catch ( error ) {
 			process.stderr.write( `[export] route worker failed to start: ${ ( error as Error ).message }\n` );
 			done();
