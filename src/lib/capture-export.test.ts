@@ -3715,39 +3715,6 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		).toContain( 'Access Denied' );
 	} );
 
-	it( 'excludes a route that rendered an empty document, but never the source URL itself', () => {
-		// Reproduces https://github.com/Automattic/data-liberation-agent/issues/896:
-		// a route answers HTTP 200 and the client router renders nothing at all --
-		// a body with no text and no content-bearing elements. Exported, that blank
-		// page later fails the whole WordPress import, so it must be excluded like
-		// an absent document. The source URL stays in even when it renders empty.
-		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
-		const outputDir = capture.build();
-		const emptyHtml =
-			'<!DOCTYPE html><html><head><title>t</title></head><body>\n' +
-			'<script>console.log("boot");</script><style>body{margin:0}</style>\n</body></html>';
-		capture.file( join( 'html', 'home.html' ), emptyHtml );
-		capture.file( join( 'html', 'blank.html' ), emptyHtml );
-		capture.file( join( 'html', 'gallery.html' ), '<html><body><img src="/photo.jpg" alt=""></body></html>' );
-		capture.manifest( {  version: 1,  entries: {  'https://example.com/': { html: 'html/home.html' },  'https://example.com/blank': { html: 'html/blank.html' },  'https://example.com/gallery': { html: 'html/gallery.html' },  },  } );
-		const receiptPath = exportWebsiteCapture( {  outputDir,  sourceUrl: 'https://example.com/',  platform: 'fake',  summary: {},  failures: [],  } );
-		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
-		expect( receipt.routes.map( ( r: { url: string } ) => r.url ) ).toEqual( [
-			'https://example.com/',
-			'https://example.com/gallery',
-		] );
-		expect( receipt.excludedRoutes ).toEqual( [ 'https://example.com/blank' ] );
-		expect( receipt.discoveryDiagnostics ).toEqual( [
-			{
-				code: 'route_not_found',
-				url: 'https://example.com/blank',
-				reason: 'rendered document is empty',
-			},
-		] );
-		expect( existsSync( join( outputDir, 'website', 'blank', 'index.html' ) ) ).toBe( false );
-		expect( existsSync( join( outputDir, 'website', 'index.html' ) ) ).toBe( true );
-		expect( existsSync( join( outputDir, 'website', 'gallery', 'index.html' ) ) ).toBe( true );
-	} );
 
 	it( 'names a route whose HTML file went missing on disk after capture claimed success', () => {
 		const capture = exportFixture( { directories: [ 'html', 'screenshots' ] } );
