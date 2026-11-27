@@ -20,7 +20,7 @@ import type { SiteRouteScope, StructuredContentSource, StructuredContentEntry } 
 import { indexPortableMediaReferences, mediaReferenceMatched, type PortableMediaCandidate } from './portable-media-plan.js';
 import { assembleResponsiveCapture, DEFAULT_SWITCH_WIDTH, DESKTOP_DOCUMENT_CLASS, MOBILE_DOCUMENT_CLASS, responsiveMovedBodyClasses, type ResponsiveVariantEvidence } from './responsive-assembly.js';
 import { MediaStubStore } from './resume-state/index.js';
-import { failuresAreAbsentDocument, isAbsentDocumentRender, isEmptyDocumentRender, isSourceCaptureUrl } from './screenshot/absent-document.js';
+import { failuresAreAbsentDocument, isAbsentDocumentRender, isSourceCaptureUrl } from './screenshot/absent-document.js';
 import { INTERACTION_STATES_SCHEMA, LEGACY_INTERACTION_STATES_SCHEMA, type InteractionStatesReport } from './screenshot/interaction-capture.js';
 import { SCROLL_STATES_SCHEMA, type ScrollStatesReport } from './screenshot/scroll-state-capture.js';
 import type { CapturedResourceManifest } from './screenshot/resource-capture.js';
@@ -430,14 +430,9 @@ export function collectCapturedRoute( url: string, entry: CaptureManifestEntry, 
 	// succeeded, there is no failure to inspect. Never applied to the source
 	// URL itself -- it is known good regardless of what it renders.
 	if ( ! isSourceCaptureUrl( url, sourceUrl ) ) {
-		// An empty rendered body (no text, no content-bearing element) is
-		// the same signal in its barest form: the app answered the route
-		// with nothing at all.
 		const absentRenderReason = isAbsentDocumentRender( rawDesktopHtml )
 			? 'rendered document is the client-routed not-found screen: a heading of just "404"/"410" on an otherwise thin page'
-			: isEmptyDocumentRender( rawDesktopHtml )
-				? 'rendered document is empty'
-				: undefined;
+			: undefined;
 		if ( absentRenderReason ) {
 			result.excluded = true;
 			result.diagnostics.push( {

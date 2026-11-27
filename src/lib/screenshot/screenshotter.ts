@@ -1784,7 +1784,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			let contextOptions: BrowserContextOptions | undefined;
 
 			// Retry a crashed renderer, or a source app that crashed into its client
-			// error shell, in a fresh context once. A disconnected browser also needs
+			// error shell, or an empty linked desktop render, in a fresh context once.
+			// A disconnected browser also needs
 			// the shared relaunch before the retry.
 			for ( let crashRetry = false; ; crashRetry = true ) {
 				if ( routeRetired( url ) ) return undefined;
@@ -1842,6 +1843,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							sourceTraffic: { governors: opts.governors, sourceUrl: entryUrl, sourceTelemetry: opts.sourceTelemetry },
 							rootClassEvidence,
 							routeMotion,
+							requireNonEmptyDocument: ! isSourceCaptureUrl( url, opts.primaryUrl ?? urls[ 0 ] ),
 							absentDocument: isSourceCaptureUrl( url, opts.primaryUrl ?? urls[ 0 ] ) ? undefined : html => absentDocumentProbes.matches( url, html, async sibling => {
 								// Same identity and source-governed context, but never navigate the
 								// candidate itself or add the nonce to the discovery frontier.
@@ -2002,11 +2004,12 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				if ( attemptBrowser.isConnected() ) {
 					const shellCrashed = profileFailures.slice( failuresBefore ).some( failure => failure.error.startsWith( CLIENT_ERROR_SHELL_FAILURE ) );
 					const stylesheetFailed = profileFailures.slice( failuresBefore ).some( failure => failure.error.startsWith( STYLESHEET_LOAD_FAILURE ) );
-					if ( ! rendererCrashed && ! shellCrashed && ! stylesheetFailed ) break;
+					const emptyRender = profileFailures.slice( failuresBefore ).some( failure => failure.error === 'rendered document is empty' );
+					if ( ! rendererCrashed && ! shellCrashed && ! stylesheetFailed && ! emptyRender ) break;
 					// The source governor retains Retry-After admission deadlines. Add
 					// the normal first-attempt backoff for failures it does not pace.
-					if ( stylesheetFailed ) await new Promise( resolve => setTimeout( resolve, 1000 ) );
-					sendLog( server, `[retry] ${ stylesheetFailed ? STYLESHEET_LOAD_FAILURE : rendererCrashed ? 'renderer crashed' : CLIENT_ERROR_SHELL_FAILURE } for ${ url } (${ viewport.id }); using a fresh context` );
+					if ( stylesheetFailed || emptyRender ) await new Promise( resolve => setTimeout( resolve, 1000 ) );
+					sendLog( server, `[retry] ${ emptyRender ? 'rendered document is empty' : stylesheetFailed ? STYLESHEET_LOAD_FAILURE : rendererCrashed ? 'renderer crashed' : CLIENT_ERROR_SHELL_FAILURE } for ${ url } (${ viewport.id }); using a fresh context` );
 				} else if ( ! ( await replaceCrashedBrowser( attemptBrowser ) ) ) break;
 				profileFailures.length = failuresBefore;
 				profileEntry.blockLosses = undefined;

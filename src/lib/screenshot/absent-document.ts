@@ -154,11 +154,11 @@ const CONTENT_BEARING_ELEMENTS =
 
 /**
  * A route whose rendered body carries no non-whitespace text and no
- * content-bearing element is not a page a reader can see -- a client-routed
- * app that answered an unknown route by rendering nothing, for example.
- * Exporting it produces a blank document that a downstream importer then
- * chokes on, so callers treat it like an absent document. Purely structural:
- * no vendor markup, no English phrasing, just "is there anything here".
+ * content-bearing element is not a page a reader can see. A client-rendered
+ * app may transiently fail to hydrate, so capture retries linked desktop
+ * routes with this signal before recording a capture failure, not absence.
+ * Purely structural: no vendor markup, no English phrasing, just "is there
+ * anything here".
  */
 export function isEmptyDocumentRender( html: string ): boolean {
 	const $ = readDocument( html );

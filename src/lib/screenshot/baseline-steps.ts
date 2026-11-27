@@ -1,4 +1,5 @@
 import { load } from 'cheerio';
+import { isEmptyDocumentRender } from './absent-document.js';
 import { bindBoxTreeEvidence, captureBoxTree, describeBoxTreeMismatch, stampNodeIds, writeBoxTree, type BoxTree, type BoxTreeMismatch, type BoxTreeObservation } from './box-tree.js';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
@@ -60,6 +61,8 @@ export interface CapturePerViewportArgs {
 	sourceContextOptions?: Parameters<CapturedResourceStore['captureSelectedSrcsets']>[1];
 	sourceTraffic?: Parameters<CapturedResourceStore['captureSelectedSrcsets']>[2];
 	absentDocument?: ( html: string ) => Promise<boolean>;
+	/** Linked desktop routes must have rendered content before they can be saved. */
+	requireNonEmptyDocument?: boolean;
 	rootClassEvidence: RootClassEvidence;
 	/** The route moment shared by every profile's serialization (#2007). */
 	routeMotion?: RouteMotionEvidence;
@@ -797,6 +800,8 @@ export function baselineSteps(
 					fail( 'content', `route drift: captured ${ capturedUrl } while attempting to capture ${ url } (a control navigated the page mid-capture); HTML not persisted` );
 				} else if ( isStackingArtifact( html ) ) {
 					fail( 'content', `nested document capture (${ countBodyTags( html ) } <body> in one page); HTML not persisted` );
+				} else if ( isDesktop && args.requireNonEmptyDocument && isEmptyDocumentRender( html ) ) {
+					fail( 'content', 'rendered document is empty' );
 				} else if ( shellSelector !== undefined ) {
 					// The source's client runtime crashed under capture and replaced the
 					// document with its framework error shell. It is never page content:
