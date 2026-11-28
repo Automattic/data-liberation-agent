@@ -186,10 +186,13 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 			// A resumed stage keeps its ready cells and replaces only the rest.
 			const sameCell = ( entry: ReferenceEntry, cell: ReferenceCell ) => entry.sourceUrl === cell.sourceUrl && entry.profile === cell.profile && entry.viewport === cell.viewport;
 			const referenceCells = [ ...cells.values() ].filter( cell => cell.sourceUrl === url && cell.profile === device && ! ( options.handoff && entries.some( entry => entry.readiness.ready && sameCell( entry, cell ) ) ) );
-			if ( options.handoff ) for ( let index = entries.length - 1; index >= 0; index-- ) {
+			for ( let index = entries.length - 1; index >= 0; index-- ) {
 				if ( referenceCells.some( cell => sameCell( entries[ index ], cell ) ) ) entries.splice( index, 1 );
 			}
 			if ( options.defer ) {
+				for ( let index = jobs.length - 1; index >= 0; index-- ) {
+					if ( jobs[ index ].url === url && jobs[ index ].device === device ) jobs.splice( index, 1 );
+				}
 				jobs.push( { url, device, errors: [ ...errors ], browserProfile, profile: publicCaptureProfile( recipe ), boundary: expectedBoundary, motion: recordedSourceMotion( page ) } );
 				checkpoint();
 				return;

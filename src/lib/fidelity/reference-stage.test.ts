@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { expect } from 'vitest';
@@ -7,7 +7,41 @@ import { captureWebsite } from '../../index.js';
 import type { findAdapter as FindAdapter } from '../../adapters/index.js';
 import { checkFidelity } from './check.js';
 import { runReferenceStage } from './reference-stage.js';
-import type { FidelityReference, ReferenceHandoff } from './reference.js';
+import { createReferenceCollector, type FidelityReference, type ReferenceHandoff } from './reference.js';
+
+// Three reference cells, no capture pipeline (~5s).
+it.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )( 'replaces a retried route observation before running the deferred reference stage', async ({ serve, newPage }) => {
+	mkdirSync( '.tmp-test', { recursive: true } );
+	const directory = mkdtempSync( join( process.cwd(), '.tmp-test/reference-retry-' ) );
+	const { origin } = await serve( ( _request, response ) => {
+		response.setHeader( 'Content-Type', 'text/html' );
+		response.end( '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><main><h1>Recovered route</h1></main>' );
+	} );
+	const url = `${ origin }/`;
+	try {
+		const collector = createReferenceCollector( directory, url, [ url ], { defer: true, trustedOrigins: [ origin ] } );
+		const page = await newPage();
+		const profile = { id: 'desktop', width: 1440, height: 900, referenceWidths: [ 390, 768, 1440 ] };
+		const browserProfile = { isMobile: false, hasTouch: false };
+		await collector.observe( page, url, 'desktop', [ 'superseded capture failure' ], browserProfile, profile );
+		await collector.observe( page, url, 'desktop', [], browserProfile, profile );
+		const receipt = join( directory, 'capture-receipt.json' );
+		writeFileSync( receipt, JSON.stringify( { source: { url }, routes: [] } ) );
+		collector.finalize( receipt );
+
+		await runReferenceStage( directory );
+		const reference = JSON.parse( readFileSync( join( directory, 'fidelity-reference.json' ), 'utf8' ) ) as FidelityReference;
+		expect( reference.entries.map( entry => [ entry.sourceUrl, entry.profile, entry.viewport, entry.state ] ).sort() ).toEqual(
+			[ 390, 768, 1440 ].map( width => [ url, 'desktop', width, 'baseline' ] ).sort(),
+		);
+		expect( reference.entries.every( entry => entry.readiness.ready ) ).toBe( true );
+		const handoff = JSON.parse( readFileSync( join( directory, 'reference-stage.json' ), 'utf8' ) ) as ReferenceHandoff;
+		expect( handoff.jobs ).toHaveLength( 1 );
+		expect( handoff.jobs[ 0 ].errors ).toEqual( [] );
+	} finally {
+		rmSync( directory, { recursive: true, force: true } );
+	}
+}, 60_000 );
 
 // Two captures, one deferred reference stage and two compares (~60s).
 it.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )( 'defers reference cells to a resumable stage that compare accepts', async ({ serve }) => {
