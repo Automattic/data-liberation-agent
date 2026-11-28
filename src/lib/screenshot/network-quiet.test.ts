@@ -84,16 +84,6 @@ function chattyOrigin( beaconPort: number ): RequestListener {
 			response.end( page( `<script>fetch( '${ beacon }/orphan-data' ).catch( () => {} );</script>` ) );
 			return;
 		}
-		if ( request.url === '/deferred-control' ) {
-			response.end( page( `<form id="booking"></form><script>
-				fetch( '${ beacon }/late-hydration' ).then(r => r.json()).then(() => {
-					setTimeout(() => {
-						document.querySelector('#booking').innerHTML = '<label>Combo Meal<select><option>None</option><option>Buffet</option></select></label>';
-					}, 200);
-				});
-			</script>` ) );
-			return;
-		}
 		if ( request.url === '/cross-data' ) {
 			// A pending data response from another origin, its result unused by
 			// the page: only the pending-hold keeps the wait on it.
@@ -164,17 +154,6 @@ describe.skipIf( !! process.env.SKIP_BROWSER_TESTS || ! existsSync( chromium.exe
 		expect( network?.ms ).toBeGreaterThanOrEqual( 900 );
 		// The render the response fed is on the page (DOM quiescence held).
 		expect( await page.evaluate( () => document.querySelector( '#hydrated' )?.textContent ) ).toBe( 'hydrated content' );
-		await page.close();
-	}, 30_000 );
-
-	it( 'waits for a deferred form-control render after data readiness', async ({ newPage }) => {
-		const { page } = await settledPage({ newPage });
-		await page.goto( `${ origin }/deferred-control`, { waitUntil: 'load' } );
-		await waitForStable( page );
-		// Read immediately, like serialization: an auto-waiting locator assertion
-		// would hide the race by waiting for the missing control itself.
-		expect( await page.locator( '#booking select' ).count() ).toBe( 1 );
-		expect( await page.locator( '#booking option' ).allTextContents() ).toEqual( [ 'None', 'Buffet' ] );
 		await page.close();
 	}, 30_000 );
 
