@@ -533,6 +533,8 @@ interface PageTrafficLedger {
   lastRenderActivity: number;
   /** Data (fetch/xhr) responses seen but not yet landed, any origin, with when each started. */
   pendingData: Map< Request, number >;
+  /** Whether the last render-readiness wait ran out of time. */
+  renderDeadline?: boolean;
 }
 
 const trafficLedgers = new WeakMap< Page, PageTrafficLedger >();
@@ -617,10 +619,13 @@ function networkQuiet( ledger: PageTrafficLedger, quietMs: number ): boolean {
 /** Give in-flight data reads one last bounded chance to populate form choices. */
 export async function waitForFormChoices( page: Page ): Promise<void> {
   const ledger = trafficLedgers.get( page );
-  if ( ! ledger ) return;
-  // Only reads already in flight at baseline admission count. New polling,
-  // write requests, and late media must not extend this wait.
-  const reads = [...ledger.pendingData.keys()].filter( request => request.method() === 'GET' );
+  if ( ! ledger?.renderDeadline ) return;
+  // A quiet render needs no extra wait. After a deadline, only same-origin
+  // reads already in flight at baseline admission count; new polling, writes
+  // and late media must not extend this wait.
+  const origin = new URL( page.url() ).origin;
+  const reads = [ ...ledger.pendingData.keys() ].filter( request =>
+    request.method() === 'GET' && new URL( request.url() ).origin === origin );
   if ( ! reads.length ) return;
   const started = Date.now();
   // Track the choices, not page-wide mutations or incidental class/style
@@ -667,7 +672,7 @@ export async function waitForRenderIdle(
     return;
   }
   await action();
-  await awaitQuiet( () => networkQuiet( ledger, quietMs ), timeoutMs );
+  ledger.renderDeadline = await awaitQuiet( () => networkQuiet( ledger, quietMs ), timeoutMs ) === 'deadline';
 }
 
 /**
@@ -703,6 +708,7 @@ export async function waitForNetworkQuiet(
   } else {
     reason = await awaitQuiet( () => networkQuiet( ledger, quietMs ), timeoutMs );
   }
+  if ( ledger && wait === 'render-quiet' ) ledger.renderDeadline = reason === 'deadline';
   readinessSinks.get( page )?.( wait, { reason, ms: Date.now() - started } );
 }
 

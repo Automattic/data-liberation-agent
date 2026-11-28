@@ -21,21 +21,20 @@ it.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) )( 'exports deferred select
 		}
 		if ( request.url !== '/' ) { response.writeHead( 404 ).end(); return; }
 		response.setHeader( 'Content-Type', 'text/html' );
-		response.end( '<!doctype html><html><head><title>Registration</title></head><body><main><h1>Registration</h1><form><label>Name <input name="name"></label></form></main></body></html>' );
+		response.end( '<!doctype html><html><head><title>Registration</title></head><body><main><h1>Registration</h1><form><label>Name <input name="name"></label></form></main><script>void fetch("/background").then(response => response.text());</script></body></html>' );
 	} );
 	const url = `${ origin }/`;
 	const outputDir = mkdtempSync( join( tmpdir(), 'form-hydration-' ) );
 	try {
-		await captureWebsite( { url, outputDir, trustedOrigins: [ url ], deviceMode: 'reflow-only', captureImages: false, learnFluid: false, deferReference: true, templateClusters: false }, {
+		await captureWebsite( { url, outputDir, trustedOrigins: [ url ], deviceMode: 'reflow-only', captureImages: false, learnFluid: true, deferReference: true, templateClusters: false }, {
 			findAdapter: () => ( {
 				id: 'neutral-form-fixture', detect: () => true, discover: async () => ( { urls: [ { url } ] } ),
 				liberation: {
 					// Start the read only when the real capture reaches admission, so
 					// navigation/probe timings cannot make the fixture pass by chance.
 					prepare: async page => {
-						const requested = Promise.all( [ page.waitForRequest( `${ origin }/options` ), page.waitForRequest( `${ origin }/background` ) ] );
+						const requested = page.waitForRequest( `${ origin }/options` );
 						await page.evaluate( () => {
-							void fetch( '/background' ).then( response => response.text() );
 							void fetch( '/options' ).then( response => response.json() ).then( ( options: string[] ) => {
 								setTimeout( () => {
 									const select = document.createElement( 'select' );

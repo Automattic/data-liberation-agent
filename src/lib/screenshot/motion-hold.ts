@@ -365,8 +365,21 @@ async function responsiveSwaps( page: Page, captured: SourceMotion, cell: PaintR
  */
 export class RouteMotionEvidence {
 	private readonly routes = new Map<string, SourceMotion>();
-	get( url: string ): SourceMotion | undefined { return this.routes.get( url ); }
+	private readonly snapshots = new Map<string, Promise<void>>();
 	claim( url: string, motion: SourceMotion ): void { if ( ! this.routes.has( url ) ) this.routes.set( url, motion ); }
+
+	/** Only the first snapshot needs exclusive access; later profiles can align in parallel. */
+	async snapshot<T>( url: string, take: ( moment?: SourceMotion ) => Promise<T> ): Promise<T> {
+		while ( ! this.routes.has( url ) ) {
+			const pending = this.snapshots.get( url );
+			if ( pending ) { await pending; continue; }
+			let release!: () => void;
+			this.snapshots.set( url, new Promise<void>( resolve => { release = resolve; } ) );
+			try { return await take(); }
+			finally { this.snapshots.delete( url ); release(); }
+		}
+		return take( this.routes.get( url ) );
+	}
 }
 
 const recorded = new WeakMap<Page, SourceMotion>();
