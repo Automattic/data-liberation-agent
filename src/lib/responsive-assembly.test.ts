@@ -24,6 +24,41 @@ import { projectViewportClassRules, VIEWPORT_CLASS_RULES_ATTRIBUTE } from './scr
 
 const dirs: string[] = [];
 
+it.each( [
+	{ name: 'truncated prefixes', desktop: 'The same excerpt continues with more words…', mobile: 'The same excerpt…', clamped: true },
+	{ name: 'different content', desktop: 'Desktop news and events…', mobile: 'Mobile offers and updates…', clamped: false },
+	{ name: 'different line counts', desktop: 'The same excerpt continues…', mobile: 'The same excerpt…', clamped: false, mobileHeight: 75 },
+	{ name: 'missing geometry', desktop: 'The same excerpt continues…', mobile: 'The same excerpt…', clamped: false, missing: true },
+] )( 'assembles $name using captured line evidence', async ( { desktop, mobile, clamped, ...options } ) => {
+	const document = ( text: string, height: number ) => `<html><head></head><body><main><h1>Shared title</h1><article><a href="/post" ${ 'missing' in options ? '' : `data-blocks-engine-capture-text-lines='[${ height },25]'` }>${ text }</a></article></main></body></html>`;
+	const d = document( desktop, 50 );
+	const m = document( mobile, 'mobileHeight' in options ? options.mobileHeight! : 50 ).replace( '<main>', '<main><button>Phone menu</button>' );
+	const result = assembleResponsiveCapture( { rawDesktopHtml: d, rawMobileHtml: m, portableDesktopHtml: d, portableMobileHtml: m } );
+	const $ = cheerio.load( result.html );
+	expect( $( 'a[href="/post"]' ) ).toHaveLength( clamped ? 1 : 2 );
+	if ( clamped ) {
+		const excerpt = $( 'a[href="/post"]' );
+		expect( excerpt.text() ).toBe( desktop.replace( /…$/, '' ) );
+		expect( excerpt.attr( 'class' ) ?? '' ).not.toMatch( /capture-(?:desktop|mobile)-only/ );
+		for ( const declaration of [ 'display:-webkit-box', '-webkit-box-orient:vertical', '-webkit-line-clamp:2', 'overflow:hidden' ] ) {
+			expect( excerpt.attr( 'style' ) ).toContain( declaration );
+		}
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage();
+			await page.setContent( result.html );
+			await page.addStyleTag( { content: 'a{width:40vw;max-width:200px;font:20px/25px monospace}' } );
+			for ( const width of [ 1440, 768, 390 ] ) {
+				await page.setViewportSize( { width, height: 900 } );
+				expect( await page.locator( 'a[href="/post"]' ).evaluate( node => node.getBoundingClientRect().height ) ).toBe( 50 );
+			}
+		} finally { await browser.close(); }
+	} else {
+		expect( $( '.data-blocks-engine-capture-desktop-only' ) ).toHaveLength( 1 );
+		expect( $( 'a.data-blocks-engine-capture-mobile-only' ) ).toHaveLength( 1 );
+	}
+} );
+
 const mediaCases = [
 	[ '(min-width:768px)', 'all', '(min-width:768px)' ],
 	[ 'all', '(min-width:768px)', '(min-width:768px)' ],

@@ -24,6 +24,7 @@ import {
 	isUnstableResponsiveId,
 	learnedTransformSelectors,
 	placeholderLinkSide,
+	reconcileTruncatedText,
 	RESPONSIVE_DESKTOP_ONLY_CLASS,
 	RESPONSIVE_MOBILE_ONLY_CLASS,
 	RESPONSIVE_PROJECTION_CLASS_PREFIX,
@@ -827,7 +828,10 @@ export function identitySubsetMerge(
 			else d.attr( VIEWPORT_ENTRANCE_ATTRIBUTE, state );
 		}
 		let projected = false;
-		if ( ! deviceKey ) adoptAuthoredInlineStyle( d, m );
+		if ( ! deviceKey ) {
+			reconcileTruncatedText( d.get( 0 )!, m.get( 0 )! );
+			adoptAuthoredInlineStyle( d, m );
+		}
 		const desktopStyle = d.attr( 'style' ) ?? '';
 		const mobileStyle = m.attr( 'style' ) ?? '';
 		if ( desktopStyle.trim() !== mobileStyle.trim() ) {
@@ -1144,6 +1148,7 @@ function equivalentInlineProjection(
 		path: string
 	): void => {
 		let projected = false;
+		reconcileTruncatedText( d.get( 0 )!, m.get( 0 )! );
 		adoptAuthoredInlineStyle( d, m );
 		const desktopStyle = d.attr( 'style' ) ?? '';
 		const mobileStyle = m.attr( 'style' ) ?? '';

@@ -15,11 +15,12 @@ it.skipIf(process.env.SKIP_BROWSER_TESTS)('keeps the capture viewport when anoth
 	const browser = await chromium.launch({ headless: true });
 	try {
 		const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-		await page.setContent('<html><head><style>body{background:red}</style></head><body><main><a>Keep me</a></main><script>matchMedia("(max-width:600px)").addEventListener("change", () => document.querySelector("a")?.remove()); const sync = () => document.body.classList.toggle("wide", innerWidth >= 1280); addEventListener("resize", sync); sync();</script></body></html>');
+		await page.setContent('<html><head><style>body{background:red}</style></head><body><p style="width:100px;font:20px/25px monospace;padding:3px;border:1px solid">Excerpt words…</p><main><a>Keep me</a></main><script>matchMedia("(max-width:600px)").addEventListener("change", () => document.querySelector("a")?.remove()); const sync = () => document.body.classList.toggle("wide", innerWidth >= 1280); addEventListener("resize", sync); sync();</script></body></html>');
 		await stampNodeIds(page);
 		let nodes: BoxTree['nodes'] | undefined;
 		const html = await capturePageHtml(page, [], undefined, observed => { nodes = observed && 'nodes' in observed ? observed.nodes : undefined; });
 		expect(nodes).toBeDefined();
+		expect(html).toContain('data-blocks-engine-capture-text-lines="[50,25]"');
 		const tree = await captureBoxTree(page, html, { desktop: { width: 1440, height: 900 }, mobile: { width: 390, height: 844 } }, { name: 'desktop', nodes: nodes! });
 		expect(Object.keys(tree!.viewports)).toEqual(['desktop']);
 		// The next learner must see the restored width's state immediately,

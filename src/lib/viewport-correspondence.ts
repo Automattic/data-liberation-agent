@@ -205,6 +205,43 @@ function ownText( element: Element ): string {
 		.trim();
 }
 
+/** Reconcile a runtime-truncated leaf only with positive, equal line evidence. */
+export function reconcileTruncatedText( desktop: Element, mobile: Element ): boolean {
+	if ( desktop.tagName !== mobile.tagName || childElements( desktop ).length || childElements( mobile ).length ||
+		referenceOf( desktop ) !== referenceOf( mobile ) ) return false;
+	const d = ownText( desktop );
+	const m = ownText( mobile );
+	if ( d === m || ! [ d, m ].some( text => /(?:…|\.{3})$/.test( text ) ) ) return false;
+	const strip = ( text: string ) => text.replace( /(?:…|\.{3})$/, '' ).trimEnd();
+	const left = strip( d );
+	const right = strip( m );
+	if ( ! left || ! right || ! ( left.startsWith( right ) || right.startsWith( left ) ) ) return false;
+	const lines = ( element: Element ): number | undefined => {
+		try {
+			const [ height, lineHeight ] = JSON.parse( element.attribs[ 'data-blocks-engine-capture-text-lines' ] ?? 'null' );
+			if ( ! Number.isFinite( height ) || ! Number.isFinite( lineHeight ) || height <= 0 || lineHeight <= 0 ) return undefined;
+			const count = Math.round( height / lineHeight );
+			return count > 0 && Math.abs( height - count * lineHeight ) <= 1 ? count : undefined;
+		} catch { return undefined; }
+	};
+	const count = lines( desktop );
+	if ( count === undefined || count !== lines( mobile ) ) return false;
+	const longest = left.length >= right.length ? left : right;
+	for ( const element of [ desktop, mobile ] ) {
+		const text = childNodes( element ).find( node => node.type === 'text' );
+		if ( text?.type !== 'text' ) return false;
+		text.data = longest;
+		for ( const other of childNodes( element ) ) if ( other !== text && other.type === 'text' ) other.data = '';
+		// Ordinary inline CSS follows the existing portable/WordPress style path.
+		const clampProperties = new Set( [ 'display', '-webkit-box-orient', '-webkit-line-clamp', 'overflow' ] );
+		const style = inlineDeclarations( element.attribs.style ?? '' ).filter( declaration =>
+			! clampProperties.has( declaration.split( ':' )[ 0 ]!.trim().toLowerCase() ) );
+		element.attribs.style = [ ...style, 'display:-webkit-box', '-webkit-box-orient:vertical', `-webkit-line-clamp:${ count }`, 'overflow:hidden' ].join( ';' );
+		delete element.attribs[ 'data-blocks-engine-capture-text-lines' ];
+	}
+	return true;
+}
+
 /** Absolute spellings compare canonically; relative references stay literal. */
 /**
  * A script-owned trigger: an empty fragment (`#`, or `…#` once a document base
@@ -453,7 +490,7 @@ export function correspondenceMerge(
 			if ( j >= mKids.length ) return; // remaining desktop children are one-sided; the classification pass marks them
 			const dKid = dKids[ i ];
 			const mKid = mKids[ j ];
-			if ( sameIdentity( dKid, mKid ) ) {
+			if ( sameIdentity( dKid, mKid ) || reconcileTruncatedText( dKid, mKid ) ) {
 				pair( dKid, mKid );
 				i++;
 				j++;

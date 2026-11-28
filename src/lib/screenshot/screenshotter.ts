@@ -630,6 +630,21 @@ export async function capturePageHtml( page: Page, diagnostics?: ProfileDiagnost
 					await new Promise(resolve => setTimeout(resolve, 250));
 					boxNodes = checkedObservation();
 				}
+				// Carry only the line geometry responsive text assembly needs. The
+				// box-tree already observed these metrics at this capture width.
+				if ( boxNodes && 'nodes' in boxNodes ) {
+					for ( const saved of snapshot.querySelectorAll( `[${ nodeIdAttribute }]` ) ) {
+						if ( saved.children.length || ! /(?:…|\.{3})\s*$/.test( saved.textContent ?? '' ) ) continue;
+						const observed = boxNodes.nodes[ saved.getAttribute( nodeIdAttribute )! ]?.viewports.capture;
+						if ( ! observed ) continue;
+						const styles = observed.used_styles;
+						const inset = [ 'padding-top', 'padding-bottom', 'border-top', 'border-bottom' ]
+							.reduce( ( sum, name ) => sum + ( parseFloat( styles[ name ] ) || 0 ), 0 );
+						const height = observed.border_box.height - inset;
+						const lineHeight = parseFloat( styles[ 'line-height' ] );
+						if ( height > 0 && lineHeight > 0 ) saved.setAttribute( 'data-blocks-engine-capture-text-lines', JSON.stringify( [ height, lineHeight ] ) );
+					}
+				}
 				return { html: `<!DOCTYPE html>${ snapshot.outerHTML }`, boxNodes, findings, omittedStyles: ( window as typeof window & { __dlaOmittedRuntimeStyles?: Array<{ bytes: number; rules: number }> } ).__dlaOmittedRuntimeStyles ?? [] };
 			} finally {
 				restoreParagraphDescendants();
