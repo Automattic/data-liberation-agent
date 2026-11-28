@@ -646,6 +646,17 @@ export class CapturedResourceStore {
 		return Boolean( this.manifest.resources[ url ] );
 	}
 
+	/** Stored text for `url`, when its bytes were captured. */
+	storedText( url: string ): string | undefined {
+		const stored = this.manifest.resources[ url ];
+		if ( ! stored ) return undefined;
+		try {
+			return readFileSync( resolve( this.resourceDir, stored.path.replace( /^resources\//, '' ) ), 'utf8' );
+		} catch {
+			return undefined;
+		}
+	}
+
 	/** Probe responsive slots at fidelity widths without Chromium's larger-image cache reuse. */
 	async captureSelectedSrcsets( page: Page, contextOptions: Parameters<typeof createSourceContext>[1] = {}, traffic?: Parameters<typeof createSourceContext>[2] ): Promise< void > {
 		if ( ! await page.locator( 'img[srcset],picture img' ).count() ) return;
