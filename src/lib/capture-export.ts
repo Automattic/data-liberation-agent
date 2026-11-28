@@ -6,6 +6,10 @@ import { type DocumentSelection } from './document-selection.js';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
+import { imageSize } from 'image-size';
+import { normalizedUrl } from './url/route-key.js';
+import { retainObservedImageRenditions } from './observed-image-renditions.js';
+import { readReferenceArtifact, type ReferenceEntry } from './fidelity/reference.js';
 import * as cheerio from 'cheerio';
 import type { WebsiteInventory } from './website-inventory.js';
 import { renderRoutePages, projectPortableWebsite } from './capture-export-render.js';
@@ -26,7 +30,7 @@ import {
 import { galleryFrameMediaUrls } from './screenshot/gallery-capture.js';
 import { materializePortableMedia } from './portable-media.js';
 import { omitDegenerateReplacements, preparePortableReplacements, preparePortableUrlResolver } from './portable-references.js';
-import { portableAssetUrl } from './portable-assets.js';
+import { pathWithin, portableAssetUrl } from './portable-assets.js';
 import { materializePortableResources } from './portable-resources.js';
 import { projectWidthGatedFontFaces } from './width-gated-font-faces.js';
 import { assetExceedsFileLimit, DEFAULT_MAX_FILE_BYTES, validateMaxFileBytes } from './export-file-limit.js';
@@ -98,6 +102,8 @@ export interface ExportCaptureOptions {
 	limits?: ExportLimits;
 	/** Routes collected ahead of export from these same options (see capture-export-parallel.ts). */
 	precollectedRoutes?: ReadonlyMap< string, CollectedRoute | FailedRouteCollection >;
+	/** Ready desktop baseline documents captured at other widths in this run. */
+	imageRenditionDocuments?: readonly ( Pick< ReferenceEntry, 'sourceUrl' | 'viewport' > & { document: NonNullable< ReferenceEntry['document'] > } )[];
 }
 
 /** Options a route collection reads; all plain data except the adapter's document selection. */
@@ -401,6 +407,35 @@ function buildExportCapture(
 		writeFileSync( claimed.htmlPath, appendSourceData( readFileSync( claimed.htmlPath, 'utf8' ), sourceData ) );
 	}
 	routeCaptureDiagnostics.push( ...missingRedirectTargets );
+	const renditionDocuments = new Map<string, NonNullable<ExportCaptureOptions['imageRenditionDocuments']>[number][]>();
+	for ( const sample of options.imageRenditionDocuments ?? [] ) {
+		const key = normalizedUrl( sample.sourceUrl );
+		const documents = renditionDocuments.get( key ) ?? [];
+		documents.push( sample );
+		renditionDocuments.set( key, documents );
+	}
+	const widths = new Map<string, number | undefined>();
+	const capturedWidth = ( url: string ) => {
+		if ( widths.has( url ) ) return widths.get( url );
+		if ( exclusions.assets.has( url ) || exclusions.renditions.has( url ) ) return undefined;
+		const resource = resourceManifest.resources[ url ];
+		const path = resource && resolve( outputDir, resource.path );
+		let width: number | undefined;
+		if ( path && resource.contentType.startsWith( 'image/' ) && pathWithin( outputDir, path ) ) {
+			try { width = imageSize( readFileSync( path ) ).width; }
+			catch { /* No verified raster dimensions: keep the original source list. */ }
+		}
+		widths.set( url, width );
+		return width;
+	};
+	for ( const entry of retainedEntries ) {
+		const samples = renditionDocuments.get( normalizedUrl( entry.url ) );
+		if ( ! samples?.length || entry.responsiveVariants || entry.documentSelection || entry.hasMobileDocument ) continue;
+		const html = readFileSync( entry.htmlPath, 'utf8' );
+		const documents = samples.map( ( { viewport, document } ) => ( { viewport, html: readReferenceArtifact( outputDir, document ).toString() } ) );
+		const responsiveHtml = retainObservedImageRenditions( html, entry.url, documents, capturedWidth );
+		if ( responsiveHtml !== html ) writeFileSync( entry.htmlPath, responsiveHtml );
+	}
 	if ( ! httpInput ) routeCaptureDiagnostics.push( ...writeSemanticEvidence( stageDir, semanticEvidencePages( outputDir, retainedEntries, routePathOf ) ) );
 	const mediaStubs = MediaStubStore.load( outputDir );
 	const assetReferenceLocations = collectAssetEvidenceReferences(

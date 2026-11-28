@@ -22,7 +22,14 @@ aligned to the recorded motion, then writes the same `fidelity-reference.json`
 compare accepts and marks the receipt `complete`. It checkpoints after each route;
 a re-run keeps ready cells and retries the rest. It never rediscovers routes or
 picks a new moment. Unlike in-capture cells, a deferred cell cannot feed
-viewport-entrance startup poses back into the already-serialized capture page.
+viewport-entrance startup poses or responsive image renditions back into the
+already-exported site.
+
+On a single-document route, export can use ready desktop cells to retain image
+renditions that the source runtime selected at other sampled widths. It only
+updates unambiguously matched density-based image lists with captured image
+bytes. It emits width descriptors and a `sizes` rule for each observed viewport,
+with the capture-width image still serving as the default at unsampled widths.
 
 ## Public API
 
