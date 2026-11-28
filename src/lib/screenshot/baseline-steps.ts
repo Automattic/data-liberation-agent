@@ -37,7 +37,7 @@ import { projectRootClassContracts, rootClassContracts, RootClassEvidence, sampl
 import { restoreRuntimeEmoji } from './runtime-emoji.js';
 import { restoreLoadTimeSheets } from './runtime-style-writes.js';
 import { removeRuntimeWidgets } from './runtime-widgets.js';
-import { alignSourceMotion, motionChanges, type PaintReading, readPaintedTokens, recordSourceMotion, type RouteMotionEvidence, type SourceMotion } from './motion-hold.js';
+import { alignSourceMotion, motionChanges, type PaintReading, readPaintedTokens, recordSourceMotion, type RouteMotionEvidence } from './motion-hold.js';
 import { analyzePage } from './site-analysis.js';
 import { preserveStreamedVideoPosters } from './streamed-video.js';
 import { captureViewportClassStates, viewportClassSweepBudgetMs, type ViewportClassMemo } from './viewport-class-states.js';
@@ -609,24 +609,21 @@ export function baselineSteps(
 				await stampNodeIds( page );
 				// Another profile of this route already serialized: wait (held) for the
 				// source to show that moment, so every document of the route agrees.
+				const routeMoment = args.observeSource ? args.routeMotion?.get( url ) : undefined;
+				const aligned = routeMoment ? await alignSourceMotion( page, routeMoment, paintedLast ? [ paintedLast ] : [] ) : undefined;
 				let boxNodes: BoxTreeObservation | undefined;
-				const takeSnapshot = async ( routeMoment?: SourceMotion ) => {
-					const aligned = routeMoment ? await alignSourceMotion( page, routeMoment, paintedLast ? [ paintedLast ] : [] ) : undefined;
-					try {
-						return await capturePageHtml( page, args.diagnostics, serverHtml,
-							(isDesktop || isMobile) && (plan.captureHtml || plan.captureMobileHtml) ? observation => { boxNodes = observation; } : undefined,
-							args.observeSource ? ( { painted, latent, width } ) => {
-								samplePainted( painted );
-								const motion = { painted, latent, width, rotating: [ ...new Set( [ ...rotating, ...routeMoment?.rotating ?? [] ] ) ].sort() };
-								recordSourceMotion( page, motion );
-								args.routeMotion?.claim( url, motion );
-							} : undefined );
-					} finally {
-						await aligned?.release();
-					}
-				};
-				state.initialDocument = args.observeSource && args.routeMotion
-					? await args.routeMotion.snapshot( url, takeSnapshot ) : await takeSnapshot();
+				try {
+					state.initialDocument = await capturePageHtml( page, args.diagnostics, serverHtml,
+						(isDesktop || isMobile) && (plan.captureHtml || plan.captureMobileHtml) ? observation => { boxNodes = observation; } : undefined,
+						args.observeSource ? ( { painted, latent, width } ) => {
+							samplePainted( painted );
+							const motion = { painted, latent, width, rotating: [ ...new Set( [ ...rotating, ...routeMoment?.rotating ?? [] ] ) ].sort() };
+							recordSourceMotion( page, motion );
+							args.routeMotion?.claim( url, motion );
+						} : undefined );
+				} finally {
+					await aligned?.release();
+				}
 				const observed: BoxTreeObservation | undefined = boxNodes;
 				if (observed && 'mismatch' in observed) state.boxTreeMismatch = observed.mismatch;
 				else if (observed) state.boxTree = await captureBoxTree(page, state.initialDocument, boxViewports(), { name: viewport.id, nodes: observed.nodes }, mismatch => { state.boxTreeMismatch = mismatch; }, (name, mismatch) => {

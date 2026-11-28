@@ -628,24 +628,23 @@ export async function waitForFormChoices( page: Page ): Promise<void> {
     request.method() === 'GET' && new URL( request.url() ).origin === origin );
   if ( ! reads.length ) return;
   const started = Date.now();
-  // Track the choices, not page-wide mutations or incidental class/style
-  // changes. Browser form ownership includes controls with a form attribute.
-  const choices = () => document.forms.length ?
-    JSON.stringify( [...document.querySelectorAll( 'select' )]
-      .filter( select => select.form && select.options.length )
-      .map( select => [ ...select.options ].map( option => [ option.value, option.label ] ) ) ) : null;
-  const initial = await withEvaluateTimeout( page.evaluate( choices ), READINESS_BOUND_MS ).catch( orElse( null ) );
-  if ( initial === null ) return;
+  // Only recover a missing choice control. Do not move the snapshot of a
+  // page that already rendered its choices just because another read is open.
+  // Browser form ownership includes controls with a form attribute.
+  const formChoiceState = () => !document.forms.length ? 'no-form' :
+    [ ...document.querySelectorAll( 'select' ) ].some( select => select.form && select.options.length ) ? 'ready' : 'missing';
+  const initial = await withEvaluateTimeout( page.evaluate( formChoiceState ), READINESS_BOUND_MS ).catch( orElse( null ) );
+  if ( initial !== 'missing' ) return;
   let lastReadSettled: number | undefined;
   let reason: SettleOutcome['reason'] = 'deadline';
   while ( Date.now() - started < READINESS_BOUND_MS ) {
-    const current = await withEvaluateTimeout( page.evaluate( choices ), Math.max( 1, READINESS_BOUND_MS - ( Date.now() - started ) ) ).catch( orElse( null ) );
-    if ( current === null ) break;
+    const current = await withEvaluateTimeout( page.evaluate( formChoiceState ), Math.max( 1, READINESS_BOUND_MS - ( Date.now() - started ) ) ).catch( orElse( null ) );
+    if ( current === null || current === 'no-form' ) break;
     // Stop when choices change, not at the end of unrelated reads or
     // a second page-wide quiet period. Keep a short grace window when the
     // response handlers schedule a render after requestfinished.
     if ( reads.every( request => !ledger.pendingData.has( request ) ) ) lastReadSettled ??= Date.now();
-    if ( current !== initial || ( lastReadSettled !== undefined && Date.now() - lastReadSettled >= 500 ) ) {
+    if ( current === 'ready' || ( lastReadSettled !== undefined && Date.now() - lastReadSettled >= 500 ) ) {
       reason = 'quiet';
       break;
     }
