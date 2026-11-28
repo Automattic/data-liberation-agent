@@ -421,6 +421,10 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 			else for ( const cell of referenceCells ) await observeCell( cell );
 		},
 		checkpoint,
+		readyDocuments() {
+			return entries.flatMap( entry => entry.readiness.ready && entry.document && entry.profile === 'desktop'
+				? [ { sourceUrl: entry.sourceUrl, viewport: entry.viewport, document: entry.document } ] : [] );
+		},
 		finalize( receiptPath: string ): string {
 			if ( options.defer ) {
 				checkpoint( { path: relative( directory, receiptPath ), sha256: digest( readFileSync( receiptPath ) ) } );

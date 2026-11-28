@@ -989,6 +989,7 @@ async function runCaptureWebsite(
 		failures,
 		discoveryDiagnostics: captureDiagnostics,
 		limits: captureExportLimits( options ),
+		imageRenditionDocuments: reference.readyDocuments(),
 	};
 	const precollected = await precollectCapturedRoutes( exportOptions );
 	let captureReceiptPath: string;

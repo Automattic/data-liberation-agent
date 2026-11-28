@@ -38,6 +38,7 @@ import { SITE_ANALYSIS_FILES } from './screenshot/aggregator.js';
 import { missingRoutes } from './capture-usability.js';
 import { captureAssets } from './image-assets.js';
 import { imageSize } from 'image-size';
+import { PNG } from 'pngjs';
 import { MAX_PORTABLE_MEDIA_BYTES, MAX_PORTABLE_MEDIA_DIMENSION } from './portable-media-limits.js';
 let sharedBrowser: Browser;
 const contexts: BrowserContext[] = [];
@@ -1872,6 +1873,55 @@ describe( 'exportWebsiteCapture', () => {
 		expect( $( '#hydrated' ).attr( 'src' ) ).toBe( '/media/hydrated.jpg' );
 		expect( readFileSync( join( outputDir, 'website/media/lqip.jpg' ), 'utf8' ) ).toBe( 'blurred' );
 		expect( readFileSync( join( outputDir, 'website/media/hydrated.jpg' ), 'utf8' ) ).toBe( 'sharp' );
+	} );
+
+	it( 'exports density renditions observed at other widths as selectable local files', async () => {
+		const capture = exportFixture();
+		const outputDir = capture.build();
+		const sourceUrl = 'https://example.com/';
+		const rendition = ( width: number ) => `https://cdn.example/hero.jpg?w=${ width }&h=2`;
+		const markup = ( width: number ) => `<main><img alt="Hero" src="${ rendition( width ) }" srcset="${ rendition( width ) } 1x, ${ rendition( width * 2 ) } 2x"></main>`;
+		const bytes = new Map( [ 300, 600, 400, 800 ].map( width => [ width, PNG.sync.write( new PNG( { width, height: 2 } ) ) ] ) );
+		for ( const [ width, png ] of bytes ) capture.resource( rendition( width ), png, 'image/png' );
+		capture.page( sourceUrl, markup( 400 ) );
+		const referenceHtml = markup( 300 );
+		const path = 'reference/390.html';
+		capture.file( path, referenceHtml );
+		exportWebsiteCapture( { outputDir, sourceUrl, platform: 'generic', summary: {}, failures: [],
+			imageRenditionDocuments: [ { sourceUrl, viewport: 390, document: { path, sha256: createHash( 'sha256' ).update( referenceHtml ).digest( 'hex' ) } } ],
+		} );
+		const website = join( outputDir, 'website' );
+		const html = readResolvedPage( website, join( website, 'index.html' ) );
+		const image = cheerio.load( html )( 'img' );
+		expect( image.attr( 'sizes' ) ).toBe( '(width: 390px) 300px, 400px' );
+		const urls = new Map( image.attr( 'srcset' )!.split( ', ' ).map( candidate => {
+			const [ url, width ] = candidate.split( ' ' );
+			return [ width, url ];
+		} ) );
+		for ( const width of [ 300, 400, 800 ] ) {
+			const url = urls.get( `${ width }w` );
+			expect( url ).toMatch( /^\// );
+			expect( readFileSync( join( website, decodeURIComponent( url! ) ) ) ).toEqual( bytes.get( width ) );
+		}
+		expect( image.attr( 'src' ) ).toBe( urls.get( '400w' ) );
+		const server = await startStaticServer( website );
+		try {
+			const browser = await browserContext();
+			for ( const [ viewport, renditionWidth ] of [ [ 390, 300 ], [ 1440, 400 ] ] ) {
+				const page = await browser.newPage();
+				await page.setViewportSize( { width: viewport, height: 800 } );
+				await page.goto( server.url );
+				const selected = await page.locator( 'img' ).evaluate( async img => {
+					const image = img as HTMLImageElement;
+					await image.decode();
+					return new URL( image.currentSrc ).pathname;
+				} );
+				expect( selected ).toBe( urls.get( `${ renditionWidth }w` ) );
+				await page.close();
+			}
+		} finally {
+			await server.close();
+		}
 	} );
 
 	it( 'localizes a same-origin srcset whose candidate URLs contain commas', () => {
