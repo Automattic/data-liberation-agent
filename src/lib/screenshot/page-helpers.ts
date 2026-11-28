@@ -533,6 +533,8 @@ interface PageTrafficLedger {
   lastRenderActivity: number;
   /** Data (fetch/xhr) responses seen but not yet landed, any origin, with when each started. */
   pendingData: Map< Request, number >;
+  /** Whether the last render-readiness wait ran out of time. */
+  renderDeadline?: boolean;
 }
 
 const trafficLedgers = new WeakMap< Page, PageTrafficLedger >();
@@ -614,6 +616,43 @@ function networkQuiet( ledger: PageTrafficLedger, quietMs: number ): boolean {
   return now - ledger.lastRenderActivity >= quietMs;
 }
 
+/** Give in-flight data reads one last bounded chance to populate form choices. */
+export async function waitForFormChoices( page: Page ): Promise<void> {
+  const ledger = trafficLedgers.get( page );
+  if ( ! ledger?.renderDeadline ) return;
+  // A quiet render needs no extra wait. After a deadline, only same-origin
+  // reads already in flight at baseline admission count; new polling, writes
+  // and late media must not extend this wait.
+  const origin = new URL( page.url() ).origin;
+  const reads = [ ...ledger.pendingData.keys() ].filter( request =>
+    request.method() === 'GET' && new URL( request.url() ).origin === origin );
+  if ( ! reads.length ) return;
+  const started = Date.now();
+  // Only recover a missing choice control. Do not move the snapshot of a
+  // page that already rendered its choices just because another read is open.
+  // Browser form ownership includes controls with a form attribute.
+  const formChoiceState = () => !document.forms.length ? 'no-form' :
+    [ ...document.querySelectorAll( 'select' ) ].some( select => select.form && select.options.length ) ? 'ready' : 'missing';
+  const initial = await withEvaluateTimeout( page.evaluate( formChoiceState ), READINESS_BOUND_MS ).catch( orElse( null ) );
+  if ( initial !== 'missing' ) return;
+  let lastReadSettled: number | undefined;
+  let reason: SettleOutcome['reason'] = 'deadline';
+  while ( Date.now() - started < READINESS_BOUND_MS ) {
+    const current = await withEvaluateTimeout( page.evaluate( formChoiceState ), Math.max( 1, READINESS_BOUND_MS - ( Date.now() - started ) ) ).catch( orElse( null ) );
+    if ( current === null || current === 'no-form' ) break;
+    // Stop when choices change, not at the end of unrelated reads or
+    // a second page-wide quiet period. Keep a short grace window when the
+    // response handlers schedule a render after requestfinished.
+    if ( reads.every( request => !ledger.pendingData.has( request ) ) ) lastReadSettled ??= Date.now();
+    if ( current === 'ready' || ( lastReadSettled !== undefined && Date.now() - lastReadSettled >= 500 ) ) {
+      reason = 'quiet';
+      break;
+    }
+    await new Promise( resolve => setTimeout( resolve, 50 ) );
+  }
+  readinessSinks.get( page )?.( 'form-hydration', { reason, ms: Date.now() - started } );
+}
+
 /** Run lazy-load work and wait until render-affecting requests become quiet. */
 export async function waitForRenderIdle(
   page: Page,
@@ -632,7 +671,7 @@ export async function waitForRenderIdle(
     return;
   }
   await action();
-  await awaitQuiet( () => networkQuiet( ledger, quietMs ), timeoutMs );
+  ledger.renderDeadline = await awaitQuiet( () => networkQuiet( ledger, quietMs ), timeoutMs ) === 'deadline';
 }
 
 /**
@@ -668,6 +707,7 @@ export async function waitForNetworkQuiet(
   } else {
     reason = await awaitQuiet( () => networkQuiet( ledger, quietMs ), timeoutMs );
   }
+  if ( ledger && wait === 'render-quiet' ) ledger.renderDeadline = reason === 'deadline';
   readinessSinks.get( page )?.( wait, { reason, ms: Date.now() - started } );
 }
 

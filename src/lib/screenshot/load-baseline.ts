@@ -16,7 +16,7 @@ import { navigationDocumentUrl, serverRedirectTarget } from './document-integrit
 import { waitForHiddenEmbeds } from './embed-readiness.js';
 import { nonHtmlDocumentError } from './absent-document.js';
 import { rejectedNavigationReason } from './navigation-rejection.js';
-import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds, withEvaluateTimeout, isEvaluateTimeout } from './page-helpers.js';
+import { waitForStable, waitForFormChoices, triggerLazyLoad, dismissOverlays, pageResponds, withEvaluateTimeout, isEvaluateTimeout } from './page-helpers.js';
 import { markInitialScrollClasses } from './initial-document.js';
 import { sameOriginPageAnchors } from './unscheduled-anchors.js';
 import { ROUTE_ALIAS_CANONICAL, queryOnlyCanonicalTarget } from '../route-aliases.js';
@@ -346,6 +346,11 @@ export async function loadSourceBaseline( args: SourceLoadInput ): Promise<Sourc
 		prepare: args.prepareCapture,
 		ctx: { url, viewport: viewport.id, serverHtml },
 	} );
+
+	// Navigation and lazy-load readiness may have spent their bounds while a
+	// data read was still pending. Observe deferred form choices before
+	// baseline geometry, node IDs and HTML are sampled.
+	await waitForFormChoices( page );
 
 	const stylesheetFailure = await stylesheetLoadFailure( page );
 	if ( stylesheetFailure ) {
