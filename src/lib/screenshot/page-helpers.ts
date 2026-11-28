@@ -614,24 +614,39 @@ function networkQuiet( ledger: PageTrafficLedger, quietMs: number ): boolean {
   return now - ledger.lastRenderActivity >= quietMs;
 }
 
-/** Give in-flight data reads one last bounded chance to populate an existing form. */
-export async function waitForFormHydration( page: Page ): Promise<void> {
+/** Give in-flight data reads one last bounded chance to populate form choices. */
+export async function waitForFormChoices( page: Page ): Promise<void> {
   const ledger = trafficLedgers.get( page );
   if ( ! ledger ) return;
   // Only reads already in flight at baseline admission count. New polling,
   // write requests, and late media must not extend this wait.
   const reads = [...ledger.pendingData.keys()].filter( request => request.method() === 'GET' );
   if ( ! reads.length ) return;
-  const hasForm = await withEvaluateTimeout( page.evaluate( () => !!document.querySelector( 'form' ) ), EVALUATE_GRACE_MS ).catch( orElse( false ) );
-  if ( ! hasForm ) return;
   const started = Date.now();
-  const reason = await awaitQuiet( () => reads.every( request => !ledger.pendingData.has( request ) ), READINESS_BOUND_MS );
-  readinessSinks.get( page )?.( 'form-data', { reason, ms: Date.now() - started } );
-  if ( reason === 'quiet' ) {
-    // requestfinished proves the bytes arrived, not that the response handler
-    // has rendered its controls. Observe the subsequent render before sampling.
-    await settleDocument( page, 'form-hydration', { quietMs: 500, timeoutMs: 1_000, timerOnly: true } );
+  // Track the choices, not page-wide mutations or incidental class/style
+  // changes. Browser form ownership includes controls with a form attribute.
+  const choices = () => document.forms.length ?
+    JSON.stringify( [...document.querySelectorAll( 'select' )]
+      .filter( select => select.form && select.options.length )
+      .map( select => [ ...select.options ].map( option => [ option.value, option.label ] ) ) ) : null;
+  const initial = await withEvaluateTimeout( page.evaluate( choices ), READINESS_BOUND_MS ).catch( orElse( null ) );
+  if ( initial === null ) return;
+  let lastReadSettled: number | undefined;
+  let reason: SettleOutcome['reason'] = 'deadline';
+  while ( Date.now() - started < READINESS_BOUND_MS ) {
+    const current = await withEvaluateTimeout( page.evaluate( choices ), Math.max( 1, READINESS_BOUND_MS - ( Date.now() - started ) ) ).catch( orElse( null ) );
+    if ( current === null ) break;
+    // Stop when choices change, not at the end of unrelated reads or
+    // a second page-wide quiet period. Keep a short grace window when the
+    // response handlers schedule a render after requestfinished.
+    if ( reads.every( request => !ledger.pendingData.has( request ) ) ) lastReadSettled ??= Date.now();
+    if ( current !== initial || ( lastReadSettled !== undefined && Date.now() - lastReadSettled >= 500 ) ) {
+      reason = 'quiet';
+      break;
+    }
+    await new Promise( resolve => setTimeout( resolve, 50 ) );
   }
+  readinessSinks.get( page )?.( 'form-hydration', { reason, ms: Date.now() - started } );
 }
 
 /** Run lazy-load work and wait until render-affecting requests become quiet. */
