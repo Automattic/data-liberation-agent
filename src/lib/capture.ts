@@ -6,6 +6,7 @@ import { findAdapter } from '../adapters/index.js';
 import { resolveEntryUrl } from '../platform/registry.js';
 import type { PlatformAdapter } from '../types.js';
 import { detect } from './detect-platform/index.js';
+import { fetchTemplateDocument } from './template-cluster-fetch.js';
 import { normalizeTrustedOrigins, runWithTrustedOrigins, safeFetch } from './media-fetch/safe-fetch.js';
 import { downloadMedia, existingMediaNames } from './media-fetch/media.js';
 import { establishSourceSession, sourceSessionCookieHeader } from './browser-kit/browser-kit.js';
@@ -851,6 +852,7 @@ async function runCaptureWebsite(
 				...derivationContract,
 				routeScope,
 				timeBudgetMs: options.timeBudgetMs,
+				deadline: timeBudget?.abandonAt,
 				frontierUrls: screenshotResult.linkedPageCoverage?.requiredUrls ?? [],
 				aliasUrls: new Set( aliasProbe.aliases.map( alias => normalizedUrl( alias.url ) ) ),
 				governors: sourceGovernors,
@@ -1297,6 +1299,8 @@ export async function deriveTemplateClusterMembers( input: {
 	timeBudgetMs?: number;
 	runtimeWidgetSelectors?: readonly string[];
 	canonicalizeHtml?: ( html: string ) => string;
+	/** Absolute capture deadline, including source throttle waits. */
+	deadline?: number;
 	/** Runtime-render stage budget; defaults to `runtimeRenderBudgetMs( timeBudgetMs )`. */
 	runtimeRenderBudgetMs?: number;
 	frontierUrls: string[];
@@ -1332,7 +1336,7 @@ export async function deriveTemplateClusterMembers( input: {
 	// answer is the source's unavailability, never template evidence.
 	const sourceDocument = async ( url: string, userAgent?: string ): Promise< { html: string } | { unavailable: string } > => {
 		try {
-			const response = await safeFetch( url, { governors: input.governors, timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs, attribution: { phase: 'template-clusters', url }, ...( userAgent ? { headers: { 'User-Agent': userAgent } } : {} ) } );
+			const response = await fetchTemplateDocument( url, { governors: input.governors, deadline: input.deadline, timeoutMs: TEMPLATE_CLUSTER_LIMITS.requestTimeoutMs, userAgent } );
 			if ( response.status < 200 || response.status >= 300 ) return { unavailable: `HTTP ${ response.status }` };
 			return { html: response.body.toString( 'utf8' ) };
 		} catch ( error ) {
