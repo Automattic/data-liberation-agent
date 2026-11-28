@@ -230,7 +230,7 @@ export async function settleDocument(
 /**
  * Wait for a page to reach a stable state after load.
  *
- *   load (best-effort, 5s) ─▶ network quiet + DOM quiescence concurrently ─▶ fonts.ready (4s)
+ *   load (best-effort, 5s) ─▶ network + DOM quiet (rechecked if DOM finishes first) ─▶ fonts.ready (4s)
  *     ─▶ declared loading state, if any ─▶ done
  *
  * The network step is [[waitForNetworkQuiet]]: quiet means no render-affecting
@@ -284,10 +284,18 @@ export async function waitForStable(
   // Navigation already awaited `load` within its own budget; a subresource
   // that is still pending must not fail the route here either.
   await page.waitForLoadState('load', { timeout: 5_000 }).catch(orElse( undefined ));
-  const [, outcome] = await Promise.all([
-    waitForNetworkQuiet(page, 'network-quiet'),
-    settleDocument(page, 'stable', { quietMs: 500, timeoutMs: domTimeoutMs, media: true }),
+  let networkReady = false;
+  const [, initial] = await Promise.all([
+    waitForNetworkQuiet(page, 'network-quiet').then(() => { networkReady = true; }),
+    settleDocument(page, 'stable', { quietMs: 500, timeoutMs: domTimeoutMs, media: true })
+      .then(outcome => ({ outcome, afterNetwork: networkReady })),
   ]);
+  // A DOM quiet window that ended while data was still in flight proves
+  // nothing about the render that response schedules. Cross-origin data
+  // completion need not reopen the network window. Reobserve in that case;
+  // static pages retain their overlapping waits rather than paying twice.
+  const outcome = initial.afterNetwork ? initial.outcome :
+    await settleDocument(page, 'stable-after-network', { quietMs: 500, timeoutMs: domTimeoutMs, media: true });
   if (outcome.pendingMedia?.length) onPendingMedia?.(outcome.pendingMedia);
   await waitForFonts(page);
   await waitForDeclaredLoadingState(page);
@@ -600,8 +608,8 @@ function awaitQuiet( quiet: () => boolean, timeoutMs: number ): Promise< 'quiet'
  * event) would otherwise hold every later wait on the page for its lifetime.
  * What may pass unnoticed is cross-origin chatter that is merely frequent
  * (analytics beacons): only its pending responses hold, its completed ones do
- * not reopen the window — the concurrent DOM-quiescence step is what catches
- * whatever a completed or late response renders. Declared telemetry (see
+ * not reopen the window — the DOM-quiescence step in [[waitForStable]] is
+ * rechecked if it finished before network readiness. Declared telemetry (see
  * [[observePageTraffic]]) is outside the ledger entirely: its endpoint may
  * hold a beacon open past any bound, and nothing renders from it.
  */
